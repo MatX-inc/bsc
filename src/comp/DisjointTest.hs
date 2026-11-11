@@ -13,7 +13,7 @@ import qualified Data.Map as M
 import Control.Monad(foldM {- , when -})
 import Data.List (genericIndex)
 
-import Util(ordPair,uniquePairs)
+import Util(ordPair)
 
 import Error(ErrorHandle, internalError)
 import Pretty
@@ -109,24 +109,30 @@ checkDisjointExprWithCtx dts ctx1 ctx2 e1 e2 = do
 
 -- -------------------------
 
-genDisjointSet :: DisjointTestState -> [ARuleId] -> [ASchedulePragma] ->
+-- The caller lists every rule pair, in order, each with whether its
+-- verdict is read.  A pair whose verdict is not read goes through the
+-- same steps, except that a pair which reaches the solver is converted
+-- but not checked (see checkDisjointRulePair), so it is absent from the
+-- result (not proven disjoint).
+genDisjointSet :: DisjointTestState -> [((ARuleId, ARuleId), Bool)] ->
+                  [ASchedulePragma] ->
                   IO (S.Set (ARuleId, ARuleId), DisjointTestState)
-genDisjointSet dt_state ruleNames pragmas = do
+genDisjointSet dt_state rulePairs pragmas = do
   let me_state = makeMETest pragmas
 
       addResult :: S.Set (ARuleId, ARuleId) -> (ARuleId, ARuleId) -> Maybe Bool -> S.Set (ARuleId, ARuleId)
       addResult rset (r1,r2) (Just True) = S.insert (r1,r2) (S.insert (r2,r1) rset)
       addResult rset _ _                 = rset
 
-      foldFn (rset, st) p =
+      foldFn (rset, st) (p, needed) =
           case (checkMERulePair me_state p) of
             res@(Just _) -> let rset' = addResult rset p res
                             in  return (rset', st)
-            _            -> do (res, st') <- checkDisjointRulePairTop st p
+            _            -> do (res, st') <- checkDisjointRulePairTop st p needed
                                let rset' = addResult rset p res
                                return (rset', st')
 
-  (res, dt_state') <- foldM foldFn (S.empty, dt_state) (uniquePairs ruleNames)
+  (res, dt_state') <- foldM foldFn (S.empty, dt_state) rulePairs
 
   return (res, dt_state')
 
@@ -137,12 +143,12 @@ supportIntersects m (r1, r2) = S.null $ S.intersection s1 s2
           s2 = lookupSupport m r2
 
 
-checkDisjointRulePairTop :: DisjointTestState -> (ARuleId, ARuleId) ->
+checkDisjointRulePairTop :: DisjointTestState -> (ARuleId, ARuleId) -> Bool ->
                          IO (Maybe Bool, DisjointTestState)
-checkDisjointRulePairTop s p = do
+checkDisjointRulePairTop s p needed = do
   let dis = supportIntersects (getSupportMap s) p
   if (dis) then return (Just False,s)
-    else do checkDisjointRulePair s p
+    else do checkDisjointRulePair s p needed
   -- Self check code.....
   -- (res, s') <-checkDisjointRulePair s p
   -- when (dis && (res /= Just False)) $ do
@@ -153,13 +159,13 @@ checkDisjointRulePairTop s p = do
   -- return (res, s')
 
 
-checkDisjointRulePair :: DisjointTestState -> (ARuleId, ARuleId) ->
+checkDisjointRulePair :: DisjointTestState -> (ARuleId, ARuleId) -> Bool ->
                          IO (Maybe Bool, DisjointTestState)
-checkDisjointRulePair s@(DTS_Yices m yices_state) p = do
-    (res, yices_state') <- Yices.checkDisjointRulePair yices_state p
+checkDisjointRulePair s@(DTS_Yices m yices_state) p needed = do
+    (res, yices_state') <- Yices.checkDisjointRulePair yices_state p needed
     return (res, DTS_Yices m yices_state')
-checkDisjointRulePair s@(DTS_STP m stp_state) p = do
-    (res, stp_state') <- STP.checkDisjointRulePair stp_state p
+checkDisjointRulePair s@(DTS_STP m stp_state) p needed = do
+    (res, stp_state') <- STP.checkDisjointRulePair stp_state p needed
     return (res, DTS_STP m stp_state')
 
 -- -------------------------

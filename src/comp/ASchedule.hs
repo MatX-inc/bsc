@@ -26,6 +26,8 @@ import System.IO.Unsafe
 import Debug.Trace(traceM)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.IntMap as IM
+import qualified Data.IntSet as IS
 import Data.Array.Unboxed(UArray, accumArray)
 import qualified Data.Array.Unboxed as UA
 
@@ -67,7 +69,7 @@ import AUses(-- re-exported interface
              Rule(..), ruleName, rulePred, ruleAncestor,
              RuleUsesMap,
              rumToObjectMap, rumToMethodUseMap,
-             rumGetMethodIds, rumRuleUsesFF,
+             rumGetMethodIds, rumRuleUsesFF, hasSideEffects,
              getMethodActionUses, rumGetActionUses, lookupMethodActionUse)
 import Wires(WireProps(..), ClockDomain(..))
 import APaths(PathUrgencyPairs, PathNode)
@@ -117,6 +119,9 @@ trace_no_urgency_edge :: Bool
 trace_no_urgency_edge = "-trace-no-urgency-edge" `elem` progArgs
 disable_urgency_warnings :: Bool
 disable_urgency_warnings = "-hack-disable-urgency-warnings" `elem` progArgs
+-- test every rule pair for disjointness and scan every pair for conflicts
+all_rule_pairs :: Bool
+all_rule_pairs = "-hack-all-rule-pairs" `elem` progArgs
 
 pp :: Doc -> String
 pp = pretty 78 78
@@ -762,6 +767,10 @@ aSchedule_step1 errh flags prefix pps amod = do
   let (ruleMethodUseMap, rulePCConflictUseMap) =
           makeRuleMethodUseMaps ncSetPC ruleUseMap
 
+  -- Rules that share no instance have no conflicting method uses, so
+  -- the conflict maps visit only the rules sharing one with each rule.
+  let conflictCands = mkRuleCandidates ruleMethodUseMap
+
   -- Check that the actions in a rule are parallel composable.
   -- This may throw an error
   disjointState1 <- verifySafeRuleActions flags userDefs rulePCConflictUseMap disjointState0
@@ -782,9 +791,33 @@ aSchedule_step1 errh flags prefix pps amod = do
   let cf_rules_set = S.fromList (extractCFPairsSP schedPragmas)
   let cf_rules_test r1 r2 = ordPair (r1, r2) `S.member` cf_rules_set
 
+      -- Adjust the the number of copies of a method that are available
+      -- to take into account the fact that methods which are composable
+      -- which themselves can be used infinitely many times.  In this
+      -- table, such a method is given the value 0.
+      -- Also consider conflicting methods available infinitely many times
+      -- because the schedule resolves that resource conflict
+  let resMax' = tr "let resMax'" $ M.fromList
+          [(r,n') | (r,n) <- resMax,
+                    -- 0 means all to one port
+                    let n' = if (ncMember ncSetPC r r || ncMember ncSetCF r r)
+                             then n
+                             else 0]
+
   -- determine which rule conditions are disjoint
+  --
+  -- Every pair goes through the sweep, but the solver checks only the
+  -- pairs whose verdict a later step reads (see disjointReadPairs).
+  -- -show-rule-rel and the flows that write a .ba read every pair.
+  let disjoint_pairs =
+          if (genABin flags || not (null (schedQueries flags)) ||
+              all_rule_pairs)
+          then [ (p, True) | p <- uniquePairs ruleNames ]
+          else disjointReadPairs ruleNames ruleMethodUseMap ncSetCF
+                   methodUseMap resMax' ruleBetweenMap
+                   (rumRuleUsesFF ruleUseMap) schedPragmas
   (disjoint_set, disjointState2) <-
-      convIO $ genDisjointSet disjointState1 (map ruleName rules) schedPragmas
+      convIO $ genDisjointSet disjointState1 disjoint_pairs schedPragmas
 
   -- XXX use ordPair to reduce the set size?
   let rule_disjoint r1 r2 = if (r1 == r2)
@@ -807,7 +840,7 @@ aSchedule_step1 errh flags prefix pps amod = do
 
   (cfConflictMap0, setToTestForStaticSchedule_cf, disjointState3) <-
       mkConflictMap flags disjointState2
-                    ruleMethodUseMap ncSetCF cf_or_disjoint
+                    ruleMethodUseMap conflictCands ncSetCF cf_or_disjoint
 
   -- for better memory performance, force the computation
   deepseq (G.toList cfConflictMap0) $
@@ -826,7 +859,7 @@ aSchedule_step1 errh flags prefix pps amod = do
 
   (pcConflictMap0, setToTestForStaticSchedule_pc, disjointState4) <-
       mkConflictMap flags disjointState3
-                    ruleMethodUseMap ncSetPC cf_map_test
+                    ruleMethodUseMap conflictCands ncSetPC cf_map_test
 
   -- for better memory performance, force the computation
   deepseq (G.toList pcConflictMap0) $
@@ -850,7 +883,7 @@ aSchedule_step1 errh flags prefix pps amod = do
       -- for methods and rules (just the method conflict edges)
   (scConflictMap0, setToTestForStaticSchedule_sc, disjointState5) <-
       mkConflictMap flags disjointState4
-                    ruleMethodUseMap ncSetSC pc_map_test
+                    ruleMethodUseMap conflictCands ncSetSC pc_map_test
 
   -- for better memory performance, force the computation
   deepseq (G.toList scConflictMap0) $
@@ -981,19 +1014,6 @@ aSchedule_step1 errh flags prefix pps amod = do
             [ (ppString u, prPosition (getUUPos u)) | u <- us ])
   when (not (null cross_domain_methods)) $
       throwError (EMsgs (map errCrossDomain cross_domain_methods))
-
-      -- Adjust the the number of copies of a method that are available
-      -- to take into account the fact that methods which are composable
-      -- which themselves can be used infinitely many times.  In this
-      -- table, such a method is given the value 0.
-      -- Also consider conflicting methods available infinitely many times
-      -- because the schedule resolves that resource conflict
-  let resMax' = tr "let resMax'" $ M.fromList
-          [(r,n') | (r,n) <- resMax,
-                    -- 0 means all to one port
-                    let n' = if (ncMember ncSetPC r r || ncMember ncSetCF r r)
-                             then n
-                             else 0]
 
   -- Generate
   --   resAllocTable - the resource allocation table (which will be returned)
@@ -3982,9 +4002,10 @@ doQueries errh flags rule_names rule_disjoint relationDB =
 --   RuleUsesMap      :: M.Map RuleId RuleUses
 
 mkConflictMap :: Flags -> DisjointTestState ->
-                 RuleMethodUseMap -> NoConflictSet -> RuleDisjointTest ->
+                 RuleMethodUseMap -> RuleCandidates ->
+                 NoConflictSet -> RuleDisjointTest ->
                  SM (ConflictMap, S.Set (ARuleId, ARuleId), DisjointTestState)
-mkConflictMap flags dtstate rule_meth_map ncset ignore_conflicts =
+mkConflictMap flags dtstate rule_meth_map cands ncset ignore_conflicts =
     let
         checkOneUse :: AExpr -> AExpr ->
                        ([(MethodId, MethodId)], Bool, DisjointTestState) ->
@@ -4029,7 +4050,10 @@ mkConflictMap flags dtstate rule_meth_map ncset ignore_conflicts =
           (ARuleId, (AExpr, MethodIdMap)) ->
           SM ([(ARuleId, [(ARuleId, [Conflicts])])], S.Set (ARuleId, ARuleId), DisjointTestState)
         checkRule (ps, igns, dts) ru@(rule1, (p1, usemap1)) = do
-          (es, igns', dts') <- foldM (checkUses ru) ([], igns, dts) (M.toList rule_meth_map)
+          let rule2s = if all_rule_pairs
+                       then M.toList rule_meth_map
+                       else ruleCandidates cands usemap1
+          (es, igns', dts') <- foldM (checkUses ru) ([], igns, dts) rule2s
           let ps' = ((rule1, es):ps)
           return (ps', igns', dts')
     in
@@ -4038,6 +4062,119 @@ mkConflictMap flags dtstate rule_meth_map ncset ignore_conflicts =
            return (G.fromList res, igns, dtstate')
 
 -- ----------
+
+-- The rules of a RuleMethodUseMap in its order, and the positions of the
+-- rules using each instance.
+data RuleCandidates =
+    RuleCandidates (UA.Array Int (ARuleId, (AExpr, MethodIdMap)))
+                   (M.Map AId IS.IntSet)
+
+mkRuleCandidates :: RuleMethodUseMap -> RuleCandidates
+mkRuleCandidates rule_meth_map =
+    let rs = M.toList rule_meth_map
+        users = M.fromListWith IS.union
+                    [ (obj, IS.singleton i)
+                    | (i, (_, (_, usemap))) <- zip [0..] rs,
+                      obj <- M.keys usemap ]
+    in  RuleCandidates (UA.listArray (0, length rs - 1) rs) users
+
+-- The rules using an instance of the given uses, in the map's order: the
+-- only rules whose uses can conflict with them.
+ruleCandidates :: RuleCandidates -> MethodIdMap ->
+                  [(ARuleId, (AExpr, MethodIdMap))]
+ruleCandidates (RuleCandidates rs users) usemap =
+    map (rs UA.!) $ IS.toAscList $
+        IS.unions [ M.findWithDefault IS.empty obj users
+                  | obj <- M.keys usemap ]
+
+-- Every pair of "uniquePairs ruleNames", in its order, with whether a
+-- later step reads its disjointness verdict.  Outside -show-rule-rel and
+-- the flows that write a .ba, the verdict is read for:
+--  * rules with CF-conflicting method uses (the CF conflict map);
+--  * rules using one method that has arguments, or one action method with
+--    limited ports (resource allocation, and the argument muxes through
+--    the exclusive rules);
+--  * rules using two methods of an instance with a rule between them (the
+--    two-rule static-schedule check, through the exclusive rules);
+--  * rules that both use foreign functions (the task-order check);
+--  * rules a mutually_exclusive pragma makes exclusive.
+-- An unread pair can come out not disjoint when it is, but nothing reads it.
+disjointReadPairs :: [ARuleId] -> RuleMethodUseMap -> NoConflictSet ->
+                     MethodUsesMap -> M.Map MethodId Integer ->
+                     RuleBetweenMap -> (ARuleId -> Bool) ->
+                     [ASchedulePragma] -> [((ARuleId, ARuleId), Bool)]
+disjointReadPairs ruleNames rule_meth_map ncset meth_uses res_max
+                  rule_between usesFF pragmas =
+    let
+        n = length ruleNames
+        rule_arr :: UA.Array Int ARuleId
+        rule_arr = UA.listArray (0, n - 1) ruleNames
+        pos_map = M.fromList (zip ruleNames [0..])
+        positions rs = [ i | r <- rs, Just i <- [M.lookup r pos_map] ]
+        usemapOf i = maybe M.empty snd (M.lookup (rule_arr UA.! i) rule_meth_map)
+        rule_uses = [ (i, um) | (r, (_, um)) <- M.toList rule_meth_map,
+                                i <- positions [r] ]
+        inst_users = M.fromListWith IS.union
+                         [ (obj, IS.singleton i)
+                         | (i, um) <- rule_uses, obj <- M.keys um ]
+        meth_users = M.fromListWith IS.union
+                         [ (MethodId obj m, IS.singleton i)
+                         | (i, um) <- rule_uses, (obj, ms) <- M.toList um,
+                           (m, _) <- ms ]
+        usersOf m = M.findWithDefault IS.empty m meth_users
+
+        cf_partners i =
+            let ui = usemapOf i
+                conflicting j = let uj = usemapOf j
+                                in  not (null (conflicts ncset ui uj)) ||
+                                    not (null (conflicts ncset uj ui))
+            in  IS.filter conflicting $
+                    IS.unions [ M.findWithDefault IS.empty obj inst_users
+                              | obj <- M.keys ui ]
+
+        -- uses that can be muxed or need a resource check
+        useHasArgs (UUExpr (AMethCall { ae_args = [] }) _) = False
+        useHasArgs (UUExpr (AMethValue {}) _) = False
+        useHasArgs (UUAction (ACall _ _ [_])) = False
+        useHasArgs _ = True
+        methNeeded mid uses =
+            any (useHasArgs . fst) uses ||
+            (M.findWithDefault 1 mid res_max /= 0 &&
+             any (hasSideEffects . fst) uses)
+        meth_groups =
+            [ IS.fromList (positions (concat [ ps ++ as ++ is
+                                             | (_, (ps, as, is)) <- uses ]))
+            | (mid, uses) <- M.toList meth_uses, methNeeded mid uses ]
+        between_groups =
+            concat [ [ (usersOf m1, usersOf m2), (usersOf m2, usersOf m1) ]
+                   | (m1, m2) <- M.keys rule_between ]
+        group_partners = IM.fromListWith (++) $
+            [ (i, [g]) | g <- meth_groups, i <- IS.toList g ] ++
+            [ (i, [g2]) | (g1, g2) <- between_groups, i <- IS.toList g1 ]
+
+        ff_rules = IS.fromList [ i | (i, r) <- zip [0..] ruleNames, usesFF r ]
+        -- as in DisjointTest.addMEIds, each group's rules are exclusive
+        -- with the rules of the groups after it
+        groupPairs [] = []
+        groupPairs (g:gs) = [ (g, g') | g' <- gs ] ++ groupPairs gs
+        me_partners = IM.fromListWith IS.union
+                          [ p
+                          | SPMutuallyExclusive gss <- pragmas,
+                            (g1, g2) <- groupPairs gss,
+                            i <- positions g1, j <- positions g2,
+                            p <- [(i, IS.singleton j), (j, IS.singleton i)] ]
+
+        partners i =
+            IS.unions $
+                [ cf_partners i ] ++
+                IM.findWithDefault [] i group_partners ++
+                [ ff_rules | IS.member i ff_rules ] ++
+                [ IM.findWithDefault IS.empty i me_partners ]
+    in
+        [ ((r, rule_arr UA.! j), IS.member j ps)
+        | (i, r) <- zip [0..] ruleNames,
+          let ps = partners i,
+          j <- [i + 1 .. n - 1] ]
 
 type MethodIdMap = M.Map AId [(AId, AExpr)]
 
