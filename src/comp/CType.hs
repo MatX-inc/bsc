@@ -104,23 +104,25 @@ import IOUtil(progArgs)
 --
 -- TCon_ and TAp_ carry a slot holding the node's canonical word (see
 -- "Canonical identity" below): -1 for none, else a word identifying the
--- node's structure under Eq.  The real constructors are private to this
--- module; TCon and TAp are bidirectional pattern synonyms, so every other
--- module matches and builds the public constructor names, and the
--- synonyms' builders compute the slot.
+-- node's structure under Eq; and last, for a TCon_ or a TAp_ with a
+-- word, a lazy memo of its rnf (see "NFData memo" below).  The real
+-- constructors are private to this module; TCon and TAp are bidirectional
+-- pattern synonyms, so every other module matches and builds the public
+-- constructor names, and the synonyms' builders compute the slot and the
+-- memo.
 data Type = TVar TyVar         -- ^ type variable
-          | TCon_ {-# UNPACK #-} !Int TyCon     -- ^ type constructor
-          | TAp_ {-# UNPACK #-} !Int Type Type  -- ^ type-level application
+          | TCon_ {-# UNPACK #-} !Int TyCon ()     -- ^ type constructor
+          | TAp_ {-# UNPACK #-} !Int Type Type ()  -- ^ type-level application
           | TGen Position Int  -- ^ quantified type variable used in type schemes
           | TDefMonad Position -- ^ not used after CVParserImperative
     deriving (Generic.Data, Generic.Typeable)
 
 pattern TCon :: TyCon -> Type
-pattern TCon c <- TCon_ _ c
+pattern TCon c <- TCon_ _ c _
   where TCon c = mkTCon c
 
 pattern TAp :: Type -> Type -> Type
-pattern TAp f a <- TAp_ _ f a
+pattern TAp f a <- TAp_ _ f a _
   where TAp f a = mkTAp f a
 
 {-# COMPLETE TVar, TCon, TAp, TGen, TDefMonad #-}
@@ -644,8 +646,8 @@ leafWord c = case leafKey c of
 -- The word of a child about to be applied: its slot, or for a leaf built
 -- before the gate the recomputed word.  Forces the child to WHNF.
 childWord :: Type -> IO Int
-childWord (TAp_ w _ _) = return w
-childWord (TCon_ w c) | w >= 0 = return w
+childWord (TAp_ w _ _ _) = return w
+childWord (TCon_ w c _) | w >= 0 = return w
                       | otherwise = bumpCTypeStat LeafRecompute >> leafWord c
 childWord _ = return (-1)
 
@@ -723,7 +725,8 @@ checkLetrecBinders is x
 -- the same key and receive the same word through lookupOrInsert's
 -- re-check, so the noDuplicate barrier is not needed on this hot path.
 -- NB: inside this module every construction of a TCon or TAp goes
--- through here (the synonyms' builders are these functions).
+-- through here (the synonyms' builders are these functions), and
+-- through conNode and apNode, which attach the rnf memo.
 {-# NOINLINE mkTCon #-}
 mkTCon :: TyCon -> Type
 mkTCon c = unsafeDupablePerformIO $ do
@@ -731,9 +734,9 @@ mkTCon c = unsafeDupablePerformIO $ do
     bumpCTypeStat TConBuilt
     if on
       then do w <- withInternDelta (leafWord c)
-              return (TCon_ w c)
+              return (conNode w c)
       else do bumpCTypeStat PreGateBuilt
-              return (TCon_ (-1) c)
+              return (conNode (-1) c)
 
 {-# NOINLINE mkTAp #-}
 mkTAp :: Type -> Type -> Type
@@ -746,11 +749,21 @@ mkTAp f a = unsafeDupablePerformIO $ do
         wa <- childWord a
         if wf < 0 || wa < 0
           then do bumpCTypeStat RefuseChild
-                  return (TAp_ (-1) f a)
+                  return (apNode (-1) f a)
           else do w <- lookupOrInsert (CKAp wf wa) (odd wf && odd wa)
-                  return (TAp_ w f a)
+                  return (apNode w f a)
       else do bumpCTypeStat PreGateBuilt
-              return (TAp_ (-1) f a)
+              return (apNode (-1) f a)
+
+-- The only builders of TCon_ and TAp_ nodes: a TCon_ or a TAp_ with a
+-- word gets its rnf memo here, and a TAp_ without gets () (see "NFData
+-- memo").
+conNode :: Int -> TyCon -> Type
+conNode w c = TCon_ w c (rnf c)
+
+apNode :: Int -> Type -> Type -> Type
+apNode w f a | w >= 0 = TAp_ w f a (rnf2 f a)
+             | otherwise = TAp_ w f a ()
 
 -- The type with each node that was built while the gate was shut, and
 -- that a construction now would give a word, built again through the
@@ -768,7 +781,7 @@ rewordType t = fromMaybe t (reword t)
     -- Nothing: the node and its subtree are kept.  A node whose children
     -- are kept has a final slot: worded, or refused (TVar, TGen, a refused
     -- leaf or a node with a refused child), which mkTAp would refuse again.
-    reword (TAp_ w f a)
+    reword (TAp_ w f a _)
       | w >= 0 = Nothing
       | otherwise =
           case (reword f, reword a) of
@@ -777,7 +790,7 @@ rewordType t = fromMaybe t (reword t)
                   Just (mkTAp f a)
               | otherwise -> Nothing
             (mf, ma) -> Just (mkTAp (fromMaybe f mf) (fromMaybe a ma))
-    reword (TCon_ w c)
+    reword (TCon_ w c _)
       | w >= 0 = Nothing
       | LeafKey _ _ <- leafKey c = Just (mkTCon c)
       | otherwise = Nothing
@@ -788,8 +801,8 @@ rewordType t = fromMaybe t (reword t)
 -- a table lookup, so the comparison instances and the per-site shortcuts
 -- read typeCanonWordNode instead.
 typeCanonWord :: Type -> Int
-typeCanonWord (TAp_ w _ _) = w
-typeCanonWord (TCon_ w c) | w >= 0 = w
+typeCanonWord (TAp_ w _ _ _) = w
+typeCanonWord (TCon_ w c _) | w >= 0 = w
                         | otherwise = leafRecompute c
 typeCanonWord _ = -1
 
@@ -807,8 +820,8 @@ leafRecompute c = unsafeDupablePerformIO $ do
 -- recomputes a pre-gate leaf, so an interior node's slot is final and
 -- already holds everything a recompute could learn.
 typeCanonWordNode :: Type -> Int
-typeCanonWordNode (TAp_ w _ _) = w
-typeCanonWordNode (TCon_ w _) = w
+typeCanonWordNode (TAp_ w _ _ _) = w
+typeCanonWordNode (TCon_ w _ _) = w
 typeCanonWordNode _ = -1
 
 -- The ground and normal flags (see above), recomputing a pre-gate leaf.
@@ -978,10 +991,33 @@ instance PPrint Type where
     pPrint d p (TDefMonad _) = text ("TDefMonad")
     pPrint d p (TGen _ n) = pparen True (text "TGen" <+> pPrint d p n)
 
+-- NFData memo
+--
+-- TopUtils.dump deepseqs every phase's output, and types share subtrees,
+-- so a plain recursive rnf would walk every shared subtree at every visit
+-- (exponential in the depth of nested sharing).  A TCon_ node, and a
+-- TAp_ node with a word, has its walk (rnf c; rnf f then rnf a) as a
+-- thunk in its last field, and rnf forces it.  The first rnf of such a
+-- node runs the walk, forcing what a plain walk forces and in the same
+-- order; a later one returns at once, where a plain walk would re-walk a
+-- subtree already in normal form and force nothing.  A TAp_ without a
+-- word holds () and rnf walks it plainly: the thunk would stay live,
+-- unforced, until the next dump, and such nodes (pre-gate spines, and
+-- every type with a variable) are most of the nodes built.  Leaves are
+-- few (at most a tenth as many built as TAp_), so every TCon_ has the
+-- memo, which also covers the pre-gate leaves that many types share.
+-- The slot is fixed when a node is built, so each node is walked one way
+-- for its whole life, and forcing, and with it intern order, is that of
+-- a plain walk.  A walk that raised raises again when forced, as a
+-- re-walk would at the same point.  Only this instance reads the field:
+-- everything else matches the TCon and TAp synonyms, which drop it.  The
+-- derived Data instance would force it, but no generic traversal reaches
+-- a Type.
 instance NFData Type where
     rnf (TVar v) = rnf v
-    rnf (TCon c) = rnf c
-    rnf (TAp t1 t2) = rnf2 t1 t2
+    rnf (TCon_ _ _ m) = m
+    rnf (TAp_ w f a m) | w >= 0 = m
+                       | otherwise = rnf2 f a
     rnf (TGen p i) = rnf2 p i
     rnf (TDefMonad _) = ()
 
