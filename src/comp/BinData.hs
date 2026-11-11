@@ -2342,7 +2342,10 @@ type2' w st t =
           modifyIORef' (w2ApKeys st) (IM.insert k n)
           return n
     TCon tc@(TyCon i mk s) -> do
-      let name = (fstringId (getIdBase i), fstringId (getIdQual i))
+      -- strict: the lookup or id2 forces i next anyway, so interning order is kept
+      let !na = fstringId (getIdBase i)
+          !nq = fstringId (getIdQual i)
+          name = (na, nq)
       on <- memoOn2 st
       memoM <- readIORef (w2TyConMemo st)
       let memo = if on then M.findWithDefault [] name memoM else []
@@ -2350,7 +2353,7 @@ type2' w st t =
         (n : _) -> return n
         [] -> do
           ni <- id2 w st i
-          ns <- sort2 w st i s
+          ns <- sort2 w st name s
           n <- entry2 w (w2Types st) (w2TyKeys st) $ Out $ \w' -> do
                  b <- curBuf w'
                  wbByte b 1; wbByte b 0; wbIdx b ni
@@ -2359,20 +2362,23 @@ type2' w st t =
           when on $
             modifyIORef' (w2TyConMemo st) (M.insert name (take 4 ((tc, n) : memo)))
           return n
-    TCon (TyNum v p) -> leaf (leafKey 1 p v)
-    TCon (TyStr x p) -> leaf (leafKey 2 p (toInteger (fstringId x)))
+    TCon tc@(TyNum _ _) -> leaf tc
+    TCon tc@(TyStr _ _) -> leaf tc
     TDefMonad _ -> internalError "BinData.type2: TDefMonad"
     _ -> payload t
   where payload u = entry2 w (w2Types st) (w2TyKeys st) (writeBytes u)
-        leaf k = do
+        -- built only for the memo, whose lookup forces it (Data.Map is key-strict)
+        leaf tc = do
           on <- memoOn2 st
-          m <- readIORef (w2LeafKeys st)
-          case (if on then M.lookup k m else Nothing) of
-            Just n -> return n
-            Nothing -> do
-              n <- payload t
-              when on $ modifyIORef' (w2LeafKeys st) (M.insert k n)
-              return n
+          if not on then payload t else do
+            let !k = leafKey tc
+            m <- readIORef (w2LeafKeys st)
+            case M.lookup k m of
+              Just n -> return n
+              Nothing -> do
+                n <- payload t
+                modifyIORef' (w2LeafKeys st) (M.insert k n)
+                return n
 
 -- A TyNum or TyStr node: its TyCon tag, its position (line, column, file
 -- id, pos_is_stdlib) and its value or string id
@@ -2380,8 +2386,11 @@ data LeafKey = LeafKey {-# UNPACK #-} !Int {-# UNPACK #-} !Int {-# UNPACK #-} !I
                        {-# UNPACK #-} !Int !Bool !Integer
   deriving (Eq, Ord)
 
-leafKey :: Int -> Position -> Integer -> LeafKey
-leafKey tag (Position f l c lib) v = LeafKey tag l c (fstringId f) lib v
+leafKey :: TyCon -> LeafKey
+leafKey (TyNum v (Position f l c lib)) = LeafKey 1 l c (fstringId f) lib v
+leafKey (TyStr x (Position f l c lib)) =
+  LeafKey 2 l c (fstringId f) lib (toInteger (fstringId x))
+leafKey _ = internalError "BinData.leafKey"
 
 -- The index of the entry of table t whose payload is what out writes,
 -- found by that payload in ks: an entry with the same payload, or a new
@@ -2399,9 +2408,9 @@ entry2 w t ks out = inBuffer w out $ \b -> do
       writeIORef ks $! M.insert k n m
       return n
 
-sort2 :: W -> W2 -> Id -> TISort -> IO Int
-sort2 w st i s = do
-  let name = (fstringId (getIdBase i), fstringId (getIdQual i))
+-- A tycon's sort, by the tycon's name
+sort2 :: W -> W2 -> (Int, Int) -> TISort -> IO Int
+sort2 w st name s = do
   on <- memoOn2 st
   memoM <- readIORef (w2SortMemo st)
   let memo = if on then M.findWithDefault [] name memoM else []
