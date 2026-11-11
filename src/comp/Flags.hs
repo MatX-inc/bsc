@@ -175,7 +175,11 @@ data Flags = Flags {
         warnUndetPred :: Bool,
         -- last, and not stored in .ba files (GenABin): no .ba is
         -- written in these modes
-        frontEndMode :: FrontEndMode
+        frontEndMode :: FrontEndMode,
+        -- build each of a compile's symbol tables from scratch instead
+        -- of extending the first (for A/B comparison); not stored in
+        -- .ba files either, since it changes no output
+        rebuildSymTab :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

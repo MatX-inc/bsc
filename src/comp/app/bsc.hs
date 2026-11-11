@@ -92,7 +92,7 @@ import Pragma
 import VModInfo(VPathInfo, VPort)
 import Deriving(derive)
 import SymTab
-import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
+import MakeSymTab(mkSymTab, mkSymTabWithWarnings, mkSymTabBase, mkSymTabExtend, cConvInst,
                   getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck, CATFCache, mergeCATFCaches)
 import Eval(rnf)
@@ -459,15 +459,23 @@ compilePackage
     -- Generate a global symbol table
     --
     -- Later stages will introduce new symbols that will need to be added
-    -- to the symbol table.  Rather than worry about properly inserting
-    -- the new symbols, we just build the symbol table fresh each time.
-    -- So this is the first of several times that the table is built.
-    -- We can't delay the building of the table until after all symbols
-    -- are known, because these next stages need a table of the current
-    -- symbols.
+    -- to the symbol table.  We can't delay the building of the table
+    -- until after all symbols are known, because these next stages need
+    -- a table of the current symbols.  So this is the first of several
+    -- tables: the one after GenWrap extends this one's base (its
+    -- imported layer), and the later ones are built fresh.
+    -- -rebuild-symtab builds every table fresh, for comparison.
     --
     start flags DFsyminitial
-    symt00 <- mkSymTabWithWarnings errh mop
+    (symt00, symBase) <-
+        if rebuildSymTab flags
+        then do s <- mkSymTabWithWarnings errh mop
+                return (s, Nothing)
+        else do (s, b) <- mkSymTabBase errh mop
+                return (s, Just b)
+    let mkSymTabNext p = case symBase of
+                           Just b  -> mkSymTabExtend errh b p
+                           Nothing -> mkSymTab errh p
     t <- dump errh flags t DFsyminitial dumpnames symt00
 
     -- whether we are doing code generation for modules
@@ -483,10 +491,10 @@ compilePackage
     (mwrp, gens) <- genWrap errh flags (genName flags) generating mfwrp symt0
     t <- dump errh flags t DFgenwrap dumpnames mwrp
 
-    -- Rebuild the symbol table because GenWrap added new types
+    -- Extend the symbol table because GenWrap added new types
     -- and typeclass instances for those types
     start flags DFsympostgenwrap
-    symt1 <- mkSymTab errh mwrp
+    symt1 <- mkSymTabNext mwrp
     t <- dump errh flags t DFsympostgenwrap dumpnames symt1
 
     -- Re-add function definitions for `noinline'

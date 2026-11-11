@@ -2,6 +2,7 @@
 {-# LANGUAGE PatternGuards #-}
 module MakeSymTab(
                   mkSymTab, mkSymTabWithWarnings,
+                  SymTabBase, mkSymTabBase, mkSymTabExtend,
                   getPackagesUsedInTypes,
                   cConvInst,
                   convCQType, convCQTypeWithAssumps,
@@ -62,17 +63,50 @@ useLegacyInstIndex :: Bool
 useLegacyInstIndex = "-legacy-inst-index" `elem` progArgs
 
 mkSymTab :: ErrorHandle -> CPackage -> IO SymTab
-mkSymTab = mkSymTab' False
+mkSymTab errh p = fmap fst (mkSymTab' False Nothing errh p)
 
 -- Also emit instance-hygiene warnings (fundep coverage).  Used for the
 -- first symbol table built from the user-written package; the
 -- pipeline re-derives symbol tables from transformed packages several
 -- times, which must not repeat the warnings.
 mkSymTabWithWarnings :: ErrorHandle -> CPackage -> IO SymTab
-mkSymTabWithWarnings = mkSymTab' True
+mkSymTabWithWarnings errh p = fmap fst (mkSymTab' True Nothing errh p)
 
-mkSymTab' :: Bool -> ErrorHandle -> CPackage -> IO SymTab
-mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
+-- mkSymTabWithWarnings, also returning the base that mkSymTabExtend
+-- builds the compile's later tables on.
+mkSymTabBase :: ErrorHandle -> CPackage -> IO (SymTab, SymTabBase)
+mkSymTabBase = mkSymTab' True Nothing
+
+-- mkSymTab of a package that GenWrap, addFuncWrap or Deriving made from
+-- the base's package (the same imports; definitions added, changed or
+-- removed), reusing the base's imported layer.  The table, its errors
+-- and their order are mkSymTab's: the local layer is built the same way,
+-- and only the imported classes with a local instance in either package
+-- get their instance index rebuilt (see extendImpSyms).
+mkSymTabExtend :: ErrorHandle -> SymTabBase -> CPackage -> IO SymTab
+mkSymTabExtend errh b p = fmap fst (mkSymTab' False (Just b) errh p)
+
+-- The imported layer of a compile's first table and what extending it
+-- needs.  Built lazily with that table, sharing its objects, so what
+-- mkSymTabExtend reuses was forced (and checked) by the first build.
+data SymTabBase = SymTabBase {
+        -- the pre-defined and imported items (mkSymTab's simp)
+        sb_simp :: SymTab,
+        -- addImpSyms' classes with their errors, per signature in fold
+        -- order, with the signature's qualifier function
+        sb_sigCls :: [(Id -> [Id], [(Class, [EMsg])])],
+        -- the imported instances by class, in iinstqs order
+        sb_impInsts :: QInstMap,
+        -- the classes with a local instance in the base's package
+        sb_locCls :: S.Set Id,
+        -- all the types of sb_simp
+        sb_preIds :: S.Set Id,
+        sb_iinstqs :: [(Id, CQType)]
+    }
+
+mkSymTab' :: Bool -> Maybe SymTabBase -> ErrorHandle -> CPackage ->
+             IO (SymTab, SymTabBase)
+mkSymTab' warn mbase errh (CPackage mi _ imps impsigs _ ds _) =
     let
         mmi = Just mi
 
@@ -98,7 +132,7 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
         -- (compare == EQ): Id and TyVar compare the same components both
         -- ways, Type's Eq is defined by cmp, and the rest is derived, so
         -- the Set-based dedup keeps exactly the first occurrences.)
-        iinstqs = stableOrdNub
+        iinstqs0 = stableOrdNub
                       [ (i, qt) | CImpSign _ _ (CSignature _ _ _ ds) <- impsigs,
                                   CIinstance i qt <- ds ]
         qconv qt =
@@ -106,32 +140,58 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
                 Left msg -> bsErrorUnsafe errh [msg]
                 Right pt -> pt
 
-        cls_fd = -- classes are exported both concretely and abstractly
+        cls_fd_imp = -- classes are exported both concretely and abstractly
                  [ (iKName ik, vs, fds) | CImpSign _ _ (CSignature _ _ _ ids) <- impsigs,
                                           Cclass _ _ ik vs fds _ _ <- ids ] ++
                  [ (iKName ik, vs, fds) | CImpSign _ _ (CSignature _ _ _ ids) <- impsigs,
-                                          CIclass _ _ ik vs fds _ _ _ <- ids ] ++
+                                          CIclass _ _ ik vs fds _ _ _ <- ids ]
+        -- (an extension's imported classes were checked by the base's build)
+        cls_fd = (if isJust mbase then [] else cls_fd_imp) ++
                  [ (qualId mi (iKName ik), vs, fds) | Cclass _ _ ik vs fds _ _ <- ds ]
 
         -- XXX imported fundeps don't need to be checked
         -- but it is simpler to check them while converting to bss
         fundepErrs = concatMap chkFunDeps cls_fd
 
+        locQInsts = [ QInst mi (qconv qt) | Cinstance qt _ <- ds ]
+        impQInsts = [ QInst mi (qconv qt) | (mi, qt) <- iinstqs0 ]
+
         -- instances from this package and from the imports, grouped by
         -- class; within a class the order is this one (local instances,
         -- then imported) and unsorted, because sorting is handled at the
         -- class level
-        insts :: QInstMap
-        insts = groupQInsts ([ QInst mi (qconv qt) | Cinstance qt _ <- ds ] ++
-                             [ QInst mi (qconv qt) | (mi, qt) <- iinstqs ])
+        insts0 :: QInstMap
+        insts0 = groupQInsts (locQInsts ++ impQInsts)
 
         -- a symbol table containing all pre-defined items and all items
         -- from imported packages (except instances and classes)
         -- instances and classes are handled later because of error-handling
-        (simp, impClsErrs) = foldl (addImpSyms errh insts) (spre, []) impsigs
+        (simp0, impClsErrs0, sigCls0) =
+            foldl (addImpSyms errh insts0) (spre, [], []) impsigs
 
-        -- all types available to this packaged (predefined and imported)
-        preIds = S.fromList (map fst (getAllTypes simp))
+        base0 = SymTabBase {
+                    sb_simp = simp0,
+                    sb_sigCls = reverse sigCls0,
+                    sb_impInsts = groupQInsts impQInsts,
+                    sb_locCls = M.keysSet (groupQInsts locQInsts),
+                    -- all types available to this packaged (predefined and imported)
+                    sb_preIds = S.fromList (map fst (getAllTypes simp0)),
+                    sb_iinstqs = iinstqs0
+                }
+
+        -- An extension's local instances are converted against its own
+        -- table and take the place of the base's in each class's list.
+        locInsts = groupQInsts locQInsts
+
+        (simp, impClsErrs, insts, base) =
+            case mbase of
+              Nothing -> (simp0, impClsErrs0, insts0, base0)
+              Just b  -> let (simp1, impClsErrs1) = extendImpSyms b locInsts
+                         in  (simp1, impClsErrs1,
+                              M.unionWith (++) locInsts (sb_impInsts b), b)
+
+        preIds = sb_preIds base
+        iinstqs = sb_iinstqs base
 
         -- ---------------
         -- Errors
@@ -179,7 +239,8 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
         local_pkg = Nothing
 
         -- previous symbol table with types and classes added
-        (symT, clsErrs) = mkTypeSyms errh mkQuals mmi local_pkg iks ds insts simp
+        (symT, locCls) = mkTypeSyms errh mkQuals mmi local_pkg iks ds insts simp
+        clsErrs = concatMap snd locCls
 
         -- Check for type functions in non-determined instance head positions.
         -- They are only permitted in positions that are soley determined by
@@ -290,7 +351,7 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
             -- report the kind inference error safely
             case miks of
                 Left msg -> bsError errh [msg]
-                Right iks -> final_symT
+                Right iks -> fmap (\r -> (r, base)) final_symT
 
 
 updTypes :: SymTab -> Type -> Type
@@ -911,13 +972,14 @@ mustConvCQType r _ qt =
     Right t ->  quantify (tv t) t
     Left msg -> internalError ("mustConvCQType:\n" ++ ppReadable msg)
 
+-- The table with the definitions' types and classes added, and each
+-- class added with its errors, in insertion order.
 mkTypeSyms :: ErrorHandle
            -> (Id -> [Id]) -> Maybe Id -> Maybe Id -> M.Map Id Kind -> [CDefn] -> QInstMap
-           -> SymTab -> (SymTab, [EMsg])
+           -> SymTab -> (SymTab, [(Class, [EMsg])])
 mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
     let importedTypeInfos = concatMap (getTI errh maybePackageName src_pkg r iks) defs
-        (cls, errss) =
-            unzip $
+        clsErrs =
               [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds ats ifs Nothing qts
                     | Cclass  incoh ps ik vs fds ats ifs <- defs ] ++
               -- The class's fields are hidden, but CIclass threads the
@@ -925,8 +987,9 @@ mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
               -- the same TIstruct SClass payload as the defining compile.
               [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds ats [] (Just ms) qts
                     | CIclass incoh ps ik vs fds ats ms _ <- defs ]
+        (cls, _) = unzip clsErrs
         r = addClasses mkQuals (addTypes mkQuals s importedTypeInfos) cls
-    in  (r, concat errss)
+    in  (r, clsErrs)
 
 getTI :: ErrorHandle -> Maybe Id -> Maybe Id -> SymTab -> M.Map Id Kind -> CDefn -> [(Id, TypeInfo)]
 getTI errh mi src_pkg r iks (Ctype ik vs ct) = [(i, TypeInfo (Just i) k vs (TItype n ct') src_pkg)]
@@ -1066,12 +1129,11 @@ getK iks ik =
 -- Legacy O(n^2) instance ordering + overlap check (used when -legacy-inst-index).
 -- Exempt auto-derived classes (e.g. Generic) from overlap checking for
 -- performance; sort remaining instances most-specific-first via tsort.
-getQInstsLegacy :: Id -> [[Bool]] -> QInstMap -> (QInsts, [EMsg])
-getQInstsLegacy ci _ qts
-  | ci `elem` autoderivedClasses = (getQInsts ci qts, [])
-getQInstsLegacy ci bss qts = (cls_qts', errs)
-  where cls_qts  = getQInsts ci qts
-        cls_qt_g = [ (qi, lt_qis) | qi <- cls_qts,
+getQInstsLegacy :: Id -> [[Bool]] -> QInsts -> (QInsts, [EMsg])
+getQInstsLegacy ci _ cls_qts
+  | ci `elem` autoderivedClasses = (cls_qts, [])
+getQInstsLegacy ci bss cls_qts = (cls_qts', errs)
+  where cls_qt_g = [ (qi, lt_qis) | qi <- cls_qts,
                                     let more_specific qi' = cmpQInsts bss qi' qi == Right (Just LT),
                                     let lt_qis = filter more_specific cls_qts ]
         cls_qts' = case (tsort cls_qt_g) of
@@ -1086,8 +1148,8 @@ getQInsts :: Id -> QInstMap -> QInsts
 -- Overlap checking is integrated into buildInstIndex.
 getQInsts ci qts = M.findWithDefault [] ci qts
 
-doInst :: Maybe Id -> SymTab -> Class -> QInst -> Inst
-doInst currentPkg r c (QInst mi p@(ps :=> t)) =
+doInst :: Maybe Id -> Class -> QInst -> Inst
+doInst currentPkg c (QInst mi p@(ps :=> t)) =
         let args (TAp f a) = args f ++ [a]
             args _ = []
             vs = tv p
@@ -1191,14 +1253,26 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
             pkg_src = src_pkg,
             assocTypes = atf_infos
           }
-    in if useLegacyInstIndex
-       then let (qinsts, errs) = getQInstsLegacy qi bss qts
-                all_insts = map (doInst mi r c) qinsts
+        c = mkClass gi gc ga
+        ((gi, gc, ga), errs) = classInstIndex mi qi bss c (getQInsts qi qts)
+    in  (c, errs)
+
+-- The instance fields of class c over its instances (in instance-list
+-- order: local, then imported) and the overlap errors among them.  The
+-- instances' heads embed c, the record the fields are put into.
+type InstFns = ([TyVar] -> Maybe [TyVar] -> Pred -> [Inst],
+                [TyVar] -> Maybe [TyVar] -> Pred -> [Candidate Inst],
+                [Inst])
+
+classInstIndex :: Maybe Id -> Id -> [[Bool]] -> Class -> QInsts -> (InstFns, [EMsg])
+classInstIndex mi qi bss c cls_qinsts =
+       if useLegacyInstIndex
+       then let (qinsts, errs) = getQInstsLegacy qi bss cls_qinsts
+                all_insts = map (doInst mi c) qinsts
                 genAll = \ _ _ _ -> all_insts
-                c = mkClass genAll (candidatesFromInsts genAll) all_insts
-            in (c, errs)
-       else let qinsts    = getQInsts qi qts
-                all_insts = map (doInst mi r c) qinsts
+            in ((genAll, candidatesFromInsts genAll, all_insts), errs)
+       else let qinsts    = cls_qinsts
+                all_insts = map (doInst mi c) qinsts
                 -- Single trie over (index, QInst, Inst) triples, shared between
                 -- genInsts lookups and overlap checking.  The index provides
                 -- identity for the overlap self-check; QInst is needed by
@@ -1227,14 +1301,14 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
                       , (j, qj, _) <- lookupPredTrie (overlapProbeQuery p) raw_trie
                       , j > i ]
                 pairCmp i j
-                  | i == j = internalError "MakeSymTab.getCls: pairCmp i i"
+                  | i == j = internalError "MakeSymTab.classInstIndex: pairCmp i i"
                   | i < j = find_cmp (i, j)
                   | otherwise = fmap (fmap flipOrd) (find_cmp (j, i))
                   where find_cmp k@(lo, hi) =
                             case M.lookup k cmpMemo of
                               Just r -> r
                               Nothing -> cmpQInsts bss (qinst lo) (qinst hi)
-                        qinst n = fromJustOrErr "MakeSymTab.getCls: pairCmp"
+                        qinst n = fromJustOrErr "MakeSymTab.classInstIndex: pairCmp"
                                       (M.lookup n qinst_map)
                         flipOrd LT = GT
                         flipOrd GT = LT
@@ -1282,12 +1356,12 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
                 -- ruled out, so reducePred's walk still sees them, in the
                 -- same order, without trying them.
                 instOf (_, _, inst) = inst
-                c = mkClass (\ _ _ p ->
-                                 [ inst | (_, _, inst) <- lookupPredTrie (predQuery S.empty p) trie ])
-                            (\ _ _ p ->
-                                 map (fmap instOf) (lookupCandidates (predQuery S.empty p) trie))
-                            all_insts
-            in (c, errs)
+            in ((\ _ _ p ->
+                     [ inst | (_, _, inst) <- lookupPredTrie (predQuery S.empty p) trie ],
+                 \ _ _ p ->
+                     map (fmap instOf) (lookupCandidates (predQuery S.empty p) trie),
+                 all_insts),
+                errs)
 
 -- ---------------
 
@@ -1445,9 +1519,10 @@ groundT _ _ = internalError "MakeSymTab.groundT"
 
 -----
 
-addImpSyms :: ErrorHandle ->
-              QInstMap -> (SymTab, [EMsg]) -> CImportedSignature -> (SymTab, [EMsg])
-addImpSyms errh insts (s, errs0) (CImpSign name qf (CSignature pkgName _ _ ds)) =
+-- Also accumulates each signature's classes (mkTypeSyms), last first.
+addImpSyms :: ErrorHandle -> QInstMap -> (SymTab, [EMsg], [(Id -> [Id], [(Class, [EMsg])])]) ->
+              CImportedSignature -> (SymTab, [EMsg], [(Id -> [Id], [(Class, [EMsg])])])
+addImpSyms errh insts (s, errs0, sigCls0) (CImpSign name qf (CSignature pkgName _ _ ds)) =
 --        trace ("DEBUG: addImpSyms: " ++ name ++ "\n") $
         let mi = Nothing
             src_pkg = Just pkgName
@@ -1457,7 +1532,8 @@ addImpSyms errh insts (s, errs0) (CImpSign name qf (CSignature pkgName _ _ ds)) 
                 if qf
                 then [name]
                 else mkDefaultQuals name
-            (s1, errs1) = mkTypeSyms errh mkQuals Nothing src_pkg M.empty ds insts s
+            (s1, cls1) = mkTypeSyms errh mkQuals Nothing src_pkg M.empty ds insts s
+            errs1 = concatMap snd cls1
             s2 = symAddFields mkQuals mi src_pkg s1 ds
             -- NOTE: methods (symAddVars) before top-level values (addVars
             -- of getTopVars below): this order is LOAD-BEARING, exactly as
@@ -1468,7 +1544,34 @@ addImpSyms errh insts (s, errs0) (CImpSign name qf (CSignature pkgName _ _ ds)) 
         in  case (getTopVars s3 mi src_pkg ds) of
             Left msgs -> bsErrorUnsafe errh (errmsgs msgs)
             Right vs  ->
-                (symAddCons mkQuals mi src_pkg (addVars mkQuals s3 vs) ds, errs0 ++ errs1)
+                (symAddCons mkQuals mi src_pkg (addVars mkQuals s3 vs) ds, errs0 ++ errs1,
+                 (mkQuals, cls1) : sigCls0)
+
+-- The imported layer of a table extending the base, and the errors of
+-- its imported classes, in addImpSyms' order.  Only a class with a local
+-- instance (in the base's package or in locInsts) can have a different
+-- instance list from the base's, so only its index is rebuilt, from the
+-- list the base's build gives it (local, then imported).  Every class is
+-- inserted again in addImpSyms' order, so each name ends with the record
+-- of the same occurrence as in a build from scratch.  Any other class
+-- had no errors at the base's build, which would have stopped there.
+extendImpSyms :: SymTabBase -> QInstMap -> (SymTab, [EMsg])
+extendImpSyms b locInsts = (simp, concat [ es | (_, ocs) <- sigCls, (_, es) <- ocs ])
+  where -- (the extension's heads are converted first, as a build from
+        -- scratch converts the local heads first)
+        rebuilt = let ks = M.keysSet locInsts
+                  in  ks `seq` S.union ks (sb_locCls b)
+        patch (c0, _) = (c, errs)
+          where ci = typeclassId (name c0)
+                c = c0 { genInsts = gi, genCandidates = gc, getInsts = ga }
+                ((gi, gc, ga), errs)
+                    | ci `S.member` rebuilt =
+                        classInstIndex Nothing ci (funDeps c0) c
+                            (getQInsts ci locInsts ++ getQInsts ci (sb_impInsts b))
+                    | otherwise = ((genInsts c0, genCandidates c0, getInsts c0), [])
+        sigCls = [ (mkQuals, map patch ocs) | (mkQuals, ocs) <- sb_sigCls b ]
+        simp = foldl (\s (mkQuals, ocs) -> addClasses mkQuals s (map fst ocs))
+                     (sb_simp b) sigCls
 
 -----
 
