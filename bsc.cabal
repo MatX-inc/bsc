@@ -166,6 +166,7 @@ library
     DOT
     DPIWrappers
     DefProp
+    DictPool
     Depend
     Deriving
     DisjointTest

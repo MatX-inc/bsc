@@ -86,7 +86,7 @@ compileStrings errh flags source = do
   enableCanonIds
   (mctx, _, ctxATF, _) <- cCtxReduceIO errh flags symt1 False mder
   symt <- mkSymTab errh mctx
-  (tmod, tcErrors, _, tcATF) <- cTypeCheck errh flags symt (cConvInst errh symt mctx)
+  (tmod, tcErrors, _, tcATF) <- cTypeCheck errh flags symt True (cConvInst errh symt mctx)
   when tcErrors $ bsError errh []
   -- as the driver: simplify, lift dictionaries, then convert
   let tmod' = simplify flags tmod

@@ -249,8 +249,9 @@ getSubstDomain (S eo _) = (Map.keys eo)
 getSubstRange :: Subst -> [TyVar]
 getSubstRange (S eo _ ) = concat (map tv (Map.elems eo))
 
+-- | The bindings in key order (read without comparing any keys).
 getSubstAssocs :: Subst -> [(TyVar, Type)]
-getSubstAssocs (S eo _) = Map.assocs eo
+getSubstAssocs (S eo _) = Map.toList eo
 
 
 -------

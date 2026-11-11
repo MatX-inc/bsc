@@ -361,7 +361,7 @@ handleCtxRedBitExtend pos (vp@(VPred vpi _), reduced_ps) c szt1 szt2 t3 = do
         vp' = VPred vpi (PredWithPositions p' [] [])
     x <- reducePred [] Nothing vp'
     case x of
-      (Just (Reduction [vp2] b us _ _)) | (vpClassIs (CTypeclass idAdd) vp2) ->
+      (Just (Reduction [vp2] b us _ _ _)) | (vpClassIs (CTypeclass idAdd) vp2) ->
         case (szt1, szt2) of
           (TCon (TyNum sz1 _), TCon (TyNum sz2 _)) ->
                return (badsize_err sz1 sz2)
@@ -432,7 +432,7 @@ handleBracketCtxRed pred_error elem_error pos (vp@(VPred vpi _), _) c arr val = 
     x <- reducePred [] Nothing vp'
     case x of
       -- there is an instance of the bracket class for type "arr"
-      Just (Reduction ps _ us _ _) -> do
+      Just (Reduction ps _ us _ _ _) -> do
         -- there may be context with informative fundeps, so propagate them
         _ <- propagateFunDeps ps
         s <- getSubst
@@ -460,7 +460,7 @@ handleCtxRedPrimIndex pos (vp@(VPred vpi _), reduced_ps) c ix sz = do
    x <- reducePred [] Nothing vp'
    case x of
      -- there is an instance of PrimIndex for type "i"
-     Just (Reduction _ _ us _ _) ->
+     Just (Reduction _ _ us _ _ _) ->
        let real_sz = (apSub us sz_var)
        in return (wrongIndexSizeErr pos (vp, reduced_ps) ix real_sz sz )
      x -> return (notIndexTypeErr pos vp ix)
@@ -666,7 +666,7 @@ handleWeakCtxBitExtend pos t qs pps@(pwp, _) = do
         vp  = VPred vpi pwp
     x <- reducePred [] Nothing vp
     case x of
-      Just (Reduction [vp2] b us _ _) ->
+      Just (Reduction [vp2] b us _ _ _) ->
         -- separated out the matching of vp2 for readability
         case vp2 of
           (VPred _ (PredWithPositions p2@(IsIn (Class {name=(CTypeclass cid)}) ts) poss _))
@@ -725,7 +725,7 @@ isSelectionResultErr pos vp@(VPred vpi _) c arr val = do
     bound_tyvars <- getBoundTVs
     case x of
       -- there is an instance of PrimSelectable for type "arr"
-      Just (Reduction _ _ us _ _) ->
+      Just (Reduction _ _ us _ _ _) ->
         let real_val = (apSub us val_var)
         in  -- compare the return result
             -- modal probe (message selection only): could the demanded
@@ -763,7 +763,7 @@ isUpdateArgErr pos vp@(VPred vpi _) c arr val = do
     bound_tyvars <- getBoundTVs
     case x of
       -- there is an instance of PrimUpdateable for type "arr"
-      Just (Reduction _ _ us _ _) ->
+      Just (Reduction _ _ us _ _ _) ->
         let real_val = (apSub us val_var)
         in  -- compare the return result
             -- modal probe (message selection only): could the demanded
@@ -801,7 +801,7 @@ isWriteArgErr pos vp@(VPred vpi _) c arr val = do
     bound_tyvars <- getBoundTVs
     case x of
       -- there is an instance of PrimSelectable for type "arr"
-      Just (Reduction _ _ us _ _) ->
+      Just (Reduction _ _ us _ _ _) ->
         let real_val = (apSub us val_var)
         in  -- compare the return result
             -- modal probe (message selection only): could the demanded
@@ -828,7 +828,7 @@ handleWeakCtxPrimParam pos _ _ (pwp, _) =
              vp  = VPred vpi pwp
          x <- reducePred [] Nothing vp
          case x of
-           Just (Reduction vps _ _ _ _) -> do
+           Just (Reduction vps _ _ _ _ _) -> do
                let ps = niceTypes (map toPred vps)
                    hasVar = Just $ map pfpString ps
                return $ Left (pos, ECtxErrPrimParam ty_str poss hasVar)
@@ -847,7 +847,7 @@ handleWeakCtxPrimPort pos _ _ (pwp, _) =
              vp  = VPred vpi pwp
          x <- reducePred [] Nothing vp
          case x of
-           Just (Reduction vps _ _ _ _) -> do
+           Just (Reduction vps _ _ _ _ _) -> do
                let ps = niceTypes (map toPred vps)
                    hasVar = Just $ map pfpString ps
                return $ Left (pos, ECtxErrPrimPort ty_str poss hasVar)

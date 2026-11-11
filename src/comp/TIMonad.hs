@@ -1,15 +1,21 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE PatternSynonyms #-}
 module TIMonad(
         TI,
         apSubTI,
         CATFCache, mergeCATFCaches,
         TIResult(..), runTI, err, errs, twarn, handle,
+        RecEv(..), runTIWithPool, getDictPool, setDictPool, countDP, countDPAt,
+        getTyVarCounter, advanceTyVarCounter, dictIdFor, newDictN,
+        openRecWindow, closeRecWindow, recLog, recActive,
+        getSatStackSizes, bumpRecMaxima, getSatKeys, setSatKeys, setTopSatKeys,
         getAllowIncoherent, maskAllowIncoherent,
         getFlags, setFlags, getSymTab,
         getSubst, clearSubst, extSubst, updSubst,
         newTVar, newTVarId, skipTVar, isNewTVar, newDict, newVar,
         freshInst,
-        VPred(..), getVPredPositions, expandSynVPred,
+        VPred, pattern VPred, vpNum, vpWith, mkVPredN,
+        getVPredPositions, expandSynVPred,
         EPred(..), Infer2, CheckT, TaskCheckT,
         getBoundTVs, getTopBoundTVs, addBoundTVs, popBoundTVs,
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
@@ -51,9 +57,11 @@ import Control.Monad.Except(ExceptT, runExceptT, throwError, catchError)
 import Control.Monad.State(State, StateT, runState, runStateT,
                            lift, gets, get, put, modify)
 import qualified Data.IntSet as IS
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Util(headOrErr)
+import DictPool(DictPool(..), Cnt, Summary, traceDictPool, GKeys(..))
 
 -------
 
@@ -86,8 +94,39 @@ data TStatePersistent = TStatePersistent {
    tsAllowIncoherent :: Bool,
    tsWarns :: [WMsg], -- accumulated warning messages
    tsUsedPackages :: S.Set Id, -- packages from which symbols were used
-   tsATFCache :: CATFCache
+   tsATFCache :: CATFCache,
+   -- the package's dictionary pool (TCMisc.sat), threaded through the
+   -- package's definitions by TypeCheck.tiDefns; Nothing elsewhere
+   tsDictPool :: Maybe DictPool,
+   -- open recording windows of the pool and their log (most recent
+   -- first; see RecEv), and the stack sizes reached inside them
+   tsRecDepth :: !Int,
+   tsRecLog :: [RecEv],
+   tsRecLen :: !Int,
+   tsRecMaxSat :: !Int,
+   tsRecMaxSuper :: !Int,
+   -- work counts for -trace-tc-dict-pool
+   tsCounts :: !(IM.IntMap Int)
 }
+
+-- | An effect made while a recording window of the dictionary pool is
+-- open (TCMisc.recordSolve), in the order made.
+data RecEv
+    = EvVar                  -- ^ newVar drew a number (not replayable)
+    | EvTaint                -- ^ anything else a recording cannot replay
+    | EvATF Id [Type] Type   -- ^ recordATFResult
+    | EvPkg Id               -- ^ recordPackageUse
+    | EvGoal Class [Type]    -- ^ a nested sat goal
+    | EvSub Summary          -- ^ a nested solve's record (its window's
+                             --   events, summarised when it closed), or
+                             --   a nested pool hit's
+    | EvLookfor              -- ^ a goal met by a given or a stack entry
+    | EvRoot (Maybe Id)      -- ^ a full solve's own records follow
+    | EvJoin !Int !Int [Int] -- ^ a join of the goals whose dictionaries
+                             --   have the first two numbers, among the
+                             --   goals numbered by the list (in order;
+                             --   TCMisc.joinNeededCtxs')
+
 
 type CATFCache = M.Map (Id, [Type]) Type
 
@@ -101,6 +140,9 @@ data TStateRecover = TStateRecover {
   tsBoundTyVarStack :: [[TyVar]],
   tsExplPreds :: [[EPred]],
   tsSatStack :: TSSuperSatStack,
+  -- the dictionary pool's keys of the sat stack's entries (TCMisc.hitGuards),
+  -- per context and entry as tsSatStack
+  tsSatKeys :: [[GKeys]],
   -- numeric predicates already decided by the proviso SAT solver in
   -- this definition, so repeated queries are answered from here
   -- rather than re-posed
@@ -169,7 +211,14 @@ initPersistentState flags ai s = TStatePersistent {
     tsAllowIncoherent = ai,
     tsRecoveredErrors = [],
     tsUsedPackages = S.empty,
-    tsATFCache = M.empty
+    tsATFCache = M.empty,
+    tsDictPool = Nothing,
+    tsRecDepth = 0,
+    tsRecLog = [],
+    tsRecLen = 0,
+    tsRecMaxSat = 0,
+    tsRecMaxSuper = 0,
+    tsCounts = IM.empty
   }
 
 initRecoverState :: TStateRecover
@@ -178,6 +227,7 @@ initRecoverState = TStateRecover {
     tsBoundTyVarStack = [],
     tsExplPreds = [],
     tsSatStack = mkSizedStack [mkSizedStack []],
+    tsSatKeys = [[]],
     tsNumProven = S.empty,
     tsNumRefuted = S.empty
   }
@@ -186,7 +236,8 @@ data TIResult a = TIResult {
     tiResult       :: Either [EMsg] a,
     tiWarnings     :: [WMsg],
     tiUsedPackages :: S.Set Id,
-    tiATFCache     :: CATFCache
+    tiATFCache     :: CATFCache,
+    tiCounts       :: IM.IntMap Int
   }
 
 runTI :: Flags -> Bool -> SymTab -> TI a -> TIResult a
@@ -194,10 +245,127 @@ runTI flags ai s m = TIResult {
     tiResult       = mkFinalResult result rec_errors,
     tiWarnings     = tsWarns pState,
     tiUsedPackages = tsUsedPackages pState,
-    tiATFCache     = tsATFCache pState
+    tiATFCache     = tsATFCache pState,
+    tiCounts       = tsCounts pState
   }
   where (result, pState) = runTIState flags ai s m
         rec_errors = tsRecoveredErrors pState
+
+-- "runTI" with the dictionary pool, seeded from and returning the pool
+-- that TypeCheck.tiDefns threads through the package.  The result's
+-- fields are the final state's, taken out when the pool is, so that no
+-- thunk in the result (whose warnings, packages and ATF cache live until
+-- the .bo is written) holds the state, and the pool with it.
+runTIWithPool :: Flags -> Bool -> SymTab -> DictPool -> TI a
+              -> (TIResult a, DictPool)
+runTIWithPool flags ai s dp m =
+    case pState of
+      TStatePersistent { tsRecoveredErrors = errs, tsWarns = ws,
+                         tsUsedPackages = pkgs, tsATFCache = atfs,
+                         tsCounts = cnts, tsDictPool = mdp } ->
+        let res = TIResult {
+                tiResult       = mkFinalResult result errs,
+                tiWarnings     = ws,
+                tiUsedPackages = pkgs,
+                tiATFCache     = atfs,
+                tiCounts       = cnts
+              }
+        in  case mdp of
+              Just dp' -> (res, dp')
+              Nothing -> internalError "runTIWithPool: pool lost"
+  where (result, pState) =
+            runState (runExceptT (runStateT m initRecoverState))
+                     ((initPersistentState flags ai s) { tsDictPool = Just dp })
+
+getDictPool :: TI (Maybe DictPool)
+getDictPool = lift (gets tsDictPool)
+
+setDictPool :: DictPool -> TI ()
+setDictPool dp = lift $ do
+  s <- get
+  put $! s { tsDictPool = Just dp }
+
+countDP :: Cnt -> Int -> TI ()
+countDP c n = countDPAt (fromEnum c) n
+
+countDPAt :: Int -> Int -> TI ()
+countDPAt k n = when traceDictPool $ lift $ do
+  s <- get
+  let s' = s { tsCounts = IM.insertWith (+) k n (tsCounts s) }
+  s' `seq` put s'
+
+-- The counter that numbers generated names (getTyVarNum), read and
+-- advanced as that many draws would (TCMisc.sat's pool hits).
+getTyVarCounter :: TI Int
+getTyVarCounter = lift (gets tsNextTyVar)
+
+advanceTyVarCounter :: Int -> TI ()
+advanceTyVarCounter k = lift $ do
+  s <- get
+  put $! s { tsNextTyVar = tsNextTyVar s + k }
+
+-- Recording windows (TCMisc.recordSolve).  A window remembers the log
+-- length and the stack-size maxima at its start; the log is cleared when
+-- the outermost window closes.
+data RecWindow = RecWindow !Int !Int !Int
+
+-- (The pool's state updates are made strictly, so that no thunk holds an
+-- earlier state, and the pool in it, alive.)
+openRecWindow :: TI RecWindow
+openRecWindow = do
+  (sat, super) <- getSatStackSizes
+  lift $ do
+    s <- get
+    let w = RecWindow (tsRecLen s) (tsRecMaxSat s) (tsRecMaxSuper s)
+    w `seq` (put $! s { tsRecDepth = tsRecDepth s + 1,
+                        tsRecMaxSat = sat, tsRecMaxSuper = super })
+    return w
+
+-- The window's events (in order), taken off the log (the caller logs
+-- their summary in their place), and the stack-size maxima reached in it.
+closeRecWindow :: RecWindow -> TI ([RecEv], Int, Int)
+closeRecWindow (RecWindow len0 msat0 msuper0) = lift $ do
+  s <- get
+  let n = tsRecLen s - len0
+      (now, rest) = splitAt n (tsRecLog s)
+      evs = reverse now
+      msat = tsRecMaxSat s
+      msuper = tsRecMaxSuper s
+      d = tsRecDepth s - 1
+      rest' = if d == 0 then [] else rest
+  length evs `seq` rest' `seq`
+    (put $! s { tsRecDepth = d,
+                tsRecLog = rest',
+                tsRecLen = if d == 0 then 0 else len0,
+                tsRecMaxSat = max msat0 msat,
+                tsRecMaxSuper = max msuper0 msuper })
+  return (evs, msat, msuper)
+
+recActive :: TI Bool
+recActive = lift (gets (\ s -> tsRecDepth s > 0))
+
+recLog :: RecEv -> TI ()
+recLog ev = lift $ do
+  s <- get
+  when (tsRecDepth s > 0) $ do
+    let lg = tsRecLog s
+    lg `seq` (put $! s { tsRecLog = ev : lg, tsRecLen = tsRecLen s + 1 })
+
+-- A nested hit inside a window reaches the stack sizes its solve would.
+bumpRecMaxima :: Int -> Int -> TI ()
+bumpRecMaxima sat super = lift $ do
+  s <- get
+  when (tsRecDepth s > 0) $
+    put $! s { tsRecMaxSat = max sat (tsRecMaxSat s),
+               tsRecMaxSuper = max super (tsRecMaxSuper s) }
+
+-- The current sat-stack and super-stack sizes.
+getSatStackSizes :: TI (Int, Int)
+getSatStackSizes = do
+  SizedStack super ctxs <- gets tsSatStack
+  case ctxs of
+    (SizedStack sat _ : _) -> return (sat, super)
+    [] -> return (0, super)
 
 runTIState :: Flags -> Bool -> SymTab -> TI a ->
               (Either EMsgs (a, TStateRecover), TStatePersistent)
@@ -288,13 +456,20 @@ twarn w = lift (modify (addWarning w))
 -- Record that a symbol from a package was used
 recordPackageUse :: Maybe Id -> TI ()
 recordPackageUse Nothing = return ()  -- no package to record
-recordPackageUse (Just pkg) = lift (modify (addPackage pkg))
-  where addPackage pkg s = s { tsUsedPackages = S.insert pkg (tsUsedPackages s) }
+recordPackageUse (Just pkg) = do
+  recLog (EvPkg pkg)
+  lift (modify (addPackage pkg))
+  -- (the thunk holds the set, not the state and the pool in it)
+  where addPackage pkg s@(TStatePersistent { tsUsedPackages = ps }) =
+            s { tsUsedPackages = S.insert pkg ps }
 
 recordATFResult :: Id -> [Type] -> Type -> TI ()
-recordATFResult atfId args result =
+recordATFResult atfId args result = do
+    recLog (EvATF atfId args result)
     lift (modify addATF)
-  where addATF s = s { tsATFCache = M.insert (atfId, args) result (tsATFCache s) }
+  -- (the thunk holds the map, not the state and the pool in it)
+  where addATF s@(TStatePersistent { tsATFCache = c }) =
+            s { tsATFCache = M.insert (atfId, args) result c }
 
 -- XXX maybe someday get rid of this function and replace with catchError
 handle :: TI a -> (EMsgs -> TI a) -> TI a
@@ -452,15 +627,24 @@ isNewTVar :: TyVar -> Bool
 isNewTVar = isBadTyVar
 
 newDict :: TI Id
-newDict = do
+newDict = fmap snd newDictN
+
+-- newDict, with the number the name is drawn with
+newDictN :: TI (Int, Id)
+newDictN = do
  n <- getTyVarNum
  when doVarTrace $ traceM ("newDict: " ++ ppReadable n)
- return (addIdProp (enumId "tcdict" noPosition n) IdPDict)
+ return (n, dictIdFor n)
+
+-- The dictionary name newDict makes for number n.
+dictIdFor :: Int -> Id
+dictIdFor n = addIdProp (enumId "tcdict" noPosition n) IdPDict
 
 newVar :: Position -> String -> TI Id
 newVar p str = do
     -- only make the name worse if tracing is on
     let varname = if doVarTrace then "tctemp_"++str++"_" else "tctemp"
+    recLog EvVar
     n <- getTyVarNum
     --traceM (ppReadable (p, n)) $
     return (enumId varname p n)
@@ -477,12 +661,38 @@ freshInst msg x (Forall ks qt@(_ :=> t)) = do
 
 ------
 
--- VPred is an unsolved predicate (at least in satisfy, satMany, sat...)
-data VPred = VPred Id PredWithPositions
-    deriving (Show)
+-- VPred is an unsolved predicate (at least in satisfy, satMany, sat...).
+-- The field that the pattern VPred leaves out is the number its
+-- dictionary name was drawn with (newDictN), or -1 if unknown, so that
+-- TCMisc's dictionary pool can tell the names apart without forcing them;
+-- building with VPred leaves it unknown.
+data VPred = VPred_ !Int Id PredWithPositions
+
+pattern VPred :: Id -> PredWithPositions -> VPred
+pattern VPred i p <- VPred_ _ i p
+  where VPred i p = VPred_ (-1) i p
+
+{-# COMPLETE VPred #-}
+
+-- (as deriving Show over the pattern would)
+instance Show VPred where
+    showsPrec d (VPred i p) =
+        showParen (d >= 11) (showString "VPred " . showsPrec 11 i .
+                             showChar ' ' . showsPrec 11 p)
+
+-- The number the name was drawn with, -1 if unknown.
+vpNum :: VPred -> Int
+vpNum (VPred_ n _ _) = n
+
+-- The same name (and number) with another predicate.
+vpWith :: VPred -> PredWithPositions -> VPred
+vpWith (VPred_ n i _) p = VPred_ n i p
+
+mkVPredN :: Int -> Id -> PredWithPositions -> VPred
+mkVPredN = VPred_
 
 instance Types VPred where
-    apSub s (VPred i p) = VPred i (apSub s p)
+    apSub s v@(VPred _ p) = vpWith v (apSub s p)
     tv (VPred _ p) = tv p
 
 instance PPrint VPred where
@@ -498,7 +708,7 @@ instance HasPosition VPred where
 
 
 expandSynVPred :: VPred -> VPred
-expandSynVPred (VPred i (PredWithPositions (IsIn c ts) poss anc)) = VPred i pwp'
+expandSynVPred v@(VPred _ (PredWithPositions (IsIn c ts) poss anc)) = vpWith v pwp'
   where pwp' = PredWithPositions p' poss anc
         p'   = IsIn c ts'
         ts'  = map expandSyn ts
@@ -754,15 +964,44 @@ incrementSatStack x = do
   flags <- getFlags
   case (sizedStackPush (maxTIStackDepth flags) oldstack x) of
     Nothing -> (err(noPosition,ETypeStackOverflow))
-    Just newstack ->
+    Just newstack@(SizedStack sz _) -> do
         modify (\ts -> ts { tsSatStack =
                               sizedStackModify superstack (const newstack)})
+        modifySatKeys (onTopKeys (GKNone :))
+        bumpRecMaxima sz 0
 
 decrementSatStack :: TI ()
 decrementSatStack = do
   superstack <- gets tsSatStack
   modify (\ts -> ts { tsSatStack =
                         sizedStackModify superstack sizedStackPop })
+  modifySatKeys (onTopKeys dropTopKey)
+
+modifySatKeys :: ([[GKeys]] -> [[GKeys]]) -> TI ()
+modifySatKeys f = do
+  s <- get
+  let kss' = f (tsSatKeys s)
+  kss' `seq` put (s { tsSatKeys = kss' })
+
+-- (the stack's current context, top entry first, and the rest)
+onTopKeys :: ([GKeys] -> [GKeys]) -> [[GKeys]] -> [[GKeys]]
+onTopKeys f (ks : kss) = let ks' = f ks in ks' `seq` (ks' : kss)
+onTopKeys _ [] = internalError "onTopKeys: no context"
+
+dropTopKey :: [GKeys] -> [GKeys]
+dropTopKey (_ : ks) = ks
+dropTopKey [] = internalError "dropTopKey: no entry"
+
+-- The pool's keys of the current context's sat-stack entries, top first.
+getSatKeys :: TI [GKeys]
+getSatKeys = gets (headOrErr "getSatKeys" . tsSatKeys)
+
+setSatKeys :: [GKeys] -> TI ()
+setSatKeys ks = modifySatKeys (onTopKeys (const ks))
+
+-- The keys of the entry on top of the stack.
+setTopSatKeys :: GKeys -> TI ()
+setTopSatKeys k = modifySatKeys (onTopKeys ((k :) . dropTopKey))
 
 getSatStack :: TI [EPred]
 getSatStack = do
@@ -776,13 +1015,16 @@ pushSatStackContext = do
   flags <- getFlags
   case (sizedStackPush (maxTIStackDepth flags) superstack (mkSizedStack [])) of
     Nothing -> err (noPosition, ETypeSuperStackOverflow)
-    Just newstack ->
+    Just newstack@(SizedStack sz _) -> do
         modify (\ts -> ts { tsSatStack = newstack })
+        modifySatKeys ([] :)
+        bumpRecMaxima 0 sz
 
 popSatStackContext :: TI ()
 popSatStackContext = do
   superstack <- gets tsSatStack
   modify (\ts -> ts { tsSatStack = (sizedStackPop superstack) })
+  modifySatKeys (drop 1)
 
 
 -- CStruct and CPstruct can be used for either structs fields or

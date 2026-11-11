@@ -52,6 +52,11 @@ import MakeSymTab(convCQType)
 import PreStrings(sAcute)
 import IOUtil(progArgs)
 import Debug.Trace
+import Control.Monad.Except(throwError)
+import qualified Data.IntMap.Lazy as IML
+import qualified Data.IntMap.Strict as IM
+import Flags(maxTIStackDepth)
+import DictPool
 
 -------
 
@@ -134,7 +139,8 @@ data SatResult = SatResult {
         satNeeded     :: [VPred],
         satBinds      :: SolvedBinds,
         satSubst      :: Subst,
-        satCommitment :: Commitment
+        satCommitment :: Commitment,
+        satRecipe     :: Recipe     -- how satBinds was built (DictPool)
     }
 
 -- The outcome of a reduction loop over many predicates (sMany,
@@ -249,7 +255,7 @@ satisfy' dvs es ps = do
              else
                 sMany (dvsSub s' dvs) (apSub s' es) unchanged_rs (sbs' <++ sbs) (s' @@ s) (apSub s' changed_rs)
         sMany dvs es rs sbs s (p:ps) = do
-            SatResult x_needed x_sbs x_s x_commit <- sat dvs es p
+            SatResult x_needed x_sbs x_s x_commit _ <- sat dvs es p
             -- satTrace ("sMany: sat=" ++ ppReadable (p, x_needed)) $ return ()
             case x_needed of
                 -- a committable partial reduction: the instance choice is
@@ -278,10 +284,10 @@ satisfy' dvs es ps = do
                         sMany (dvsSub x_s dvs) (apSub x_s es) (new_ps ++ unchanged_rs) (x_sbs <++ sbs) (x_s @@ s) (apSub x_s (changed_rs ++ ps))
 
 expTConPred :: VPred -> TI [VPred]
-expTConPred (VPred e (PredWithPositions (IsIn c ts) pos anc)) = do
+expTConPred v@(VPred _ (PredWithPositions (IsIn c ts) pos anc)) = do
         vsts <- mapM expTFun ts
         let (vss, ts') = unzip vsts
-        return (VPred e (PredWithPositions (IsIn c ts') pos anc): concat vss)
+        return (vpWith v (PredWithPositions (IsIn c ts') pos anc): concat vss)
 
 -- Build a class predicate from a fully-applied ATF.  Given the ATF's
 -- class, param indices, target index, the ATF arguments, and the type
@@ -373,24 +379,31 @@ expTFun t = return ([], t)
 -- i.e. attempt to merge possible substitutions
 -- so that we can handle more than one duplicate pred at once
 joinCtxs :: [TyVar] -> [VPred] -> Maybe ([VPred], Subst, SolvedBind)
-joinCtxs bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
+joinCtxs bound_tyvars vps = fmap (\ (rs, s, sb, _) -> (rs, s, sb)) (joinCtxsN bound_tyvars vps)
+
+-- joinCtxs, with the numbers the bound and the used dictionary names
+-- were drawn with (vpNum)
+joinCtxsN :: [TyVar] -> [VPred] -> Maybe ([VPred], Subst, SolvedBind, (Int, Int))
+joinCtxsN bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
   where blob_list = [((c, n, boolCompress (map not bs) ts), vp) |
                      vp@(VPred _ (PredWithPositions (IsIn c ts) _ _)) <- vps,
                      (n, bs) <- zip [0..] (funDeps c)]
         joined_blob_list = joinByFst blob_list
-        matchPreds n (VPred i pp@(PredWithPositions (IsIn c ts) pos anc))
-                     (VPred i' pp'@(PredWithPositions (IsIn _ ts') pos' anc')) = do
+        matchPreds n v1@(VPred i pp@(PredWithPositions (IsIn c ts) pos anc))
+                     v2@(VPred i' pp'@(PredWithPositions (IsIn _ ts') pos' anc')) = do
           let bs = funDeps c !! n
           -- we could try to capture and use numeric equalities here
           -- but that would require being on the TI monad,
           -- which doesn't seem worth it
           (s, []) <- mgu bound_tyvars (boolCompress bs ts) (boolCompress bs ts')
-          let p'' = VPred i' (PredWithPositions (IsIn c ts') (pos' ++ pos) (anc' ++ anc))
+          let p'' = vpWith v2 (PredWithPositions (IsIn c ts') (pos' ++ pos) (anc' ++ anc))
+              -- (these comparisons intern the names; a pool hit makes
+              -- them again, in this order: joinForce)
               rs  = p'':[ vp | vp@(VPred j _) <- vps, j /= i && j /= i']
               pr = removePredPositions pp
               b = (i, predToType (apSub s pr), CVar i')
               sb = mkSolvedBind b False -- Joining equivalent predicates, not recursive
-          return (rs, s, sb)
+          return (rs, s, sb, (vpNum v1, vpNum v2))
         -- uniquePairs because we need to try every possible pair of matching VPreds
         matchBlobs ((_,n,_), vps) = listToMaybe $ mapMaybe (uncurry (matchPreds n)) $ uniquePairs vps
 
@@ -414,6 +427,8 @@ joinCtxs bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
 sat :: DVS -> [EPred] -> VPred -> TI SatResult
 sat dvs ps p =
     satTrace ("sat: trying " ++ ppReadable p ++ " in " ++ ppReadable ps) $ do
+    countDP CSat 1
+    recLog (case toPred p of IsIn c ts -> EvGoal c ts)
     whole_stack <- getSatStack
     bound_tyvars <- getBoundTVs
     let IsIn p_cl p_tys = toPred p
@@ -432,7 +447,7 @@ sat dvs ps p =
         -- the TIMonad is reset for each top-level definition.
         lookfor_result = lookfor bound_tyvars p whole_stack
     case lookfor_result of
-      Just (b, (s, [])) ->
+      Just (b, (s, [])) -> recLog EvLookfor >>
          -- tie the recursive knot!
          -- traces ("recursive knot: " ++ (ppString p) ++ " = " ++ (ppString lookfor_result))$
          case p of
@@ -452,108 +467,850 @@ sat dvs ps p =
                                   -}
            -- if we satisfy numeric provisos recursively, we haven't proven it
            (VPred vp (PredWithPositions (IsIn cl _) poss _)) | isPreClass cl ->
-                   return (SatResult [p] emptySBs nullSubst Provisional)
+                   return (SatResult [p] emptySBs nullSubst Provisional RcEmpty)
            _ -> satTrace ("sat recursive: " ++ ppReadable (p, b, s)) $
                 let sb = mkSolvedBind b True -- Found on stack, recursive
-                in return (SatResult [] (fromSB sb) s Provisional)
+                in return (SatResult [] (fromSB sb) s Provisional RcOpaque)
       _ -> do
        let this_point :: TSSatElement
            this_point = (mkTSSatElement dvs ps p)
        incrementSatStack this_point
        return_val <- case lookfor bound_tyvars p (concatMap bySuperE ps) of
          Just (b, (s, [])) -> do
+             recLog EvLookfor
              satTrace ("sat in super: " ++ ppReadable (p, concatMap bySuperE ps)) $ return ()
              let sb = mkSolvedBind b False -- Satisfied via superclass from source, not recursive
-             return (SatResult [] (fromSB sb) s Provisional)
+             return (SatResult [] (fromSB sb) s Provisional RcOpaque)
          -- we might introduce a numeric equality here, so try instance reduction first
          m_equals -> do
           -- if instance reduction fails, fall back to introducing an equality
           let fail msg =
                 case m_equals of
                   Just (b, (s, num_eqs)) -> do
+                    recLog EvLookfor
                     satTrace ("sat in super (num eq): " ++ ppReadable (p, concatMap bySuperE ps, num_eqs)) $ return ()
                     let VPred _ p_pwp = p
                     eq_ps <- concatMapM (eqToVPred (getPredAncestors p_pwp) (getVPredPositions p)) num_eqs
                     let sb = mkSolvedBind b False -- From superclass, not recursive
                     SolveResult rs sbs s' <- satMany (dvsSub s dvs) (apSub s ps) [] (fromSB sb) s eq_ps
-                    return (SatResult rs sbs s' Provisional)
-                  Nothing -> satTrace msg $ return (SatResult [p] emptySBs nullSubst Provisional)
+                    return (SatResult rs sbs s' Provisional RcOpaque)
+                  Nothing -> satTrace msg $ return (SatResult [p] emptySBs nullSubst Provisional RcEmpty)
           ai <- getAllowIncoherent
-          x  <- reducePred ps dvs p
-          case x of
-            Nothing -> fail "sat unreduced"
-            Just (Reduction qs sb us Nothing mpkg) ->
-                satTrace ("sat calls satMany ") $ do
-                result <- satMany (dvsSub us dvs) (apSub us ps) [] (fromSB sb) us qs -- qs should have us applied already
-                case result of
-                  SolveResult [] sbs s_final -> do
-                    recordPackageUse mpkg
-                    recordATFs s_final
-                    return (SatResult [] sbs s_final Provisional)
-                  SolveResult needed sbs s_final -> do
-                    -- A coherent match whose context is not yet satisfied:
-                    -- under ordered-clause fundep semantics no other
-                    -- instance can ever satisfy this predicate, so the
-                    -- choice is final and the caller may commit to it --
-                    -- unless an in-scope given (which is not an instance)
-                    -- could still discharge the predicate whole after
-                    -- refinement.
-                    commitment <-
-                      if legacyDeferInstances
-                      then return Provisional
-                      else do
-                        stack_eps <- getExplPreds
-                        let p_pred = apSub s_final (toPred p)
-                            givens = concatMap bySuperE (ps ++ stack_eps)
-                            -- Modal check, so unify unguarded ([]): a
-                            -- given from an enclosing frame quantifies
-                            -- over its own rigid variables, which are
-                            -- distinct TyVars from (but instantiable
-                            -- to) this definition's; the bound-variable
-                            -- guards would hide such a given and let
-                            -- the commit freeze an instance reduction
-                            -- the outer given was meant to discharge
-                            -- whole.
-                            unifiable (EPred _ gp) =
-                                predUnify [] p_pred gp
-                        return (if any unifiable givens
-                                then Provisional else Committable)
-                    when (commitment == Committable) $ recordPackageUse mpkg
-                    return (SatResult needed sbs s_final commitment)
-            Just (Reduction qs sb us (Just (h@(IsIn c _))) mpkg) | fromMaybe ai (allowIncoherent c) ->
-              satTrace ("sat calls satMany (incoherent) ") $ do
-              result0 <- satMany (dvsSub us dvs) (apSub us ps) [] (fromSB sb) us qs
-              -- An incoherent match is deliberately revocable until its
-              -- context is fully discharged (it must never adopt on
-              -- numeric debt), so render the verdict here: settle its
-              -- numeric residuals in a local batch before deciding
-              -- full-vs-partial.
-              result <- case result0 of
-                SolveResult needed0@(_:_) sbs s_final -> do
-                    (needed, nsbs) <- batchSolveNumericPreds
-                                          (apSub s_final ps) needed0
-                    return (SolveResult needed (nsbs <++ sbs) s_final)
-                r -> return r
-              case result of
-                SolveResult ps@(_:_) sbs s_final -> return (SatResult ps sbs s_final Provisional)
-                SolveResult [] sbs s_final -> do
-                  recordPackageUse mpkg
-                  -- No recordATFs here: an incoherent match is an
-                  -- information-dependent choice (context-, flag- and
-                  -- import-order-dependent), so its ATF projection must
-                  -- not be recorded where the .bo cache would deliver it
-                  -- to importing compiles as if it were canonical.
-                  let (vp_pred, inst_pred) = niceTypes (apSub s_final (toPred p, h))
-                  let pos = getPosition $ getVPredPositions p
-                  let VPred dictId _ = p
-                      di = DirectIncoherence (apSub s_final (toPred p)) (apSub s_final h) pos
-                      sbs' = addDirectIncoherence dictId di sbs
-                  when (allowIncoherent c /= Just True) $
-                    twarn (pos, WIncoherentMatch (pfpString vp_pred) (pfpString inst_pred))
-                  return (SatResult [] sbs' s_final Provisional)
-            bad_match -> fail ("sat incoherent disallowed: " ++ ppReadable bad_match)
+          -- the solve proper: instance reduction and the goals it leaves;
+          -- the flag marks a full solve by a coherent match (the only
+          -- result the dictionary pool records)
+          let notFull m = do { r <- m; return (r, False) }
+              solveFor = do
+                  x  <- reducePred ps dvs p
+                  case x of
+                    Nothing -> notFull (fail "sat unreduced")
+                    Just (Reduction qs sb us Nothing mpkg ns) ->
+                        satTrace ("sat calls satMany ") $ do
+                        (result, rc) <- satManyR (dvsSub us dvs) (apSub us ps) [] (fromSB sb) (RcInst ns sb) us qs -- qs should have us applied already
+                        case result of
+                          SolveResult [] sbs s_final -> do
+                            recLog (EvRoot mpkg)
+                            recordPackageUse mpkg
+                            recordATFs s_final
+                            return (SatResult [] sbs s_final Provisional rc, True)
+                          SolveResult needed sbs s_final -> do
+                            -- A coherent match whose context is not yet satisfied:
+                            -- under ordered-clause fundep semantics no other
+                            -- instance can ever satisfy this predicate, so the
+                            -- choice is final and the caller may commit to it --
+                            -- unless an in-scope given (which is not an instance)
+                            -- could still discharge the predicate whole after
+                            -- refinement.
+                            commitment <-
+                              if legacyDeferInstances
+                              then return Provisional
+                              else do
+                                stack_eps <- getExplPreds
+                                let p_pred = apSub s_final (toPred p)
+                                    givens = concatMap bySuperE (ps ++ stack_eps)
+                                    -- Modal check, so unify unguarded ([]): a
+                                    -- given from an enclosing frame quantifies
+                                    -- over its own rigid variables, which are
+                                    -- distinct TyVars from (but instantiable
+                                    -- to) this definition's; the bound-variable
+                                    -- guards would hide such a given and let
+                                    -- the commit freeze an instance reduction
+                                    -- the outer given was meant to discharge
+                                    -- whole.
+                                    unifiable (EPred _ gp) =
+                                        predUnify [] p_pred gp
+                                return (if any unifiable givens
+                                        then Provisional else Committable)
+                            when (commitment == Committable) $ recordPackageUse mpkg
+                            return (SatResult needed sbs s_final commitment rc, False)
+                    Just (Reduction qs sb us (Just (h@(IsIn c _))) mpkg _) | fromMaybe ai (allowIncoherent c) ->
+                      satTrace ("sat calls satMany (incoherent) ") $ do
+                      result0 <- satMany (dvsSub us dvs) (apSub us ps) [] (fromSB sb) us qs
+                      -- An incoherent match is deliberately revocable until its
+                      -- context is fully discharged (it must never adopt on
+                      -- numeric debt), so render the verdict here: settle its
+                      -- numeric residuals in a local batch before deciding
+                      -- full-vs-partial.
+                      result <- case result0 of
+                        SolveResult needed0@(_:_) sbs s_final -> do
+                            (needed, nsbs) <- batchSolveNumericPreds
+                                                  (apSub s_final ps) needed0
+                            return (SolveResult needed (nsbs <++ sbs) s_final)
+                        r -> return r
+                      case result of
+                        SolveResult ps@(_:_) sbs s_final -> return (SatResult ps sbs s_final Provisional RcOpaque, False)
+                        SolveResult [] sbs s_final -> do
+                          recordPackageUse mpkg
+                          -- No recordATFs here: an incoherent match is an
+                          -- information-dependent choice (context-, flag- and
+                          -- import-order-dependent), so its ATF projection must
+                          -- not be recorded where the .bo cache would deliver it
+                          -- to importing compiles as if it were canonical.
+                          let (vp_pred, inst_pred) = niceTypes (apSub s_final (toPred p, h))
+                          let pos = getPosition $ getVPredPositions p
+                          let VPred dictId _ = p
+                              di = DirectIncoherence (apSub s_final (toPred p)) (apSub s_final h) pos
+                              sbs' = addDirectIncoherence dictId di sbs
+                          when (allowIncoherent c /= Just True) $
+                            twarn (pos, WIncoherentMatch (pfpString vp_pred) (pfpString inst_pred))
+                          return (SatResult [] sbs' s_final Provisional RcOpaque, False)
+                    bad_match -> notFull (fail ("sat incoherent disallowed: " ++ ppReadable bad_match))
+          mdp <- getDictPool
+          case mdp of
+            Just dp | not dictPoolOff ->
+              poolSat dp ai dvs ps p whole_stack (concatMap bySuperE ps) bound_tyvars
+                      recordATFs solveFor
+            _ -> fmap fst solveFor
        decrementSatStack
        return return_val
+
+-- ==============================
+-- The dictionary pool
+--
+-- Within one package a coherent full solve of a predicate whose fundep
+-- inputs are ground is the same wherever it recurs, up to the names it
+-- draws, as long as nothing outside the solve takes part in it.  The
+-- pool (DictPool, threaded through the package's definitions by
+-- TypeCheck.tiDefns) records such a solve of a key -- the class, the
+-- keys of the input positions (canonical words, or for a literal
+-- type-level string already evaluated its intern id), and per output
+-- position its key if ground or which output variable it is -- and
+-- answers a later occurrence of the key from the record:
+--
+--  * the counter that numbers generated names advances by the number of
+--    draws the solve made (nested hits included), so every name made
+--    later in the definition keeps the number it has without the pool;
+--  * the bindings are the recorded ones, each dictionary the solve drew
+--    renamed to the one the same draw makes here, built by the same tree
+--    of fromSB and (<++) as the solve built them (DictPool.Recipe), so
+--    whatever consumes them forces the same names in the same order, and
+--    LiftDicts lifts the same dictionaries under the same names;
+--  * the output variables are bound to the recorded output types, and
+--    the package and ATF records of the solve are made again;
+--  * the solve's joins (joinNeededCtxs', nested solves' included) are
+--    made again where it made them: each join's residual filter compares
+--    the names of the residual goals' dictionaries, which interns them,
+--    so a hit makes the same comparisons in the same order on the names
+--    the same draws make here (joinForce), and the intern table grows
+--    as it would without the pool.  A solve with a join of a dictionary
+--    not drawn in it is not recorded.
+--
+-- Recording forces no name: the bindings are read from the recipe kept
+-- beside the SolvedBinds (never from the SolvedBinds, whose (<++) guards
+-- force the names), and the dictionaries they bind and use are told by
+-- the numbers they were drawn with (TIMonad.newDictN, carried by VPred),
+-- which place them among the solve's draws.
+--
+-- Numeric classes are not pooled (the numeric solver resolves them
+-- directly).  A solve is recorded only when it is a full solve by a
+-- coherent match, met no goal from a given or the stack, made no newVar
+-- draw and no numeric-equality dependency, has only non-recursive,
+-- coherent, ground bindings closed over their own names (Monad
+-- ActionValue excluded), and recorded only ground ATF results.  A hit is
+-- taken only when the stacks have room for the solve, no given, explicit
+-- given or outer stack entry could meet a nested goal of the solve
+-- (lookfor's equality on undetermined positions, decided on keys without
+-- forcing), no such entry or last-resort variable holds an output
+-- variable, and the output variables unify with the recorded types;
+-- otherwise the predicate is solved as without the pool (and after
+-- refuseLimit refusals by the context guard the key is not looked up
+-- again).  Keys are
+-- computed without forcing anything (DictPool.typeKey); a key that would
+-- need a part not evaluated yet is not looked up.  A key whose solve
+-- cannot be recorded for a reason that recurs is not tried again.
+--
+-- What a hit does not do that the solve would: force the solve's own
+-- lazy results (the instance-variable lookups in its bindings' types and
+-- evidence, byInst's recursion checks, nested ATF results), which a
+-- consumer of the solve's results forces later.  The names the solve
+-- itself forces are those of its joins, which a hit forces as above.  Under
+-- -tc-dict-pool-verify the predicate is solved where a hit would be
+-- taken, counting the solves that draw another number of names.
+
+data KeyInfo = KeyInfo {
+        kiKey :: PoolKey,
+        kiOutVars :: [(Int, TyVar)],  -- output positions holding variables
+        kiStr :: Bool,                -- a key used a string key
+        kiTable :: KeyTable
+    }
+
+poolKey :: Bool -> KeyTable -> Bool -> DVS -> Class -> [Type] -> Either Cnt KeyInfo
+poolKey alloc kt0 ai dvs c ts = poolKeyOf ai dvs c ts (typeKeys alloc kt0 ts)
+
+-- The keys of the types, whether one used a string key, and the table.
+typeKeys :: Bool -> KeyTable -> [Type] -> ([PK], Bool, KeyTable)
+typeKeys _ kt [] = ([], False, kt)
+typeKeys alloc kt (t:rest) = let (k, s1, kt') = typeKey alloc kt t
+                                 (ks, s2, kt'') = typeKeys alloc kt' rest
+                             in  (k : ks, s1 || s2, kt'')
+
+-- poolKey, from the types' keys
+poolKeyOf :: Bool -> DVS -> Class -> [Type] -> ([PK], Bool, KeyTable) -> Either Cnt KeyInfo
+poolKeyOf ai dvs c ts (pks, str, kt1) =
+    case [ (r, bs) | (r, bs) <- zip [0..] (funDeps c), inputsOK bs ] of
+      [] | any (== PUneval) pks -> Left CSkipUnevaluated
+         | any (== PNotNormal) pks -> Left CSkipNotNormal
+         | otherwise -> Left CSkipNoRow
+      ((r, bs) : _) -> do
+        outs <- mapM output [ (i, t, k) | (i, True, t, k) <- zip4 [0..] bs ts pks ]
+        let vars = [ (i, v) | (i, Just v) <- outs ]
+            varNums = nub [ n | (_, TyVar _ n _) <- vars ]
+            code _ (False, k) = Left (keyOf k)
+            code i (True, k) = case lookup i outs of
+                                 Just (Just (TyVar _ n _)) ->
+                                     Right (fromJust (elemIndex n varNums))
+                                 _ -> Left (keyOf k)
+            key = (typeclassId (name c), ai, isJust dvs, r,
+                   zipWith code [0..] (zip bs pks))
+        return (KeyInfo key vars str kt1)
+  where
+    isKey (PKey _) = True
+    isKey _ = False
+    keyOf (PKey k) = k
+    keyOf _ = internalError "poolKey: no key"
+    inputsOK bs = and [ isKey k | (False, k) <- zip bs pks ]
+    output (i, t, k) = case k of
+        PKey _ -> Right (i, Nothing)
+        PVar _ -> case evalTVar t of
+                    Just v@(TyVar _ n _) | n >= 0 -> Right (i, Just v)
+                                         | otherwise -> Left CSkipOther
+                    Nothing -> Left CSkipPartialOut
+        PUneval -> Left CSkipUnevaluated
+        PNotNormal -> Left CSkipNotNormal
+    evalTVar t = case t of
+        TVar v | isEvaluated t -> Just v
+        _ -> Nothing
+
+-- reducePred's normT forces the predicate's types to weak head normal
+-- form in order, but walks a type that is not normal (expanding synonyms
+-- and type functions, satisfying associated-type goals) before it forces
+-- the next.  The pool forces them in that order as far as they can be
+-- key positions: each type is forced, and the next only after a key or a
+-- type variable (on which normT does nothing more).  A predicate with
+-- any other type has no key, so no lookup is lost.  The keys (typeKeys)
+-- are those of the walk, each forced type's taken after its forcing, and
+-- the unforced rest's computed when asked for.
+forceKeys :: KeyTable -> [Type] -> ([PK], Bool, KeyTable)
+forceKeys kt ts0 = case go ts0 of (ks, s) -> (ks, s, kt)
+  where
+    go [] = ([], False)
+    go (t : rest) =
+      t `seq` case typeKey False kt t of
+        (k, s, _)
+          | keyable k t -> case go rest of (ks, s') -> (k : ks, s || s')
+          | otherwise -> let (ks, s', _) = typeKeys False kt rest
+                         in  (k : ks, s || s')
+    keyable (PKey _) _ = True
+    keyable (PVar _) (TVar _) = True
+    keyable _ _ = False
+
+poolSat :: DictPool -> Bool -> DVS -> [EPred] -> VPred -> [EPred] -> [EPred] -> [TyVar]
+        -> (Subst -> TI ()) -> TI (SatResult, Bool) -> TI SatResult
+poolSat dp ai dvs ps p@(VPred w (PredWithPositions (IsIn c ts) _ _)) whole_stack givens bvs
+        recordATFs solveFor
+  | isPreClass c = countDP CNumericSkip 1 >> plain
+  | otherwise = do
+      let kt = dpKeyTab dp
+      keys@(pks, _, _) <- return $! forceKeys kt ts
+      -- (the goal's sat-stack entry has the same types, for the hit guards
+      -- of the goals its solve meets)
+      setTopSatKeys (GKeys (keyTableVersion kt) pks)
+      case poolKeyOf ai dvs c ts keys of
+        Left why -> countDP why 1 >> plain
+        Right ki -> do
+          countDP CLookup 1
+          case M.lookup (kiKey ki) (dpKeys dp) of
+            Just (KNoRec n why) | n >= noRecTries -> do
+              countDP CSkipNoRec 1
+              countDPAt (noRecByBase + fromEnum why) 1
+              plain
+            Just (KEntry e) | eRefused e >= refuseLimit -> do
+              countDP CSkipRefused 1
+              plain
+            Just (KEntry e) -> do
+              g <- hitGuards dp e ki dvs whole_stack givens bvs
+              case g of
+                Left CFallbackContext -> do
+                  countDP CFallbackContext 1
+                  refused (kiKey ki) e
+                  plain
+                Left why -> countDP why 1 >> plain
+                Right (c0, satSz, superSz, s_hit)
+                  | dictPoolVerify -> verifyHit c e c0
+                  | otherwise ->
+                      replayHit c e ki w c0 satSz superSz s_hit recordATFs
+            _ -> do
+              countDP CMissNoEntry 1
+              recordSolve ai dvs c ts w ki solveFor
+  where
+    plain = fmap fst solveFor
+    -- the context guard refused a lookup of the key
+    refused key e = do
+      mdp' <- getDictPool
+      case mdp' of
+        Just dp' -> setDictPool (dp' { dpKeys = M.insert key (KEntry e { eRefused = eRefused e + 1 })
+                                                         (dpKeys dp') })
+        Nothing -> return ()
+    -- the solve, where a hit would be taken: count one that draws another
+    -- number of names than the record
+    verifyHit cl e c0 = do
+      r <- plain
+      c1 <- getTyVarCounter
+      if c1 - c0 == eDraws e
+        then countDP CVerifyOk 1
+        else do countDP CVerifyDraws 1
+                traceM ("dict pool verify: " ++ pfpString (name cl) ++
+                        " draws " ++ show (c1 - c0) ++ " recorded " ++
+                        show (eDraws e) ++ " at " ++ show c0)
+      return r
+
+hitGuards :: DictPool -> Entry -> KeyInfo -> DVS -> [EPred] -> [EPred] -> [TyVar]
+          -> TI (Either Cnt (Int, Int, Int, Subst))
+hitGuards dp e ki dvs whole_stack givens bvs = do
+    (satSz, superSz) <- getSatStackSizes
+    flags <- getFlags
+    c0 <- getTyVarCounter
+    -- normT inside the solve satisfies type-function goals from these
+    stack_eps <- getExplPreds
+    -- (the goal's own entry is on top of the whole_stack's)
+    own_keys <- getSatKeys
+    let lim = maxTIStackDepth flags
+        outNums = [ n | (_, TyVar _ n _) <- kiOutVars ki ]
+        dvsOK = case dvs of
+                  Nothing -> True
+                  Just vs -> null outNums || all (\ (TyVar _ n _) -> n `notElem` outNums) vs
+        outTys = [ fromJustOrErr "hitGuards: output" (lookup i (eOuts e))
+                 | (i, _) <- kiOutVars ki ]
+        kt = dpKeyTab dp
+        clear = goalsClear kt (eGoals e) outNums c0
+        (top_key, stack_keys) = case own_keys of
+                                  (k : ks) -> (k, ks)
+                                  [] -> internalError "hitGuards: sat keys"
+        (stackOK, updates) = stackClear kt (eGoals e) outNums c0 whole_stack stack_keys
+    if not (satSz + eMaxSat e < lim && superSz + eMaxSuper e < lim)
+      then return (Left CFallbackDepth)
+      else do
+        let ok = dvsOK && stackOK && clear givens &&
+                 clear (concatMap bySuperE stack_eps)
+        -- keys computed for the stack's entries are kept for later guards
+        when (dvsOK && not (null updates)) $
+          setSatKeys (top_key : applyKeyUpdates updates stack_keys)
+        if not ok
+          then return (Left CFallbackContext)
+          else case mgu bvs (map (TVar . snd) (kiOutVars ki)) outTys of
+                 Just (s, []) -> return (Right (c0, satSz, superSz, s))
+                 _ -> return (Left CFallbackUnify)
+
+-- No entry of a goal class among the givens and outer stack entries can
+-- meet a nested goal of the solve through lookfor (whose matchTop under
+-- equality needs, for some fundep row, the undetermined positions
+-- equal), and none holds an output variable or a variable the solve's
+-- draws could number.  A position with a type variable never equals a
+-- nested goal's (whose variables are the solve's own or the outputs).
+goalsClear :: KeyTable -> GoalSum -> [Int] -> Int -> [EPred] -> Bool
+goalsClear kt gs outNums c0 eps = M.null gs || all clear eps
+  where
+    clear (EPred _ (IsIn c ts)) =
+      case M.lookup (typeclassId (name c)) gs of
+        Nothing -> True
+        Just rows -> predClear outNums c0 c rows (fst3 (typeKeys False kt ts))
+
+-- goalsClear over the sat stack, whose entries' keys are kept from the
+-- goal's own lookup (poolSat) or an earlier guard, and computed again
+-- only where they may have changed (gkValid).  With the verdict, the
+-- keys computed (by position in the stack), which are what a later
+-- guard computes while they stay valid.
+stackClear :: KeyTable -> GoalSum -> [Int] -> Int -> [EPred] -> [GKeys]
+           -> (Bool, [(Int, GKeys)])
+stackClear kt gs outNums c0 eps0 gks0
+  | M.null gs = (True, [])
+  | otherwise = go 0 eps0 gks0 []
+  where
+    ver = keyTableVersion kt
+    go _ [] _ ups = (True, ups)
+    go i (EPred _ (IsIn c ts) : eps) gks ups =
+      let (gk, gks') = case gks of
+                         (k : ks) -> (k, ks)
+                         [] -> internalError "stackClear: keys"
+      in  case M.lookup (typeclassId (name c)) gs of
+            Nothing -> go (i + 1) eps gks' ups
+            Just rows ->
+              let (pks, ups') = case gk of
+                    GKeys v ks | gkValid ver v ks -> (ks, ups)
+                    _ -> let ks = fst3 (typeKeys False kt ts)
+                         in  (ks, if gkValid ver ver ks then (i, GKeys ver ks) : ups
+                                  else ups)
+              in  if predClear outNums c0 c rows pks
+                    then go (i + 1) eps gks' ups'
+                    else (False, ups')
+
+-- The stack's keys with the updates (by position, last first) made.
+applyKeyUpdates :: [(Int, GKeys)] -> [GKeys] -> [GKeys]
+applyKeyUpdates ups0 gks0 = go 0 (reverse ups0) gks0
+  where
+    go _ [] gks = gks
+    go i ups@((j, k) : rest) (g : gks)
+      | i == j = let gks' = go (i + 1) rest gks in gks' `seq` (k : gks')
+      | otherwise = let gks' = go (i + 1) ups gks in gks' `seq` (g : gks')
+    go _ _ [] = internalError "applyKeyUpdates"
+
+-- One given or stack entry of class c, whose types have keys pks, can
+-- meet no nested goal of the solve (see goalsClear).
+predClear :: [Int] -> Int -> Class -> IM.IntMap (S.Set [Int], Bool) -> [PK] -> Bool
+predClear outNums c0 c rows pks = varsOK && all rowClear (IM.toList rows)
+  where
+    varsOK = and [ n < c0 && n `notElem` outNums | PVar ns <- pks, n <- ns ]
+    rowClear (r, (set, unknown)) =
+      let und = [ k | (False, k) <- zip (funDeps c !! r) pks ]
+      in  if any isPVar und then True
+          else if all isPKey und
+               then not unknown && not (S.member [ k | PKey k <- und ] set)
+               else S.null set && not unknown
+
+isPVar :: PK -> Bool
+isPVar (PVar _) = True
+isPVar _ = False
+
+isPKey :: PK -> Bool
+isPKey (PKey _) = True
+isPKey _ = False
+
+replayHit :: Class -> Entry -> KeyInfo -> Id -> Int -> Int -> Int -> Subst
+          -> (Subst -> TI ()) -> TI SatResult
+replayHit c e ki w c0 satSz superSz s_hit recordATFs = do
+    advanceTyVarCounter (eDraws e)
+    -- (one name per slot, shared by the bindings that use it)
+    let ids = IML.fromList [ (k, dictIdFor (c0 + k)) | k <- tmplSlots (eTmpl e) ]
+        nm SRoot = w
+        nm (SDict k) = case IML.lookup k ids of
+                         Just i -> i
+                         Nothing -> internalError "replayHit: slot"
+    recLog (EvSub (emptySummary { smGoals = eGoals e }))
+    bumpRecMaxima (satSz + eMaxSat e) (superSz + eMaxSuper e)
+    ropeMapM_ (if eJoined e then replayJoined (c0 - eBase e) else replayEv)
+              (eEvents e)
+    recordPackageUse (eRootPkg e)
+    recordATFs s_hit
+    countDP (if kiStr ki then CHitStr else CHitWord) 1
+    when (not (null (kiOutVars ki))) $ countDP CHitVarOut 1
+    countDP CHitBinds (tmplLeaves (eTmpl e))
+    countDP CHitDraws (eDraws e)
+    when traceDictPoolEntries $
+      traceM ("tc dict pool hit " ++ show (eId e) ++ " " ++ pfpString (name c))
+    return (SatResult [] (rebuild nm (eTmpl e)) s_hit Provisional (RcPool c0 (eTmpl e)))
+
+-- A record of a solve made again by a hit (replayJoined for an entry
+-- with joins, whose names are drawn "off" after the record's).
+replayEv :: ReplayEv -> TI ()
+replayEv (RATF i as r) = recordATFResult i as r
+replayEv (RPkg pkg) = recordPackageUse (Just pkg)
+replayEv (RJoin _ _ _) = internalError "replayEv: join"
+
+replayJoined :: Int -> ReplayEv -> TI ()
+replayJoined off (RJoin a b ns) = do
+    let drawn n = dictIdFor (n + off)
+    () <- return $! joinForce (drawn a) (drawn b) (map drawn ns)
+    countDP CHitJoins 1
+    logJoin (a + off) (b + off) (map (+ off) ns)
+replayJoined _ ev = replayEv ev
+
+-- The comparisons of a join's residual filter (joinCtxsN), made in its
+-- order on names of the same spellings: the joined pair's and those of
+-- the goals the filter runs over.  They force, so intern, the names.
+joinForce :: Id -> Id -> [Id] -> ()
+joinForce i i' js = length [ () | j <- js, j /= i && j /= i' ] `seq` ()
+
+-- The SolvedBinds a recorded solve built, with its names given by "nm":
+-- the same bindings, built by the same fromSB and (<++) tree, so that
+-- whatever later forces it forces the same things in the same order.
+rebuild :: (Slot -> Id) -> Tmpl -> SolvedBinds
+rebuild _ TEmpty = emptySBs
+rebuild nm (TLeaf s t et cls) =
+    fromSB ((mkSolvedBind (nm s, t, inst et) False) { solvedClass = cls })
+  where inst (ESlot s') = CVar (nm s')
+        inst (EConst x) = x
+        inst (EApp f as) = CApply (inst f) (map inst as)
+rebuild nm (TMerge x y) = rebuild nm x <++ rebuild nm y
+rebuild nm (TSub r k t) = rebuild nm' t
+  where nm' SRoot = nm r
+        nm' (SDict j) = nm (SDict (j + k))
+
+-- A recording window's events, with its direct goals keyed (each event is
+-- summarised once, in the innermost window around it).
+summarize :: KeyTable -> [RecEv] -> (Summary, KeyTable)
+summarize kt0 = go emptySummary kt0
+  where
+    go sm kt [] = (sm, kt)
+    go sm kt (ev : evs) = case ev of
+      EvVar -> go sm { smTaint = True, smTaintPerm = True } kt evs
+      EvTaint -> go sm { smTaint = True, smTaintPerm = True } kt evs
+      EvLookfor -> go sm { smTaint = True } kt evs
+      EvATF i as r ->
+        -- (this forces the ATF result's structure, not its names, which
+        -- the solve leaves to the .bo writer)
+        let g = not (any hasTVar as || hasTVar r)
+        in  g `seq` go sm { smEvents = RCat (smEvents sm) (RLeaf (RATF i as r)),
+                            smTaint = smTaint sm || not g,
+                            smTaintPerm = smTaintPerm sm || not g } kt evs
+      EvPkg pkg -> go sm { smEvents = RCat (smEvents sm) (RLeaf (RPkg pkg)) } kt evs
+      EvJoin a b ns ->
+        go sm { smEvents = RCat (smEvents sm) (RLeaf (RJoin a b ns)),
+                smJoined = True } kt evs
+      EvGoal gc gts ->
+        let (pks, kt') = keyList kt gts
+            gs' = addGoal gc pks (smGoals sm)
+        in  M.size gs' `seq` go sm { smGoals = gs' } kt' evs
+      EvSub sub -> go (catSummary sm sub) kt evs
+      EvRoot _ -> go sm kt evs
+    keyList kt [] = ([], kt)
+    keyList kt (t : rest) = let (k, _, kt') = typeKey True kt t
+                                (ks, kt'') = keyList kt' rest
+                            in  (k : ks, kt'')
+
+-- Add a goal (its class and position keys) to a goal summary.
+addGoal :: Class -> [PK] -> GoalSum -> GoalSum
+addGoal gc pks gs = M.insertWith (IM.unionWith merge) (typeclassId (name gc)) rows gs
+  where
+    rows = IM.fromList [ (r, one und) | (r, bs) <- zip [0..] (funDeps gc),
+                                        let und = [ k | (False, k) <- zip bs pks ] ]
+    one und
+      | any isPVar und = (S.empty, False)
+      | all isPKey und = (S.singleton [ k | PKey k <- und ], False)
+      | otherwise = (S.empty, True)
+    merge (x1, u1) (x2, u2) = (S.union x1 x2, u1 || u2)
+
+recordSolve :: Bool -> DVS -> Class -> [Type] -> Id -> KeyInfo -> TI (SatResult, Bool)
+            -> TI SatResult
+recordSolve ai dvs c ts w ki solveFor = do
+    c0 <- getTyVarCounter
+    (sat0, super0) <- getSatStackSizes
+    win <- openRecWindow
+    r <- fmap Right solveFor `handle` (\ es -> return (Left es))
+    (evs, msat, msuper) <- closeRecWindow win
+    c_end <- getTyVarCounter
+    outer <- recActive
+    -- a window that met a given or the stack, or that the solve itself
+    -- makes unreplayable, is left unread (the window around it inherits
+    -- the taint); so is one with a join of a dictionary it did not draw,
+    -- which a hit could not name (a nested window's joins are its own)
+    let joinOut = any (\ ev -> case ev of
+                                 EvJoin a b ns -> any (\ n -> n < c0 || n >= c_end) (a : b : ns)
+                                 _ -> False) evs
+        (taint0, perm0) = foldr (\ ev (t, p) -> case ev of
+                                    EvVar -> (True, True)
+                                    EvTaint -> (True, True)
+                                    EvLookfor -> (True, p)
+                                    EvSub sub -> (t || smTaint sub, p || smTaintPerm sub)
+                                    _ -> (t, p)) (joinOut, joinOut) evs
+        -- (for the counters) what made the window unreplayable
+        permWhy = case [ y | ev <- evs, Just y <- [permOf ev] ] of
+                    (y : _) -> y
+                    [] -> if joinOut then CRecJoinOut else CNoRecTaint
+        permOf EvVar = Just CNoRecVar
+        permOf EvTaint = Just CNoRecTaint
+        permOf (EvSub sub) | smTaintPerm sub = Just CNoRecNested
+        permOf _ = Nothing
+        fullRes = case r of
+                    Right (res, True) -> Just res
+                    _ -> Nothing
+    when joinOut $ countDP CRecJoinOut 1
+    recorded <-
+      if taint0 && (outer || isJust fullRes)
+        then do
+          when outer $ recLog (if perm0 then EvTaint else EvLookfor)
+          countDP CRecOpen 1
+          when (isJust fullRes && perm0) $ noRec ki True permWhy
+          return Nothing
+        else do
+          mdp <- getDictPool
+          case mdp of
+            Just dp0 | outer || isJust fullRes -> do
+              -- the goals are keyed now, before anything later can
+              -- evaluate more of them
+              let (sm, kt1) = summarize (dpKeyTab dp0) evs
+                  dp1 = dp0 { dpKeyTab = kt1 }
+              () <- return $! (smTaint sm `seq` smTaintPerm sm `seq` kt1 `seq` ())
+              setDictPool dp1
+              let logSub sm' = when outer $ recLog (EvSub sm')
+              case fullRes of
+                Nothing -> logSub sm >> return Nothing
+                Just res -> do
+                  c1 <- getTyVarCounter
+                  case buildEntry dp1 ai dvs c ts ki c0 c1 (msat - sat0) (msuper - super0)
+                                  evs sm res of
+                    Left why -> do
+                      countDP why 1
+                      noRec ki (why `elem` permanentCnts) why
+                      logSub sm
+                      return Nothing
+                    Right (key, e, kt) -> do
+                      () <- return $! forceEntry e
+                      when traceDictPoolEntries $
+                        traceM ("tc dict pool rec " ++ show (eId e) ++ " " ++
+                                pfpString (name c) ++ " draws=" ++ show (eDraws e))
+                      setDictPool (dp1 { dpKeys = M.insert key (KEntry e) (dpKeys dp1),
+                                         dpKeyTab = kt,
+                                         dpNext = dpNext dp1 + 1 })
+                      countDP CRecOk 1
+                      logSub sm
+                      return (Just e)
+            _ -> return Nothing
+    case r of
+      Left es -> countDP CRecError 1 >> throwError es
+      Right (res, isFull) -> do
+        when (not isFull) $ countDP CRecNotFull 1
+        -- an enclosing record reads this solve's bindings from its entry
+        return (case recorded of
+                  Just e -> res { satRecipe = RcPool c0 (eTmpl e) }
+                  Nothing -> res)
+
+-- A key whose solve could not be recorded: for a reason that recurs
+-- wherever the key does, it is not tried again; for another, it is
+-- tried noRecTries times.
+noRec :: KeyInfo -> Bool -> Cnt -> TI ()
+noRec ki perm why = do
+  mdp <- getDictPool
+  case mdp of
+    Just dp -> do
+      let n = if perm then noRecTries else 1
+          upd (Just (KNoRec a _)) = Just (KNoRec (a + n) why)
+          upd _ = Just (KNoRec n why)
+      setDictPool (dp { dpKeys = M.alter upd (kiKey ki) (dpKeys dp) })
+      countDP CNoRecAdd 1
+    Nothing -> return ()
+
+noRecTries :: Int
+noRecTries = 4
+
+-- Lookups of a key that the context guard refuses this many times are no
+-- longer made (a refused key is seldom met in a context that admits it;
+-- a hit and a solve make the same result, so this changes only cost).
+refuseLimit :: Int
+refuseLimit = 8
+
+permanentCnts :: [Cnt]
+permanentCnts = [CRecRecursive, CRecIncoherent, CRecMonadAV, CRecShape, CRecShapePool,
+                 CRecShapeRoot, CRecUnbound, CRecNonGround]
+
+-- (The events are spine-strict and their types were walked by summarize;
+-- a nested pooled solve's template was forced when it was recorded.)
+forceEntry :: Entry -> ()
+forceEntry e = eDraws e `seq` ft (eTmpl e) `seq`
+               forceList (\ (i, t) -> i `seq` t `seq` ()) (eOuts e) `seq`
+               M.size (eGoals e) `seq` ()
+  where forceList f xs = foldr (\ x r -> f x `seq` r) () xs
+        ft TEmpty = ()
+        ft (TLeaf sl t ex cls) = sl `seq` t `seq` fe ex `seq` cls `seq` ()
+        ft (TMerge x y) = ft x `seq` ft y
+        ft (TSub sl k _) = sl `seq` k `seq` ()
+        fe (ESlot sl) = sl `seq` ()
+        fe (EConst x) = x `seq` ()
+        fe (EApp f as) = fe f `seq` forceList fe as
+
+-- The slots a template names, nested pooled solves' included (offset).
+tmplSlots :: Tmpl -> [Int]
+tmplSlots t0 = IS.toList (go 0 t0)
+  where go _ TEmpty = IS.empty
+        go k (TLeaf sl _ et _) = IS.union (slotSet k sl) (exprSlots k et)
+        go k (TMerge x y) = IS.union (go k x) (go k y)
+        go k (TSub sl j t) = IS.union (slotSet k sl) (go (k + j) t)
+
+-- The bindings a hit on a template rebuilds.
+tmplLeaves :: Tmpl -> Int
+tmplLeaves TEmpty = 0
+tmplLeaves (TLeaf _ _ _ _) = 1
+tmplLeaves (TMerge x y) = tmplLeaves x + tmplLeaves y
+tmplLeaves (TSub _ _ t) = tmplLeaves t
+
+slotSet :: Int -> Slot -> IS.IntSet
+slotSet k (SDict j) = IS.singleton (k + j)
+slotSet _ SRoot = IS.empty
+
+exprSlots :: Int -> ExprT -> IS.IntSet
+exprSlots k (ESlot sl) = slotSet k sl
+exprSlots _ (EConst _) = IS.empty
+exprSlots k (EApp f as) = IS.unions (exprSlots k f : map (exprSlots k) as)
+
+-- A full solve's entry.  Nothing here forces a name: the bindings come
+-- from the recipe, whose leaves are read without the (<++) guards, and
+-- the dictionaries they bind and use are told by their numbers.
+buildEntry :: DictPool -> Bool -> DVS -> Class -> [Type] -> KeyInfo -> Int -> Int
+           -> Int -> Int -> [RecEv] -> Summary -> SatResult
+           -> Either Cnt (PoolKey, Entry, KeyTable)
+buildEntry dp ai dvs c ts ki c0 c1 dsat dsuper evs sm (SatResult _ _ s_final _ rc)
+  | smTaint sm = Left CRecOpen
+  | otherwise = do
+      tmpl <- toTmpl (Just SRoot) rc
+      when (not (hasRoot tmpl)) $ Left CRecShapeRoot
+      -- every name a binding refers to is bound (closed over its own
+      -- names; a nested pooled solve is closed, and binds its root)
+      when (not (IS.null (IS.difference (refsOf tmpl) (boundOf tmpl)))) $
+        Left CRecUnbound
+      outs <- mapM (\ (i, v) -> (,) i <$> subT (TVar v)) (kiOutVars ki)
+      KeyInfo { kiKey = key, kiTable = kt1 } <- poolKey True (dpKeyTab dp) ai dvs c ts
+      let (before, rootPkg) = splitRoot evs
+          events = foldl' addEv RNil before
+      -- (the solve's own records join nothing and nest no solve)
+      when (any joinOrSub (drop (length before) evs)) $ Left CRecShape
+      return (key,
+              Entry { eId = dpNext dp,
+                      eBase = c0,
+                      eDraws = c1 - c0,
+                      eTmpl = tmpl,
+                      eOuts = outs,
+                      eEvents = events,
+                      eJoined = any joined before,
+                      eRootPkg = rootPkg,
+                      eGoals = smGoals sm,
+                      eMaxSat = max 0 dsat,
+                      eMaxSuper = max 0 dsuper,
+                      eRefused = 0 },
+              kt1)
+  where
+    -- The record must not force a name the solve left unforced (forcing
+    -- a type variable's name forces its position, which can intern a
+    -- generated value name), and apSub's lookups compare names: so the
+    -- results are substituted by variable number instead, the same types
+    -- apSub makes (a number held by two substituted variables, or by
+    -- none, is not substituted).  The types and evidence substituted are
+    -- still the solve's own thunks (byInst's instance substitution, a
+    -- join's), which this forces.
+    numSub = IM.fromListWith (\ _ _ -> Nothing)
+                             [ (n, Just t) | (TyVar _ n _, t) <- getSubstAssocs s_final, n >= 0 ]
+    subNumT t
+      | isNormalNode t = Just t
+    subNumT (TVar (TyVar _ n _)) = case IM.lookup n numSub of
+                                     Just (Just t) -> Just t
+                                     _ -> Nothing
+    subNumT (TAp l r) = normTAp <$> subNumT l <*> subNumT r
+    subNumT t = Just t
+    subNumE e = case e of
+        CVar _ -> Just e
+        CAny {} -> Just e
+        CLit _ -> Just e
+        CApply f es -> CApply <$> subNumE f <*> mapM subNumE es
+        CTApply f ts' -> CTApply <$> subNumE f <*> mapM subNumT ts'
+        CSelectT _ _ -> Just e
+        CLitT t l -> (\ t' -> CLitT t' l) <$> subNumT t
+        CAnyT pos uk t -> CAnyT pos uk <$> subNumT t
+        CConT t i es -> CConT t i <$> mapM subNumE es
+        CStructT t fs -> CStructT <$> subNumT t <*> mapM (\ (f, x) -> (,) f <$> subNumE x) fs
+        _ -> Nothing
+    hasTVarE e = case e of
+        CApply f es -> hasTVarE f || any hasTVarE es
+        CTApply f ts' -> hasTVarE f || any hasTVar ts'
+        CLitT t _ -> hasTVar t
+        CAnyT _ _ t -> hasTVar t
+        CConT _ _ es -> any hasTVarE es
+        CStructT t fs -> hasTVar t || any (hasTVarE . snd) fs
+        _ -> False
+    subT t0 = case subNumT t0 of
+                Just t | not (hasTVar t) -> Right t
+                _ -> Left CRecNonGround
+    subE e0 = case subNumE e0 of
+                Just e | not (hasTVarE e) -> Right e
+                Just _ -> Left CRecNonGround
+                Nothing -> Left CRecShape
+    -- a dictionary drawn in the solve
+    slotNum n | n >= c0 && n < c1 = Just (SDict (n - c0))
+              | otherwise = Nothing
+    shape = maybe (Left CRecShape) Right
+    -- "root" is the slot of the dictionary the goal being read binds
+    toTmpl _ RcEmpty = Right TEmpty
+    toTmpl root (RcInst nums sb)
+      | sbIsRecursive sb = Left CRecRecursive
+      | isIncoherent sb = Left CRecIncoherent
+      | otherwise = case sbBind sb of
+        -- the evidence is the instance's expression (which names no
+        -- dictionary of the solve) applied to the drawn dictionaries,
+        -- whose thunks (byInst's recursion checks) are not evaluated here
+        (_, t0, CApply f0 args) | length args == length nums -> do
+          sl <- shape root
+          t <- subT t0
+          when (isMonadActionValueDict t) $ Left CRecMonadAV
+          f <- subE f0
+          as <- mapM (fmap ESlot . shape . slotNum) nums
+          return (TLeaf sl t (EApp (EConst f) as) (solvedClass sb))
+        _ -> Left CRecShape
+    toTmpl _ (RcJoin a b sb) = case sbBind sb of
+        (_, t0, CVar _) -> do
+          sa <- shape (slotNum a)
+          sb' <- shape (slotNum b)
+          t <- subT t0
+          when (isMonadActionValueDict t) $ Left CRecMonadAV
+          return (TLeaf sa t (ESlot sb') (solvedClass sb))
+        _ -> Left CRecShape
+    toTmpl root (RcMerge x y) = TMerge <$> toTmpl root x <*> toTmpl root y
+    toTmpl _ (RcGoal n x) = toTmpl (slotNum n) x
+    toTmpl root (RcPool c0' t) = do
+      sl <- maybe (Left CRecShapePool) Right root
+      return (TSub sl (c0' - c0) t)
+    toTmpl _ RcOpaque = Left CRecOpen
+    hasRoot TEmpty = False
+    hasRoot (TLeaf SRoot _ _ _) = True
+    hasRoot (TLeaf _ _ _ _) = False
+    hasRoot (TMerge x y) = hasRoot x || hasRoot y
+    hasRoot (TSub sl _ _) = sl == SRoot
+    boundOf TEmpty = IS.empty
+    boundOf (TLeaf sl _ _ _) = slotSet 0 sl
+    boundOf (TMerge x y) = IS.union (boundOf x) (boundOf y)
+    boundOf (TSub sl _ _) = slotSet 0 sl
+    refsOf TEmpty = IS.empty
+    refsOf (TLeaf _ _ et _) = exprSlots 0 et
+    refsOf (TMerge x y) = IS.union (refsOf x) (refsOf y)
+    refsOf (TSub _ _ _) = IS.empty
+    -- the solve's own records (after its own EvRoot) are made again by
+    -- a hit from its own types
+    splitRoot es = case break isRoot (reverse es) of
+        (_, EvRoot mpkg : rest) -> (reverse rest, mpkg)
+        _ -> (es, Nothing)
+    isRoot (EvRoot _) = True
+    isRoot _ = False
+    addEv acc (EvATF i as x) = RCat acc (RLeaf (RATF i as x))
+    addEv acc (EvPkg pkg) = RCat acc (RLeaf (RPkg pkg))
+    addEv acc (EvJoin a b ns) = RCat acc (RLeaf (RJoin a b ns))
+    addEv acc (EvSub sub) = RCat acc (smEvents sub)
+    addEv acc _ = acc
+    joinOrSub (EvJoin {}) = True
+    joinOrSub (EvSub _) = True
+    joinOrSub _ = False
+    joined (EvJoin {}) = True
+    joined (EvSub sub) = smJoined sub
+    joined _ = False
+
+-- Whether a type holds a type variable (comparing no names, as tv does).
+hasTVar :: Type -> Bool
+hasTVar t | isGroundNode t = False
+hasTVar (TVar _) = True
+hasTVar (TAp l r) = hasTVar l || hasTVar r
+hasTVar _ = False
+
+-- The Monad ActionValue dictionary, which LiftDicts never lifts.
+isMonadActionValueDict :: Type -> Bool
+isMonadActionValueDict t
+  | (f, [arg]) <- splitTAp t =
+      leftCon f == Just (idMonad noPosition) && leftCon arg == Just idActionValue
+  | otherwise = False
 
 makeERecursiveBitsErrorMessage :: [Position] -> [Type] -> Class -> EMsg
 -- a somewhat hacky function which tries to come up with the best
@@ -689,18 +1446,36 @@ batchSolveNumericPreds es rs = do
             return (residualsWithout (hits ++ proven), sbs)
 
 joinNeededCtxs :: [VPred] -> TI ([VPred], Subst, SolvedBinds)
-joinNeededCtxs = joinNeededCtxs' nullSubst emptySBs
+joinNeededCtxs ps = do
+  (ps', s, sbs, _) <- joinNeededCtxsR ps
+  return (ps', s, sbs)
 
-joinNeededCtxs' :: Subst -> SolvedBinds -> [VPred] -> TI ([VPred], Subst, SolvedBinds)
-joinNeededCtxs' s sbs ps = do
+-- with the recipe of the bindings (DictPool.Recipe)
+joinNeededCtxsR :: [VPred] -> TI ([VPred], Subst, SolvedBinds, Recipe)
+joinNeededCtxsR = joinNeededCtxs' nullSubst emptySBs RcEmpty
+
+joinNeededCtxs' :: Subst -> SolvedBinds -> Recipe -> [VPred]
+                -> TI ([VPred], Subst, SolvedBinds, Recipe)
+joinNeededCtxs' s sbs rc ps = do
   bvs <- getBoundTVs
-  case (joinCtxs bvs ps) of
+  case (joinCtxsN bvs ps) of
     Nothing ->
-        return (ps, s, sbs)
-    Just (ps', s', sb) ->
+        return (ps, s, sbs, rc)
+    Just (ps', s', sb, (nb, nu)) -> do
+        -- the next joinCtxsN, splitting ps', runs this one's residual
+        -- filter, which interns the residual names (DictPool.RJoin)
+        logJoin nb nu (map vpNum ps)
         let (changed_rs, unchanged_rs) = split_rs s' ps'
             rs' = (apSub s' changed_rs) ++ unchanged_rs
-        in joinNeededCtxs' (s' @@ s) (fromSB sb <++ sbs) rs'
+        joinNeededCtxs' (s' @@ s) (fromSB sb <++ sbs) (RcMerge (RcJoin nb nu sb) rc) rs'
+
+-- A join, for the recording windows: the numbers of the joined pair's
+-- dictionaries and of the residual goals'.  (joinCtxsN has evaluated
+-- every residual goal, so reading the numbers forces no name.)
+logJoin :: Int -> Int -> [Int] -> TI ()
+logJoin nb nu ns = do
+  active <- recActive
+  when active $ foldr seq () ns `seq` recLog (EvJoin nb nu ns)
 
 -- as we commit to substitutions, we extend the monad with them
 -- we preserve them this far so we can efficiently decide which
@@ -709,13 +1484,25 @@ joinNeededCtxs' s sbs ps = do
 -- Return values are similar to "sat" since they recursively call each other.
 satMany :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Subst -> [VPred] ->
            TI SolveResult
+satMany dvs es rs_accum sbs s ps =
+    fmap fst (satManyR dvs es rs_accum sbs RcOpaque s ps)
+
+satMany' :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Subst -> [VPred] ->
+    TI SolveResult
+satMany' dvs es rs_accum sbs s ps =
+    fmap fst (satManyR' dvs es rs_accum sbs RcOpaque s ps)
+
+-- satMany and satMany', with the recipe of the bindings beside them
+-- (DictPool.Recipe): "rc" is how "sbs" was built.
+satManyR :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Recipe -> Subst -> [VPred] ->
+            TI (SolveResult, Recipe)
 -- Heuristic: sort predicates so those with concrete type arguments are processed
 -- before those with all-variable arguments.  This ensures fundep-producing
 -- predicates (e.g. Bits (UInt 32) n) resolve type variables before
 -- predicates that depend on those variables (e.g. Bits a n), avoiding
 -- expensive scans of all instances for unresolvable predicates.
-satMany dvs es rs_accum sbs s ps =
-    satMany' dvs es rs_accum sbs s (sortBy cmpPredConcreteness ps)
+satManyR dvs es rs_accum sbs rc s ps =
+    satManyR' dvs es rs_accum sbs rc s (sortBy cmpPredConcreteness ps)
     where
         cmpPredConcreteness :: VPred -> VPred -> Ordering
         cmpPredConcreteness (VPred _ (PredWithPositions (IsIn _ ts1) _ _))
@@ -723,21 +1510,23 @@ satMany dvs es rs_accum sbs s ps =
             compare (concreteness ts2) (concreteness ts1) -- higher first
         concreteness ts = length (filter (not . isTVar) ts)
 
-satMany' :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Subst -> [VPred] ->
-    TI SolveResult
+satManyR' :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Recipe -> Subst -> [VPred] ->
+    TI (SolveResult, Recipe)
 -- rs_accum is an accumulating parameter of "needed" VPreds
 -- if satisfying fails these are returned (for error messages and ctxReduce)
-satMany' dvs es [] sbs s [] = return (SolveResult [] sbs s)
-satMany' dvs es rs_accum sbs s [] = do
-  (final_rs, s', sbs') <- joinNeededCtxs rs_accum
+satManyR' dvs es [] sbs rc s [] = return (SolveResult [] sbs s, rc)
+satManyR' dvs es rs_accum sbs rc s [] = do
+  (final_rs, s', sbs', rc') <- joinNeededCtxsR rs_accum
   -- the loop is done; numeric residuals are NOT solved here -- they
   -- flow to the caller's settlement point (see the
   -- satisfy/satisfyStream contract above)
-  return (SolveResult final_rs (sbs' <++ sbs) (s' @@ s))
-satMany' dvs es rs_accum sbs s (p:ps) = do
+  return (SolveResult final_rs (sbs' <++ sbs) (s' @@ s), RcMerge rc' rc)
+satManyR' dvs es rs_accum sbs rc s (p:ps) = do
     -- this path always commits partial reductions, so the Commitment
     -- from "sat" is not consulted
-    SatResult x_needed x_sbs x_subst _ <- sat dvs es p
+    SatResult x_needed x_sbs x_subst _ x_rc0 <- sat dvs es p
+    -- p's bindings, read by the pool as those of the dictionary p names
+    let x_rc = RcGoal (vpNum p) x_rc0
     let x = (x_needed, x_sbs, x_subst)
     rtrace ("satMany: sat="++ ppReadable (p,x)) $ return ()
     case x of
@@ -757,20 +1546,20 @@ satMany' dvs es rs_accum sbs s (p:ps) = do
             -- Since we apply "s" to "needed", we also apply it to the not-yet-
             -- processed preds "ps".
             rtrace ("satMany Right: " ++ ppReadable needed) $
-            satMany' dvs es ((apSub s' needed) ++ rs_accum) (sbs' <++ sbs) (s' @@ s) (apSub s' ps)
+            satManyR' dvs es ((apSub s' needed) ++ rs_accum) (sbs' <++ sbs) (RcMerge x_rc rc) (s' @@ s) (apSub s' ps)
         ([], sbs', s') ->
             -- If p is satisfied, we "drop" it, but add its binding and
             -- substitution.
             if isNullSubst s' then
                 -- Straight-up drop it
                 rtrace ("satMany Left True") $
-                satMany' dvs es rs_accum (sbs' <++ sbs) s ps
+                satManyR' dvs es rs_accum (sbs' <++ sbs) (RcMerge x_rc rc) s ps
             else do
               let (changed_rs, unchanged_rs) = split_rs s' rs_accum
               if null changed_rs then
                  -- no impact on accumulated predicates
                  rtrace ("satMany Left False True") $
-                 satMany' dvs es rs_accum (sbs' <++ sbs) (s' @@ s) (apSub s' ps)
+                 satManyR' dvs es rs_accum (sbs' <++ sbs) (RcMerge x_rc rc) (s' @@ s) (apSub s' ps)
                else
                 -- Drop it, but try from the beginning again to see if any of
                 -- the accumulated rs's can now be
@@ -779,10 +1568,11 @@ satMany' dvs es rs_accum sbs s (p:ps) = do
                 -- Re-sort via satMany since we have a fresh predicate list.
                 rtrace ("satMany Left False False") $ do
                 let rs' = (apSub s' changed_rs) ++ unchanged_rs
-                (rs'', s1, sbs1) <- joinNeededCtxs rs'
+                (rs'', s1, sbs1, rc1) <- joinNeededCtxsR rs'
                 let s2 = s1 @@ s'
-                satMany (dvsSub s2 dvs) (apSub s2 es) [] (sbs1 <++ sbs' <++ sbs)
-                        (s2 @@ s) (rs'' ++ apSub s2 ps)
+                satManyR (dvsSub s2 dvs) (apSub s2 es) [] (sbs1 <++ sbs' <++ sbs)
+                         (RcMerge (RcMerge rc1 x_rc) rc)
+                         (s2 @@ s) (rs'' ++ apSub s2 ps)
 
 
 -- try to reduce the supplied VPreds as far as possible
@@ -845,21 +1635,25 @@ data Reduction = Reduction {
         redBind       :: SolvedBind,
         redSubst      :: Subst,
         redIncoherent :: Maybe Pred,
-        redPackage    :: Maybe Id
+        redPackage    :: Maybe Id,
+        -- the numbers the binding's dictionary arguments were drawn with
+        -- (TIMonad.newDictN), for the dictionary pool
+        redArgNums    :: [Int]
     }
 
 instance PPrint Reduction where
-    pPrint d p (Reduction qs sb us minst mpkg) =
+    pPrint d p (Reduction qs sb us minst mpkg _) =
         pPrint d p ((qs, sb, us), (minst, mpkg))
 
 reducePred :: [EPred] -> DVS -> VPred -> TI (Maybe Reduction)
-reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
+reducePred _eps dvs vp@(VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
+    countDP CReducePred 1
     pushSatStackContext
     bound_tyvars <- getBoundTVs
     ts' <- mapM normT ts
     let pr' = IsIn c ts'
         pp' = PredWithPositions pr' pos anc
-        v' = VPred w pp'
+        v' = vpWith vp pp'
         -- Quick pre-check: can the instance head possibly match the predicate?
         -- Compares head type constructors at non-determined fundep positions.
         -- If both sides have a concrete non-synonym constructor and they
@@ -976,7 +1770,7 @@ reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
                          -- predicate unreduced; the standard
                          -- unresolved-context reporting applies.
                          return Nothing
-                   Match (InstMatch qs sb inst_subst fd_subst mpkg) -> do
+                   Match (InstMatch qs sb inst_subst fd_subst mpkg ns) -> do
                      -- when ((not $ null qs) && (not $ isNullSubst inst_subst)) $
                      --     traceM("qs, inst_subst, fd_subst: " ++ ppReadable (qs, inst_subst, fd_subst))
                      -- does the inst_subst affect anything *outside* of the instance?
@@ -992,7 +1786,7 @@ reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
                          sb'   = if incoherent then markIncoherent sb else sb
                          -- Record the class so warnTransitiveIncoherent can check allowIncoherent.
                          sb''  = sb' { solvedClass = Just c }
-                     return $ Just (Reduction qs sb'' fd_subst minst mpkg)
+                     return $ Just (Reduction qs sb'' fd_subst minst mpkg ns)
 
     let cands = genCandidates c bound_tyvars dvs pr'
     r <- f False cands
@@ -1173,7 +1967,8 @@ data InstMatch = InstMatch {
         imBind      :: SolvedBind,
         imInstSubst :: Subst,
         imFdSubst   :: Subst,
-        imPackage   :: Maybe Id
+        imPackage   :: Maybe Id,
+        imArgNums   :: [Int]      -- see redArgNums
     }
 
 byInst :: VPred -> Inst -> TI (Match InstMatch)
@@ -1190,7 +1985,8 @@ byInst (VPred i p) (Inst e _ (ps :=> h) pkg) = do
      Conflict -> return Conflict
      Match (inst_subst, (fd_subst, num_eqs)) -> do
         let s = fd_subst @@ inst_subst
-        vs <- mapM (const newDict) ps
+        vns <- mapM (const newDictN) ps
+        let vs = map snd vns
         -- if the instance is recursive (has a proviso for itself and expects
         -- a dictionary argument for that), then don't use a new dictionary
         -- for that argument, just pass the instance to itself
@@ -1198,17 +1994,21 @@ byInst (VPred i p) (Inst e _ (ps :=> h) pkg) = do
             vs' = zipWith (\ x y -> if (y == p) then i else x) vs (apSub s ps)
         eq_ps <- mapM (eqToPred (getPredPositions p)) num_eqs
         let eq_pwps = map (mkPredWithPositions []) eq_ps
-        eq_vs <- mapM (const newDict) eq_pwps
+        eq_vns <- mapM (const newDictN) eq_pwps
+        let eq_vs = map snd eq_vns
+        -- the binding's free names then hold more than its expression's
+        -- (addBindDeps below), which the dictionary pool does not record
+        when (not (null eq_vs)) $ recLog EvTaint
         -- if p introduces a new predicate, carry on the position info,
         -- and record p (and its own reduction chain) as the ancestry of
         -- the residual, for error reporting in terms of the user-written
         -- root predicate
         let p_ancestors = mkPredAncestor p : getPredAncestors p
-            mkvpred x y = VPred x (addPredAncestors
-                                       (addPredPositions y (getPredPositions p))
-                                       p_ancestors)
+            mkvpred (n, x) y = mkVPredN n x (addPredAncestors
+                                                (addPredPositions y (getPredPositions p))
+                                                p_ancestors)
             -- if the instance is recursive one of these will be unused?
-            ps' = zipWith mkvpred (vs ++ eq_vs) (map (apSub s) (ps ++ eq_pwps))
+            ps' = zipWith mkvpred (vns ++ eq_vns) (map (apSub s) (ps ++ eq_pwps))
             t = predToType (apSub s h)
             e' = apSub s e
         ps'' <- concatMapM (expTConPred . expandSynVPred) ps'
@@ -1221,7 +2021,9 @@ byInst (VPred i p) (Inst e _ (ps :=> h) pkg) = do
             -- free variables (emission ordering, later reuse checks)
             -- sees the obligation (see SolvedBinds.addBindDeps).
             solvedBind = addBindDeps eq_vs (mkSolvedBind binding isSelfRec)
-        return (Match (InstMatch ps'' solvedBind inst_subst fd_subst pkg))
+        -- (the binding's arguments are vs, except where the instance is
+        -- recursive, and then the binding is recursive)
+        return (Match (InstMatch ps'' solvedBind inst_subst fd_subst pkg (map fst vns)))
 
 -- Create a new instance by replacing the type variables in the instance
 -- with fresh variables.
@@ -1708,20 +2510,20 @@ unifyFnFromTo x e t = do
 -- they should not be re-introduced later (by predicate reduction)o
 mkVPred :: Position -> PredWithPositions -> TI [VPred]
 mkVPred pos p = do
-    v <- newDict
-    expTConPred (expandSynVPred $ VPred v (addPredPositions p [pos]))
+    (n, v) <- newDictN
+    expTConPred (expandSynVPred $ mkVPredN n v (addPredPositions p [pos]))
 
 mkVPredNoNewPos :: PredWithPositions -> TI [VPred]
 mkVPredNoNewPos p = do
-    v <- newDict
-    expTConPred (expandSynVPred $ VPred v p)
+    (n, v) <- newDictN
+    expTConPred (expandSynVPred $ mkVPredN n v p)
 
 -- entry point when we don't need synonyms reduced
 -- mainly deriving and other places where we check reducibility
 mkVPredFromPred :: [Position] -> Pred -> TI VPred
 mkVPredFromPred poss p = do
-  v <- newDict
-  return (VPred v $ mkPredWithPositions poss p)
+  (n, v) <- newDictN
+  return (mkVPredN n v $ mkPredWithPositions poss p)
 
 toPredWithPositions :: VPred -> PredWithPositions
 toPredWithPositions (VPred _ p) = p

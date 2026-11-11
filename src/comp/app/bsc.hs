@@ -9,7 +9,9 @@ import System.Process(system)
 import System.Exit(ExitCode(ExitFailure, ExitSuccess))
 import System.FilePath(takeDirectory)
 import System.IO(hFlush, stdout, hPutStr, stderr, hGetContents, hClose, hSetBuffering, BufferMode(LineBuffering))
-import System.IO(hSetEncoding, utf8)
+import System.IO(hSetEncoding, utf8, hPutStrLn)
+import System.Mem(getAllocationCounter)
+import DictPool(traceDictPool)
 import System.Posix.Files(fileMode,  unionFileModes, ownerExecuteMode, groupExecuteMode, setFileMode, getFileStatus, fileAccess)
 import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory)
 import System.Directory(removeFile)
@@ -531,10 +533,15 @@ compilePackage
     t <- dump errh flags t DFconvinst dumpnames minst
 
     -- Type check and insert dictionaries
+    tcAlloc0 <- getAllocationCounter
     start flags DFtypecheck
-    (mod, tcErrors, pkgsUsedInCode, ctypeATFCache) <- cTypeCheck errh flags symt minst
+    (mod, tcErrors, pkgsUsedInCode, ctypeATFCache) <- cTypeCheck errh flags symt True minst
     --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
+    when traceDictPool $ do
+        tcAlloc1 <- getAllocationCounter
+        hPutStrLn stderr ("tc alloc: " ++ show (tcAlloc0 - tcAlloc1) ++ " bytes")
+
     when checkBinRoundTrip $
         checkRoundTrip "typechecked package" CPackageBin
                        (\(CPackageBin p) -> sortSched p) (sortSched (stripImpSigs mod))
@@ -2573,7 +2580,7 @@ compileCDefToIDef errh flags dumpnames symt ipkg def =
     t <- dump errh flags t DFwrapper_ctxreduce dumpnames cpkg_ctx
 
     start flags DFwrapper_typecheck
-    (cpkg_chk, tcErrors, _usedPkgs, _wrapperATFCache) <- cTypeCheck errh flags symt cpkg_ctx
+    (cpkg_chk, tcErrors, _usedPkgs, _wrapperATFCache) <- cTypeCheck errh flags symt False cpkg_ctx
     t <- dump errh flags t DFwrapper_typecheck dumpnames cpkg_chk
 
     start flags DFwrapper_simplified
