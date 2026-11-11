@@ -419,7 +419,7 @@ instance JoinGoal VPred where
 -- of being keyed again by every round.  A key holds the goal's own class
 -- and type objects and building it forces no type, so the sort compares
 -- the same objects in the same order as with keys built afresh.
--- Its "tv" is kept the same way, for every round's split_rs: a scan
+-- Its "tv" is kept the same way, for every round's split: a scan
 -- reading further than earlier rounds did makes the comparisons a fresh
 -- list would make there, and the cells before only repeat comparisons
 -- already made on the same type variables.
@@ -1566,12 +1566,12 @@ joinNext bvs s sbs rc ns ((ps', s', sb, (nb, nu)), (n, gvs, v1, v2)) = do
         -- the next joinCtxsN, splitting ps', runs this one's residual
         -- filter, which interns the residual names (DictPool.RJoin)
         logJoin nb nu ns
-        let (changed_rs, unchanged_rs) = split_rs s' ps'
+        let (changed_rs, unchanged_rs) = splitGoals s' ps'
             rs' = (apSub s' changed_rs) ++ unchanged_rs
             s1 = s' @@ s
             sbs1 = fromSB sb <++ sbs
             rc1 = RcMerge (RcJoin nb nu sb) rc
-        -- The next round's first act is to force rs' (split_rs's scan:
+        -- The next round's first act is to force rs' (splitGoals's scan:
         -- the residual filter and "tv" of each goal, in order); do it
         -- here.  The scan has then forced s' if any goal it reached has a
         -- type variable (the first such goal is no further than the scan
@@ -1606,9 +1606,22 @@ joinBatch bvs s sbs rc cur n gm =
         -- variable, with nothing effectful before it
         if any (not . null . tv) ps' && isNullSubst s'
           then joinBatch bvs s sbs1 rc1 ps' n (groupAfter v1 v2 (goalPred (head ps')) gm)
-          else let (changed_rs, unchanged_rs) = split_rs s' ps'
+          else let (changed_rs, unchanged_rs) = splitGoals s' ps'
                    rs' = (apSub s' changed_rs) ++ unchanged_rs
                in  joinNeededCtxs' (s' @@ s) sbs1 rc1 rs'
+
+-- split_rs for the join rounds, giving the goal list itself when the
+-- substitution affects no goal.  Both callers demand the changed goals
+-- first, so the scan that finds none is partition's; when it finds one,
+-- partition repeats the comparisons it made on the goals up to that one
+-- (whose "tv" the goals keep).  A null substitution is scanned too: the
+-- scan runs the join's residual filter (see joinNext).
+splitGoals :: Subst -> [JGoal] -> ([JGoal], [JGoal])
+splitGoals s' rs
+    | any affected rs = partition affected rs
+    | otherwise = ([], rs)
+  where changed_tv = getSubstDomain s'
+        affected r = any (`elem` changed_tv) (tv r)
 
 -- The joined group after joining v1 and v2 into p'': p'' first, then the
 -- members the residual filter keeps (joinPair's), in order.
