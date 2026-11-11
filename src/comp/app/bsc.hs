@@ -39,7 +39,7 @@ import SCC(scc)
 import ParseOp
 import PFPrint
 import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
-import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, remapPath,
+import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, remapPath, storedPath,
                     mkAName, mkVName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
@@ -62,6 +62,7 @@ import Exceptions(bsCatch)
 import Flags(
         Flags(..),
         remapFlagsPaths,
+        storedFlagsPaths,
         DumpFlag(..),
         hasDump,
         verbose, extraVerbose, quiet)
@@ -1071,7 +1072,10 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
 
        -- generate the abin file
        pwd <- getCurrentDirectory
-       let storedFlags = storedFlagsPaths (storedPath pwd (bluespecDir flags)) flags
+       -- -remap-path-prefix first; storedPath then anchors whatever still
+       -- lies under the pwd or $BLUESPECDIR, a mapping's output included
+       let storedFlags = storedFlagsPaths (storedPath pwd (bluespecDir flags))
+                                          (remapFlagsPaths remapPath flags)
            afilename = mkAName (bdir flags) prefix modstr
            afilename_rel = getRelativeFilePath afilename
            backend = apkg_backend amod_for_abin
@@ -1092,7 +1096,7 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                           abmi_oqt         = oqt,
                           abmi_method_dump = methodConflict,
                           abmi_pathinfo = vPathInfo,
-                          abmi_flags       = remapFlagsPaths remapPath flags,
+                          abmi_flags       = storedFlags,
                           abmi_vprogram    = if (genABinVerilog flags)
                                              then vprog else Nothing
                      }
@@ -1112,7 +1116,10 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
 
        -- generate the abin file
        pwd <- getCurrentDirectory
-       let storedFlags = storedFlagsPaths (storedPath pwd (bluespecDir flags)) flags
+       -- -remap-path-prefix first; storedPath then anchors whatever still
+       -- lies under the pwd or $BLUESPECDIR, a mapping's output included
+       let storedFlags = storedFlagsPaths (storedPath pwd (bluespecDir flags))
+                                          (remapFlagsPaths remapPath flags)
            afilename = mkAName (bdir flags) prefix modstr
            afilename_rel = getRelativeFilePath afilename
            abinPrintPrefix = "Elaborated error module file created: "
@@ -1125,7 +1132,7 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
                           abmsei_aschederrinfo = sched_info,
                           abmsei_pps           = pps,
                           abmsei_oqt           = oqt,
-                          abmsei_flags         = remapFlagsPaths remapPath flags
+                          abmsei_flags         = storedFlags
                      }
            abin = ABinModSchedErr modinfo (bscVersionStr True)
        genABinFile errh remapP afilename abin
