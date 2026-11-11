@@ -48,7 +48,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word(Word64)
 
-import FStringCompat(FString, fstringId, mkFString, headFString, allFString,
+import FStringCompat(FString, fstringId, headFString, allFString,
                      foldrFString, isSuffixOfFString)
 import Position(Position(..), noPosition)
 import Id
@@ -65,7 +65,8 @@ import FileNameUtil(biSuffix)
 import FileIOUtil(writeFileBuilderCatch, existsFilePath, readBinFoundFile)
 import Util(hashInit, nextHashByte, showHash)
 import SpeedyString(internCount)
-import PreStrings(allPreStrings)
+import PreStrings(allPreStrings, fsPolyWrapField, fs_read, fs_write, fs_if,
+                  fsPrimSelectFn, fsPrimUpdateFn, fsPrimWriteFn)
 
 -- .tci file tag -- change this whenever the .tci format changes
 header :: [Byte]
@@ -252,14 +253,19 @@ keepAllStats libs sigs =
 -- Deliberately loose (resolving names exactly needs the typechecker).  N
 -- is a set of base names, seeded with every string of the local part
 -- (every Id of mctx, generated names included, and the used sets and ATF
--- cache), with "val" (the Generic poly-wrap field), and with every name
--- that a kept entry binds or mentions.  Kept (library signatures are
--- referred to whole, and every name they bind or mention is in N): every
--- instance; every entry of a package re-exported whole (export Q::*);
--- every entry binding a ready name (an RDY_ Id, Id.isRdyId); and every
--- entry that binds a name in N, in any package and namespace.  Fixities
--- and pragmas are kept when their name is in N.  Each closure package
--- keeps its signature, in order, even when nothing in it is kept.
+-- cache); with the Prelude names the typechecker refers to unqualified
+-- (val, the Generic poly-wrap field; _read and _write, for Cwrite; _if,
+-- primSelectFn, primWriteFn and primUpdateFn, for its desugarings in
+-- TCheck), which resolve against every unqualified import; with every
+-- name a library binds in the type namespace (foldTypeBinders), which
+-- TIMonad.findFields tests by bare name; and with every name that a kept
+-- entry binds or mentions.  Library signatures are referred to whole and
+-- never walked, so library names reach N only by these seeds.  Kept:
+-- every instance; every entry of a package re-exported whole (export
+-- Q::*); every entry binding a ready name (an RDY_ Id, Id.isRdyId); and
+-- every entry that binds a name in N, in any package and namespace.
+-- Fixities and pragmas are kept when their name is in N.  Each closure
+-- package keeps its signature, in order, even when nothing in it is kept.
 -- Returns the non-library signatures, pruned.
 
 pruneSigs :: [FString] -> S.Set String -> [(Bool, CImportedSignature)] ->
@@ -302,7 +308,9 @@ pruneSigs seeds exportAll lsigs = do
                        Just _ -> foldDefnBinders (\r b -> r || isRdyId b || IS.member (nameId b) ns) False d
         fixpoint prev ns = let ns' = pass prev ns
                            in  if IS.size ns' == IS.size ns then ns else fixpoint (Just ns) ns'
-        nFinal = fixpoint Nothing (foldl' (foldDefnNames add) (foldl' add IS.empty (mkFString "val" : seeds)) libDefs)
+        nFinal = fixpoint Nothing (foldl' (foldTypeBinders (\s i -> add s (getIdBase i)))
+                                          (foldl' add IS.empty (prelude ++ seeds)) libDefs)
+        prelude = [fsPolyWrapField, fs_read, fs_write, fs_if, fsPrimSelectFn, fsPrimUpdateFn, fsPrimWriteFn]
         inN i = IS.member (nameId i) nFinal
         -- an entry kept by binding a name has every name it binds in N
         keepEntry whole d = case firstBinder d of
@@ -358,6 +366,23 @@ foldDefnBinders f z d = case d of
     Cprimitive i _ -> f z i
     _ -> z
   where fs = foldl' f
+
+-- A strict left fold over the Ids an entry binds in the type namespace:
+-- a type, synonym or class, and a class's associated type families.
+-- TIMonad.findFields takes a struct type as imported when its bare name
+-- finds any type in scope, so a MatX type with a library type's name stays
+-- even when nothing the package reaches names it.
+{-# INLINE foldTypeBinders #-}
+foldTypeBinders :: (a -> Id -> a) -> a -> CDefn -> a
+foldTypeBinders f z d = case d of
+    Ctype ik _ _ -> f z (iKName ik)
+    CItype ik _ _ -> f z (iKName ik)
+    CprimType ik -> f z (iKName ik)
+    Cdata { cd_name = ik } -> f z (iKName ik)
+    Cstruct _ _ ik _ _ _ -> f z (iKName ik)
+    Cclass _ _ ik _ _ ats _ -> foldl' (\a at -> f a (ca_name at)) (f z (iKName ik)) ats
+    CIclass _ _ ik _ _ ats _ _ -> foldl' (\a at -> f a (ca_name at)) (f z (iKName ik)) ats
+    _ -> z
 
 -- The first Id that foldDefnBinders gives
 {-# INLINE firstBinder #-}
