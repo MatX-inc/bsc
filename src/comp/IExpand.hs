@@ -964,7 +964,7 @@ iExpandModuleDef (IDef i t e _) = do
     showTopProgress "Elaborating interface"
     pushIfcSchedNameScope
 
-    ifc' <- addPredG p_ifc (do (_, ifc_uh) <- evalUH ifc; return ifc_uh)
+    ifc' <- addPredG p_ifc (do ifc_uh <- evalUHV ifc; return ifc_uh)
 
     -- iExpandIface:
     --   turns a struct of ILams into IEFace: evaluates method bodies and takes
@@ -1372,7 +1372,7 @@ iExpandField modId implicitCond clkRst (i, bi, e, t) | isRdyId i =
 iExpandField modId implicitCond clkRst (i, bi, e, t) = do
    showTopProgress ("Elaborating method " ++ quote (pfpString i))
    setIfcSchedNameScopeProgress (Just (IEP_Method i False))
-   (_, P p e') <- evalUH e
+   P p e' <- evalUHV e
    let (ins, outs, eb) = case e' of
         ICon _ (ICMethod _ ins outs eb) -> (ins, outs, eb)
         _ -> internalError ("iExpandField: expected ICMethod: " ++ ppReadable e')
@@ -1391,7 +1391,7 @@ iExpandMethod :: Id -> Integer -> [Id] -> HPred ->
                     (HDef, HWireSet, VFieldInfo))
 iExpandMethod modId n args implicitCond clkRst@(curClk, _) (i, bi, ins, outs, e) = do
     when doDebug $ traceM ("iExpandMethod " ++ ppString i ++ " " ++ ppReadable e)
-    (_, P p e') <- evalUH e
+    P p e' <- evalUHV e
     case e' of
      ILAM li ki eb ->
         -- must be due to a type which wasn't in Bits class
@@ -1589,7 +1589,7 @@ iExpandModule :: Bool -> (HClock, HReset) ->
                  IStateLoc -> HPred -> HExpr -> G PExpr
 iExpandModule isMFix curClkRstn ns p e = do
         when doDebug $ traceM "iExpandModule"
-        (_, P p e') <- evalUH e
+        P p e' <- evalUHV e
         handlePrim isMFix curClkRstn ns p e'
 
 handlePrim :: Bool -> (HClock, HReset) ->
@@ -2245,7 +2245,7 @@ iExpandRules curClkRstn ns p r = do
 
 convRules :: (HClock, HReset) -> IStateLoc -> HPred -> HExpr -> G HRules
 convRules curClkRstn@(curClk, _) ns p0 e = do
-    (_, P p e') <- evalUH e
+    P p e' <- evalUHV e
     let p' = pConj p0 p
     case e' of
       (IAps (ICon _ (ICPrim { primOp = PrimJoinRules })) _ [r1, r2]) -> do
@@ -2802,7 +2802,7 @@ evalNF e = do
 
 evalUHNF :: HExpr -> G (PExpr, HWireSet)
 evalUHNF e = do
-  (_, P p0 e') <- evalUH e
+  P p0 e' <- evalUHV e
   (P p e'', ws) <- walkNF e'
   return (P (pConj p0 p) e'', ws)
 
@@ -3032,11 +3032,11 @@ walkNF e =
                 -- the walkNF below updates to HNF on the first walk
                 -- (later walks are the memoized-ref fast path).
                 (ICon _ (ICLazyPack { lzApplied = a })) -> do
-                    _ <- evalUH a  -- force the applied cell to WHNF
+                    _ <- evalUHV a  -- force the applied cell to WHNF
                     (P pa a', ws) <- walkNF a
                     upd (pConj p0 pa) a' ws
                 (ICon _ (ICLazyUnpack { lzApplied = a })) -> do
-                    _ <- evalUH a
+                    _ <- evalUHV a
                     (P pa a', ws) <- walkNF a
                     upd (pConj p0 pa) a' ws
 
@@ -3106,15 +3106,53 @@ fuse (sz1, e1) (sz2, e2) = (sz3, e)
 -- note that iexpr is a "heaped" version of the expression
 evalUH :: HExpr -> G (HExpr, PExpr)
 evalUH e = do
-        let isRef (IRefT _ _ _ _) = True
-            isRef _             = False
         pe@(P p0 e0) <- eval1 e
-        when (doTraceHeapAlloc && isRef e) $
+        when (doTraceHeapAlloc && isRefUH e) $
             traceM ("wasted re-heap: " ++ ppReadable (e, pe))
-        let specialArr t (Just _) = True
-            specialArr t _ = isBitType t
         case e0 of
-          ICon i (ICLazyArray t arr u) | specialArr t u -> do
+          ICon _ (ICLazyArray t arr u) | specialArr t u -> uhArray e e0 t p0
+          _ -> do
+            pe' <- uhUnheap e pe
+            e' <- uhHeaped pe
+            return (e', pe')
+
+-- evalUH for callers that only use the value: the "eval-uh" cell keeps
+-- its address and name but is not made
+evalUHV :: HExpr -> G PExpr
+evalUHV e = do
+        pe@(P p0 e0) <- eval1 e
+        when (doTraceHeapAlloc && isRefUH e) $
+            traceM ("wasted re-heap: " ++ ppReadable (e, pe))
+        case e0 of
+          ICon _ (ICLazyArray t arr u) | specialArr t u ->
+            snd <$> uhArray e e0 t p0
+          _ -> do
+            pe' <- uhUnheap e pe
+            _ <- uhCellLater pe
+            return pe'
+
+isRefUH :: HExpr -> Bool
+isRefUH (IRefT _ _ _ _) = True
+isRefUH _ = False
+
+specialArr :: IType -> Maybe a -> Bool
+specialArr t (Just _) = True
+specialArr t _ = isBitType t
+
+-- evalUH of a lazy bit array (or an uninitialized one)
+uhArray :: HExpr -> HExpr -> IType -> HPred -> G (HExpr, PExpr)
+uhArray e e0 t p0 = do
+  pe_sa <- uhFuseArray e e0 p0
+  case e of
+    IRefT _ _ _ _ -> return (e, pe_sa)
+    _ -> do e'' <- toHeapWHNF "eval-uh" t pe_sa Nothing
+            return (e'', pe_sa)
+
+-- fuse a lazy bit array (or report an uninitialized one), writing the
+-- result back to the cell when the input is a reference to it; the result
+-- is not unheaped
+uhFuseArray :: HExpr -> HExpr -> HPred -> G PExpr
+uhFuseArray e e0@(ICon i (ICLazyArray t arr u)) p0 = do
             P p' e' <- case u of
                          Just (pos, name) -> do
                            -- raw uninitialized to force error
@@ -3130,24 +3168,62 @@ evalUH e = do
             -- traceM ("specialArr: " ++ ppReadable (e, e0, e'))
             let pe = P (pConj p' p0) e'
             case e of
-              IRefT _ p _ r -> do updHeap "evalUH-array" (p, r) (HWHNF pe Nothing)
-                                  return (e, pe)
-              _ -> do e'' <- toHeapWHNF "eval-uh" t pe Nothing
-                      return (e'', pe)
-          _ -> do
-            pe' <- unheap pe
-            when (doTraceHeapAlloc && isRef e0) $
-                traceM ("wasted re-heap 2: " ++ ppReadable (e, e0, pe'))
-            e' <- case e0 of
-                    ICon   _ _     | p0 == pTrue -> return e0
-                    IRefT  _ _ _ _ | p0 == pTrue -> return e0
-                    IAps f ts es -> do
-                      t <- dropArrows (length es) <$> instFunType (iGetType f) ts
-                      toHeapWHNF "eval-uh" t pe Nothing
-                    _ -> do -- handle ILam and ILAM since they are WHNF
-                      normC <- getTypeNormalizerC
-                      toHeapWHNF "eval-uh" (iGetTypeNorm normC e0) pe Nothing
-            return (e', pe')
+              IRefT _ p _ r -> updHeap "evalUH-array" (p, r) (HWHNF pe Nothing)
+              _ -> return ()
+            return pe
+uhFuseArray _ e0 _ = internalError ("uhFuseArray: " ++ ppReadable e0)
+
+{-# INLINE uhUnheap #-}
+uhUnheap :: HExpr -> PExpr -> G PExpr
+uhUnheap e pe@(P _ e0) = do
+  pe' <- unheap pe
+  when (doTraceHeapAlloc && isRefUH e0) $
+      traceM ("wasted re-heap 2: " ++ ppReadable (e, e0, pe'))
+  return pe'
+
+-- the heaped expression evalUH returns for an eval1 result that is not a
+-- lazy array: a constant or reference without conditions, or else a new
+-- "eval-uh" cell holding the WHNF value
+uhHeaped :: PExpr -> G HExpr
+uhHeaped pe@(P p0 e0) =
+  case e0 of
+    ICon   _ _     | p0 == pTrue -> return e0
+    IRefT  _ _ _ _ | p0 == pTrue -> return e0
+    _ -> do t <- uhType e0
+            toHeapWHNF "eval-uh" t pe Nothing
+
+{-# INLINE uhType #-}
+uhType :: HExpr -> G IType
+uhType (IAps f ts es) = dropArrows (length es) <$> instFunType (iGetType f) ts
+uhType e0 = do -- handle ILam and ILAM since they are WHNF
+  normC <- getTypeNormalizerC
+  return (iGetTypeNorm normC e0)
+
+-- uhHeaped for a caller that may not use the heaped expression
+data UHCell = UHExpr HExpr
+              -- the address and name of a cell that uhHeaped would have made
+            | UHLater {-# UNPACK #-} !HeapPointer (Maybe Id) PExpr
+
+-- The cell's address is taken and its name inferred now, and uhCell makes
+-- the cell with them (at most once).  Nothing can refer to the address
+-- before then, so the cell and the heap numbering are those uhHeaped would
+-- give.  A reference with conditions (whose cell is read) or a
+-- PrimWhenPred application is heaped now.
+uhCellLater :: PExpr -> G UHCell
+uhCellLater pe@(P p0 e0) =
+  case e0 of
+    ICon   _ _     | p0 == pTrue -> return (UHExpr e0)
+    IRefT  _ _ _ _ | p0 == pTrue -> return (UHExpr e0)
+    IRefT  _ _ _ _ -> UHExpr <$> uhHeaped pe
+    IAps (ICon _ (ICPrim _ PrimWhenPred)) _ _ -> UHExpr <$> uhHeaped pe
+    _ -> do (p, name) <- reserveHeapWHNF pe
+            return (UHLater p name pe)
+
+uhCell :: UHCell -> G HExpr
+uhCell (UHExpr e) = return e
+uhCell (UHLater p name pe@(P _ e0)) = do
+  t <- uhType e0
+  addHeapWHNFAt "eval-uh" p name t pe
 
 -- Like evalUH, but check for implicit conditions.
 -- This is used to evaluate static exprs:
@@ -3169,7 +3245,7 @@ evalUH e = do
 --
 evaleUH :: HExpr -> G HExpr
 evaleUH e = do
-  (_, P p e') <- evalUH e
+  P p e' <- evalUHV e
   when (p /= pTrue) $ do
     e' <- unheapAll e
     -- XXX this error message should be improved
@@ -3209,16 +3285,26 @@ evalStaticOp e resultType handler =
 {-# INLINE evalStaticOp' #-}
 evalStaticOp' :: Bool -> Bool -> Bool ->
                  HExpr -> IType ->
-                 (HExpr -> (HPred, HExpr) -> G PExpr) -> G PExpr
+                 (UHCell -> (HPred, HExpr) -> G PExpr) -> G PExpr
 evalStaticOp' doUH doBK doUndet e resultType handler = do
   (ee, pe@(P p e')) <-
       -- for some array ops, we don't want to force the array (in evalUH)
       if doUH
-      then evalUH e
+      then do pe0@(P p0 e0) <- eval1 e
+              when (doTraceHeapAlloc && isRefUH e) $
+                  traceM ("wasted re-heap: " ++ ppReadable (e, pe0))
+              case e0 of
+                ICon _ (ICLazyArray t _ u) | specialArr t u -> do
+                  (ee, pe_sa) <- uhArray e e0 t p0
+                  return (UHExpr ee, pe_sa)
+                -- the handler makes the eval-uh cell only if it uses it
+                _ -> do pe' <- uhUnheap e pe0
+                        ee <- uhCellLater pe0
+                        return (ee, pe')
       else do pe <- eval1 e >>= unheap
               -- we could return "pExprToHExpr pe", but better to just
               -- make sure the handler only uses "pe"
-              let ee = internalError ("evalStaticOp: doUH == False")
+              let ee = UHExpr (internalError ("evalStaticOp: doUH == False"))
               return (ee, pe)
   res <-
    case e' of
@@ -3290,11 +3376,11 @@ evalStaticOp' doUH doBK doUndet e resultType handler = do
 evalStaticOpInArray' :: Bool -> Bool -> Bool ->
                         HExpr -> HExpr -> Integer ->
                         HExpr -> IType ->
-                        (HExpr -> (HPred, HExpr) -> G PExpr) -> G PExpr
+                        (UHCell -> (HPred, HExpr) -> G PExpr) -> G PExpr
 evalStaticOpInArray' doUH doBK doUndet
                      ic idx_e idx_sz arr_e resultType handler = do
   -- doUH doesn't apply here
-  (_, P arr_p arr_e') <- evalUH arr_e
+  P arr_p arr_e' <- evalUHV arr_e
   case arr_e' of
     ICon arr_i (ICLazyArray arr_ty arr Nothing) -> do
         let (elem_ty, arr_ty') =
@@ -3752,7 +3838,7 @@ mkBitsMethodSel prim_i selty meth_i = do
 -- taken from it directly by name.
 unfoldBitsCoercion :: String -> Id -> HExpr -> [Arg] -> G PExpr
 unfoldBitsCoercion tag meth_i dictE rest = do
-    (_, P pd d) <- evalUH dictE
+    P pd d <- evalUHV dictE
     case d of
       IAps (ICon _ (ICTuple { fieldIds = fs })) _ ms
         | Just k <- findIndex (qualEq meth_i) fs, k < length ms ->
@@ -3975,7 +4061,7 @@ conAp' _ (ICPrim _ PrimSeqCond) _ as0@(T t1 : T _ : E e1 : E e2 : as) = do
      internalError ("PrimSeqCond not abstract: " ++ ppReadable as0)
    -- unheap to make sure we get the full implicit condition
    -- forcing bit-arrays is a nice side effect
-   (_, P p e) <- evalUH e1
+   P p e <- evalUHV e1
    p_buried <- getBuriedPreds e
    let p_tot = pConj p p_buried
    addPredG p_tot $ evalAp "PrimSeqCond" e2 as
@@ -3986,7 +4072,7 @@ conAp' _ (ICPrim _ PrimImpCondOf) fe (T t : E e : as) = do
   let it = t `itFun` t
   P p  f <- evalCExpr "PrimImpCondOf" ce it as
   -- only UH here because PrimDeepSeqCond should do the rest
-  (_, P p' e') <- evalUH (mkAp f (E e : as))
+  P p' e' <- evalUHV (mkAp f (E e : as))
   -- XXX this is duplicate work if primSeqCond was employed?
   p_buried <- getBuriedPreds e'
   -- This line is needed to simplify away if-exprs so that we return the
@@ -4050,7 +4136,7 @@ conAp' _ (ICPrim _ PrimMarkArrayInitialized) _ (T t : E arr : as) =
     evalStaticOp' False True False arr arr_ty doMarkArrayInit
   where
     arr_ty = ITAp itPrimArray t
-    doMarkArrayInit :: HExpr -> (HPred, HExpr) -> G PExpr
+    doMarkArrayInit :: UHCell -> (HPred, HExpr) -> G PExpr
     doMarkArrayInit _ (p, e) =
       case e of
         (ICon i ci@(ICLazyArray { })) -> do
@@ -4329,7 +4415,7 @@ conAp' tfs (ICPrim _ PrimIntegerToString) fe [E e] = evalStaticOp e itString han
         localIntToString s l b = s ++ (showIntAtBase b intToDigit l "")
 
 conAp' tfs (ICPrim _ PrimIsStaticInteger) fe [E e] = do
-  (_, P _ e') <- evalUH e
+  P _ e' <- evalUHV e
   -- traceM ("primIsStaticInteger " ++ ppReadable e)
   case e' of
     ICon i (ICInt { }) -> do -- traceM ("true\n")
@@ -4338,7 +4424,7 @@ conAp' tfs (ICPrim _ PrimIsStaticInteger) fe [E e] = do
                              return (pExpr iFalse)
 
 conAp' tfs (ICPrim _ PrimAreStaticBits) fe [T t, E e] = do
-  (_, P _ e') <- evalUH e
+  P _ e' <- evalUHV e
   -- traceM ("primIsStaticInteger " ++ ppReadable e)
   case e' of
     ICon i (ICInt { }) -> do -- traceM ("true\n")
@@ -5048,7 +5134,7 @@ getBuriedPreds e = do
 -- the results
 getBuriedPredsForced :: [HExpr] -> G HPred
 getBuriedPredsForced es = do
-  let f e = do (_, P p e') <- evalUH e
+  let f e = do P p e' <- evalUHV e
                p' <- getBuriedPreds e'
                return (pConj p p')
   ps <- mapM f es
@@ -5135,7 +5221,7 @@ doArrayLength f as = internalError("IExpand.doArrayLength : " ++ ppReadable f ++
 --
 doArraySelect :: HExpr -> [Arg] -> G PExpr
 doArraySelect f (T elem_t : E arr_e : E idx_e : as) = do
-  (_, (P p idx_e')) <- evalUH idx_e
+  (P p idx_e') <- evalUHV idx_e
   case idx_e' of
     ICon idx_i idx_ic@(ICInt { iVal = IntLit { ilValue = index } }) -> do
         let handleArraySelect ic@(ICon _ (ICLazyArray { iArray = arr })) =
@@ -5178,7 +5264,7 @@ doArraySelect f as = internalError("IExpand.doArraySelect : " ++ ppReadable f ++
 doArrayUpdate :: HExpr -> [Arg] -> G PExpr
 doArrayUpdate f@(ICon upd_i (ICPrim {iConType = opType}))
               as@[T elem_t, E arr_e, E idx_e, E val_e] = do
-  (_, P idx_p idx_e') <- evalUH idx_e
+  P idx_p idx_e' <- evalUHV idx_e
   case idx_e' of
     ICon _ (ICInt { iVal = IntLit { ilValue = index } }) -> do
         -- heap val_e to prevent redundant evaluation
@@ -5341,19 +5427,19 @@ improveIf f t cnd thn@(ICon _ (ICUndet { iuKind = u })) els
 -- applied form surfaces no implicit condition; otherwise the branches
 -- are left unmerged (safe, just unimproved).
 improveIf f t cnd thn@(ICon _ (ICLazyPack { lzApplied = a })) els = do
-    (_, P pa aw) <- evalUH a
+    P pa aw <- evalUHV a
     if pa == pTrue then improveIf f t cnd aw els
      else return (IAps f [t] [cnd, thn, els], False)
 improveIf f t cnd thn@(ICon _ (ICLazyUnpack { lzApplied = a })) els = do
-    (_, P pa aw) <- evalUH a
+    P pa aw <- evalUHV a
     if pa == pTrue then improveIf f t cnd aw els
      else return (IAps f [t] [cnd, thn, els], False)
 improveIf f t cnd thn els@(ICon _ (ICLazyPack { lzApplied = a })) = do
-    (_, P pa aw) <- evalUH a
+    P pa aw <- evalUHV a
     if pa == pTrue then improveIf f t cnd thn aw
      else return (IAps f [t] [cnd, thn, els], False)
 improveIf f t cnd thn els@(ICon _ (ICLazyUnpack { lzApplied = a })) = do
-    (_, P pa aw) <- evalUH a
+    P pa aw <- evalUHV a
     if pa == pTrue then improveIf f t cnd thn aw
      else return (IAps f [t] [cnd, thn, els], False)
 -- merge cells if the arrays have the same size (since our bounds are always 0 .. n - 1)
@@ -5799,7 +5885,7 @@ pushBNot' pos fe visited e = do
 -----------------------------------------------------------------------------
 
 doIs :: HExpr -> [IType] -> ConTagInfo ->
-        HExpr -> (HPred,  HExpr) -> G PExpr
+        UHCell -> (HPred,  HExpr) -> G PExpr
 doIs is tys cti ee (p, e) =
     case e of
         -- C? (C' e)  -->  True/False
@@ -5818,13 +5904,14 @@ doIs is tys cti ee (p, e) =
         ICon _ (ICUndet { }) -> addPredG p $ return $ pExpr iFalse
 
         -- v | C | .s
-        _ | isCanon e -> bldAp' "doIs" is (map T tys ++ [E ee])
+        _ | isCanon e -> do ee' <- uhCell ee
+                            bldAp' "doIs" is (map T tys ++ [E ee'])
 
         -- otherwise fail
         _ -> internalError ("doIs: " ++ ppReadable (is, e))
 
 doOut :: HExpr -> Id -> [IType] -> IType -> ConTagInfo -> [Arg] ->
-         HExpr -> (HPred, HExpr) -> G PExpr
+         UHCell -> (HPred, HExpr) -> G PExpr
 doOut out c tys ty cti as ee (p, e) =
     case e of
         -- outC (C e)  -->  e / _   (not error, because it's "convenient" -- L)
@@ -5846,13 +5933,14 @@ doOut out c tys ty cti as ee (p, e) =
 
         -- v | C | .s
         _ | isCanon e && null as ->
-                bldAp' "Out-3" out (map T tys ++ [E ee])
+                do ee' <- uhCell ee
+                   bldAp' "Out-3" out (map T tys ++ [E ee'])
 
         -- otherwise fail
         _ -> internalError ("doOut: " ++ ppReadable (out, e, as))
 
 doSel :: HExpr -> Id -> [IType] -> IType -> Integer -> [Arg] ->
-         HExpr -> (HPred, HExpr) -> G PExpr
+         UHCell -> (HPred, HExpr) -> G PExpr
 doSel sel s tys ty n as ee (p, e) =
     case e of
         -- (e1,...en).k  -->  ek
@@ -5941,11 +6029,12 @@ doSel sel s tys ty n as ee (p, e) =
 
         -- v | C | .s
         -- canonical applications are strict (e.g. method call applications)
-        _ | isCanon e -> bldApUH' "Sel" sel (map T tys ++ (E ee : as))
+        _ | isCanon e -> do ee' <- uhCell ee
+                            bldApUH' "Sel" sel (map T tys ++ (E ee' : as))
 
         -- tuple section from a multi-output method result
         _ | s == idPrimFst || s == idPrimSnd -> do
-          (_, P p e') <- evalUH e
+          P p e' <- evalUHV e
           addPredG p $ bldApUH' "Sel PrimFst/Snd" sel (map T tys ++ (E e' : as))
 
         -- otherwise fail
@@ -6052,7 +6141,7 @@ doBuildUndefined t pos i as = do
 -----------------------------------------------------------------------------
 
 doSetSelPosition :: HExpr -> IType -> [Position] ->
-                    HExpr -> (HPred, HExpr) -> G PExpr
+                    UHCell -> (HPred, HExpr) -> G PExpr
 -- record the positions on the sel
 doSetSelPosition _ _ poss _ (p, (IAps (ICon i_sel s@(ICSel { })) ts es)) = do
   let i_sel' = addIdInlinedPositions i_sel poss
@@ -6106,7 +6195,7 @@ doSetSelPosition icon ty poss ee (p, e) = do
             -- (instead of returning the unheaped expr, return the original,
             -- to avoid unnecessary unheaping)
             --traceM("ignoring prim: " ++ ppReadable (i, ee, e))
-            return $ P pTrue ee
+            P pTrue <$> uhCell ee
     -- struct, union, or Action
     _ -> do -- any other type might contain Action subfields
             --traceM("maintaining prim: " ++ ppReadable e)

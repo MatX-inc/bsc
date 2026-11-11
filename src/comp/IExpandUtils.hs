@@ -48,7 +48,7 @@ module IExpandUtils(
         isPrimType, isParamOnlyType,
         HeapPointer, unheap, unheapU, shallowUnheap, unheapAll,
         toHeap, toHeapCon, toHeapWHNFCon,
-        toHeapWHNF,
+        toHeapWHNF, reserveHeapWHNF, addHeapWHNFAt,
         realPrimOp,
         integerPrim, realPrim, stringPrim, charPrim, handleBoolPrim,
         strictPrim, condPrim,
@@ -2528,6 +2528,36 @@ addHeapWHNF tag t pe@(P _ e) cell_name_orig = do
   (p, r) <- addHeapCell tag newcell
   let poss = S.singleton $ getIExprPosition e
   let result = mkIRefT t p poss r
+  when doTraceHeap $ traceM ("addHeapWHNF " ++ ppString cell_name ++ " [" ++
+                             prPositionConcise (getPosition cell_name) ++ "] " ++
+                             ppReadable (result,t,pe))
+  return result
+
+-- The address the next heap cell would get, taken without making a cell
+reserveHeapPtr :: G HeapPointer
+reserveHeapPtr = do
+  s <- get
+  let p = hp s
+  put (s { hp = p+1 })
+  return p
+
+-- addHeapWHNF (without a given name) up to making the cell, for a cell
+-- that might not be needed: the name is inferred and forced and the
+-- address taken, as addHeapWHNF does them; addHeapWHNFAt makes the cell
+-- with them.  pe must be WHNF and not a reference.
+{-# INLINE reserveHeapWHNF #-}
+reserveHeapWHNF :: PExpr -> G (HeapPointer, Maybe Id)
+reserveHeapWHNF (P _ e) = do
+  cell_name <- improveCellName e Nothing
+  p <- deepseq cell_name reserveHeapPtr
+  return (p, cell_name)
+
+addHeapWHNFAt :: String -> HeapPointer -> Maybe Id -> IType -> PExpr -> G HExpr
+addHeapWHNFAt tag p cell_name t pe@(P _ e) = do
+  ref <- liftIO (newIORef (HWHNF { hc_pexpr = pe, hc_name = cell_name }))
+  when doTraceHeapAlloc $ traceM("addHeapCell(" ++ show p ++ "): " ++ tag ++ " (reserved)\n")
+  let poss = S.singleton $ getIExprPosition e
+  let result = mkIRefT t p poss (HeapData ref)
   when doTraceHeap $ traceM ("addHeapWHNF " ++ ppString cell_name ++ " [" ++
                              prPositionConcise (getPosition cell_name) ++ "] " ++
                              ppReadable (result,t,pe))
