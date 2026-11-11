@@ -2230,13 +2230,10 @@ data W2 = W2
   , w2ITKeys   :: !(IORef (M.Map ITypeKey Int))
     -- values already resolved, most recent first, found by a content
     -- key and confirmed by exact comparison (see type2): ground types
-    -- by canonical word, type variables by name, TCon nodes and sorts by
-    -- tycon name
+    -- by canonical word, type variables by name, TCon nodes by tycon name
   , w2WordMemo  :: !(IORef (IM.IntMap [(Type, Int)]))
   , w2VarMemo   :: !(IORef (IM.IntMap [(Type, Int)]))
   , w2TyConMemo :: !(IORef (M.Map (Int, Int) [(TyCon, Int)]))
-  , w2SortMemo  :: !(IORef (M.Map (Int, Int) [(TISort, Int)]))
-  , w2LeafKeys  :: !(IORef (M.Map LeafKey Int))  -- TyNum and TyStr nodes
     -- encodeV2Strip's selector, and whether keepPositions is in force
   , w2Strip    :: !(Maybe (Position -> Bool))
   , w2Keep     :: !(IORef Bool)
@@ -2254,8 +2251,8 @@ newW2With :: Maybe (Position -> Bool) -> IO W2
 newW2With sel =
   W2 <$> newIORef IM.empty <*> newIORef M.empty <*> newIORef IM.empty
      <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty
-     <*> newIORef IM.empty <*> newIORef IM.empty <*> newIORef M.empty <*> newIORef M.empty
-     <*> newIORef M.empty <*> pure sel <*> newIORef False
+     <*> newIORef IM.empty <*> newIORef IM.empty <*> newIORef M.empty
+     <*> pure sel <*> newIORef False
      <*> newTable2 <*> newTable2 <*> newTable2 <*> newTable2 <*> newTable2
 
 -- The bodies region is complete: add the five tables, the string table,
@@ -2332,10 +2329,8 @@ itype2 w st t = do
 -- the value again would find and adds no entries.  A ground subtree is
 -- found by its canonical word (typeCanonWordNode: equal words mean
 -- Eq-equal types), so a repeated occurrence costs one comparison walk
--- instead of a lookup per node; a type variable by its name; a TCon
--- node and a sort by their tycon's name; and a TyNum or TyStr node, which
--- carries no word when the parser built it, by all the fields its payload
--- holds.
+-- instead of a lookup per node; a type variable by its name; and a TCon
+-- node by its tycon's name.
 type2 :: W -> W2 -> Type -> IO Int
 type2 w st t = do
   on <- memoOn2 st
@@ -2380,7 +2375,7 @@ type2' w st t =
         (n : _) -> return n
         [] -> do
           ni <- id2 w st i
-          ns <- sort2 w st name s
+          ns <- entry2 w (w2Sorts st) (w2SortKeys st) (writeBytes s)
           n <- entry2 w (w2Types st) (w2TyKeys st) $ Out $ \w' -> do
                  b <- curBuf w'
                  wbByte b 1; wbByte b 0; wbIdx b ni
@@ -2389,35 +2384,8 @@ type2' w st t =
           when on $
             modifyIORef' (w2TyConMemo st) (M.insert name (take 4 ((tc, n) : memo)))
           return n
-    TCon tc@(TyNum _ _) -> leaf tc
-    TCon tc@(TyStr _ _) -> leaf tc
     TDefMonad _ -> internalError "BinData.type2: TDefMonad"
-    _ -> payload t
-  where payload u = entry2 w (w2Types st) (w2TyKeys st) (writeBytes u)
-        -- built only for the memo, whose lookup forces it (Data.Map is key-strict)
-        leaf tc = do
-          on <- memoOn2 st
-          if not on then payload t else do
-            let !k = leafKey tc
-            m <- readIORef (w2LeafKeys st)
-            case M.lookup k m of
-              Just n -> return n
-              Nothing -> do
-                n <- payload t
-                modifyIORef' (w2LeafKeys st) (M.insert k n)
-                return n
-
--- A TyNum or TyStr node: its TyCon tag, its position (line, column, file
--- id, pos_is_stdlib) and its value or string id
-data LeafKey = LeafKey {-# UNPACK #-} !Int {-# UNPACK #-} !Int {-# UNPACK #-} !Int
-                       {-# UNPACK #-} !Int !Bool !Integer
-  deriving (Eq, Ord)
-
-leafKey :: TyCon -> LeafKey
-leafKey (TyNum v (Position f l c lib)) = LeafKey 1 l c (fstringId f) lib v
-leafKey (TyStr x (Position f l c lib)) =
-  LeafKey 2 l c (fstringId f) lib (toInteger (fstringId x))
-leafKey _ = internalError "BinData.leafKey"
+    _ -> entry2 w (w2Types st) (w2TyKeys st) (writeBytes t)
 
 -- The index of the entry of table t whose payload is what out writes,
 -- found by that payload in ks: an entry with the same payload, or a new
@@ -2433,20 +2401,6 @@ entry2 w t ks out = inBuffer w out $ \b -> do
     Nothing -> do
       n <- addEntryWith2 t (\e -> wbCopy e src len)
       writeIORef ks $! M.insert k n m
-      return n
-
--- A tycon's sort, by the tycon's name
-sort2 :: W -> W2 -> (Int, Int) -> TISort -> IO Int
-sort2 w st name s = do
-  on <- memoOn2 st
-  memoM <- readIORef (w2SortMemo st)
-  let memo = if on then M.findWithDefault [] name memoM else []
-  case [ n | (s', n) <- memo, sameSort s s' ] of
-    (n : _) -> return n
-    [] -> do
-      n <- entry2 w (w2Sorts st) (w2SortKeys st) (writeBytes s)
-      when on $
-        modifyIORef' (w2SortMemo st) (M.insert name (take 4 ((s, n) : memo)))
       return n
 
 -- Equality in every field that the writer stores (positions with
