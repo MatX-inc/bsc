@@ -723,7 +723,8 @@ sat dvs ps p =
 -- (lookfor's equality on undetermined positions, decided on keys without
 -- forcing, where a position without a key is no witness that they
 -- differ), no such entry or last-resort variable holds an output
--- variable, and the output variables unify with the recorded types;
+-- variable, no bound or last-resort variable has a number the solve
+-- draws, and the output variables unify with the recorded types;
 -- otherwise the predicate is solved as without the pool (and after
 -- refuseLimit refusals by the context guard the key is not looked up
 -- again).  Keys are
@@ -909,9 +910,22 @@ hitGuards dp e ki dvs whole_stack givens bvs = do
           setSatKeys (top_key : applyKeyUpdates updates stack_keys)
         if not ok
           then return (Left CFallbackContext)
-          else case mgu bvs (map (TVar . snd) (kiOutVars ki)) outTys of
-                 Just (s, []) -> return (Right (c0, satSz, superSz, s))
-                 _ -> return (Left CFallbackUnify)
+          else do
+            -- (none of the solve's draws is a bound or last-resort variable
+            -- already, which every guard above takes for granted)
+            bvss <- getBoundTVStack
+            if not (freshVars c0 dvs bvss)
+              then return (Left CFallbackFresh)
+              else case mgu bvs (map (TVar . snd) (kiOutVars ki)) outTys of
+                     Just (s, []) -> return (Right (c0, satSz, superSz, s))
+                     _ -> return (Left CFallbackUnify)
+
+-- No variable of dvs or the bound stack has a number from c0 on, which
+-- the solve's draws take.  (The stack is walked by level: the
+-- concatenation getBoundTVs gives would be built for each hit.)
+freshVars :: Int -> DVS -> [[TyVar]] -> Bool
+freshVars c0 dvs bvss = all older (fromMaybe [] dvs) && all (all older) bvss
+  where older v = maybe True (< c0) (genTyVarNum v)
 
 -- No entry of a goal class among the givens and outer stack entries can
 -- meet a nested goal of the solve through lookfor (whose matchTop under
