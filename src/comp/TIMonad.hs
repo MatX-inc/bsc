@@ -19,7 +19,7 @@ module TIMonad(
         EPred(..), Infer2, CheckT, TaskCheckT,
         getBoundTVs, getBoundTVStack, getTopBoundTVs, addBoundTVs, popBoundTVs,
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
-        GSeg(..), GTree(..), Givens, mkGivens, givensSegs, givensList, givensOnList,
+        GSeg(..), GTree(..), GOrigin(..), Givens, mkGivens, givensSegs, givensList, givensOnList,
         givensAppend,
         ClassIdx, classIdxLookup,
         classKey, getExplGivens, getTopExplSeg,
@@ -68,7 +68,8 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Util(headOrErr)
-import DictPool(DictPool(..), Cnt, Summary, traceDictPool, GKeys(..))
+import DictPool(DictPool(..), Cnt, Summary, traceDictPool, GKeys(..),
+                isEvaluated, typeVarsNF, substAvoidsNF)
 
 -------
 
@@ -825,18 +826,66 @@ classTree c = GTree k (IS.insert k (IS.unions (map gtReach subs))) subs
         subs = [ classTree c' | (_, IsIn c' _) <- super c ]
 
 -- | One level of givens: the list and, by position, each given's class
--- tree, with the positions whose tree holds each key (ascending).
+-- tree, with the positions whose tree holds each key (ascending), and
+-- the list it is a substitution of (GOrigin).
 data GSeg = GSeg {
     gsList  :: [EPred],
     gsTrees :: Array Int GTree,
-    gsIdx   :: ClassIdx Int
+    gsIdx   :: ClassIdx Int,
+    gsOrigin :: GOrigin
   }
 
 mkGSeg :: [EPred] -> GSeg
-mkGSeg ps = GSeg ps trees idx
+mkGSeg ps = GSeg ps trees idx (GOrigin ps [])
   where trees = listArray (0, length ps - 1) [ classTree c | EPred _ (IsIn c _) <- ps ]
         idx = classIdxFromList [ (k, i) | (i, t) <- assocs trees,
                                           k <- IS.toList (gtReach t) ]
+
+-- | For the dictionary pool's hit guard (TCMisc.hitGuards), which keys a
+-- level's givens without forcing them: the list the level was made with
+-- (mkGSeg) and the substitutions applied to it since, newest first, less
+-- those known to bind none of its type variables.  A given whose
+-- substitutions are all known so is equal to the one it was made from,
+-- and the guard keys it from that one where its own types are not
+-- evaluated.  GOff once a substitution is known to bind one.
+--
+-- The field is lazy: each apSub adds a thunk, and the guard's first look
+-- at a level drops the substitutions it can then tell leave the list
+-- alone (substAvoidsNF: evaluatedness checks and comparisons of
+-- evaluated variables, which force and intern nothing).  One it cannot
+-- tell about yet stays, for the guard to ask again.
+data GOrigin = GOrigin [EPred] [Subst]
+             | GOff
+
+originSub :: Subst -> GOrigin -> GOrigin
+originSub _ GOff = GOff
+originSub s (GOrigin ps ss) =
+    case originVars ps of
+      Nothing -> GOrigin ps (s : ss)
+      Just vs -> prune vs (s : ss) []
+  where
+    prune _ [] acc = GOrigin ps (reverse acc)
+    prune vs (s1 : rest) acc = case substAvoidsNF vs s1 of
+      Just True -> prune vs rest acc
+      Just False -> GOff
+      Nothing -> prune vs rest (s1 : acc)
+
+-- The type variables of the list's types, if they are all evaluated.
+originVars :: [EPred] -> Maybe [TyVar]
+originVars ps
+  | not (isEvaluated ps) = Nothing
+  | otherwise = case ps of
+      [] -> Just []
+      (ep : rest) -> (++) <$> epVars ep <*> originVars rest
+  where
+    epVars ep
+      | isEvaluated ep, EPred _ p <- ep, isEvaluated p, IsIn _ ts <- p = tsVars ts
+      | otherwise = Nothing
+    tsVars ts
+      | not (isEvaluated ts) = Nothing
+      | otherwise = case ts of
+          [] -> Just []
+          (t : rest) -> (++) <$> typeVarsNF t <*> tsVars rest
 
 -- | The givens of a solve: its levels, newest first, with no empty level.
 -- Their list (givensList) is the levels' lists concatenated.  No givens
@@ -862,12 +911,14 @@ givensAppend :: Givens -> Givens -> Givens
 givensAppend (Givens segs1) (Givens segs2) = Givens (segs1 ++ segs2)
 
 -- | The level's index over another list of its givens: the level's list
--- with a substitution applied (same classes, same positions).
-givensOnList :: GSeg -> [EPred] -> Givens
-givensOnList seg ps = mkGivensSegs [seg { gsList = ps }]
+-- with the substitution applied (ps is apSub s (gsList seg)).
+givensOnList :: GSeg -> Subst -> [EPred] -> Givens
+givensOnList seg s ps = mkGivensSegs [seg { gsList = ps, gsOrigin = originSub s (gsOrigin seg) }]
 
 instance Types Givens where
-    apSub s (Givens segs) = Givens [ seg { gsList = apSub s (gsList seg) } | seg <- segs ]
+    apSub s (Givens segs) = Givens [ seg { gsList = apSub s (gsList seg),
+                                           gsOrigin = originSub s (gsOrigin seg) }
+                                   | seg <- segs ]
     tv gv = tv (givensList gv)
 
 type Infer2 e t r = [Assump] -> e -> TI ([VPred], t, r)

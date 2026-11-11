@@ -11,7 +11,7 @@ module CType(
   typeCanonWord, typeCanonWordNode,
   isGroundType, isNormalType, isGroundNode, isNormalNode,
   enableCanonIds, disableCanonIds, canonIdsOpen, rewordType,
-  CTypeStat(..), ctypeStat, bumpCTypeStat, cTypeStats,
+  CTypeStat(..), ctypeStat, bumpCTypeStat, cTypeStats, internWitness,
   checkLetrecBinders,
   checkEqByWord, checkCanonIds, eqStructural,
 
@@ -893,6 +893,7 @@ data CTypeStat
     | CSubstShortcut | CSubstNodeShortcut
     | ISimplifyQuery | ISimplifySelfRef | ISimplifyMemoRef | ISimplifyMemoFill
     | ISimplifyMemoWalk
+    | PoolGuardIntern | PoolPatForce | PoolPatIntern
     deriving (Eq, Ord, Enum, Bounded)
 
 statName :: CTypeStat -> String
@@ -930,6 +931,9 @@ statName ISimplifySelfRef = "isimplify_self_ref"
 statName ISimplifyMemoRef = "isimplify_memo_ref"
 statName ISimplifyMemoFill = "isimplify_memo_fill"
 statName ISimplifyMemoWalk = "isimplify_memo_walk"
+statName PoolGuardIntern = "pool_guard_interned"
+statName PoolPatForce = "pool_pattern_forced"
+statName PoolPatIntern = "pool_pattern_interned"
 
 {-# NOINLINE ctypeStatsOn #-}
 ctypeStatsOn :: Bool
@@ -959,6 +963,26 @@ addCTypeStat s n = when ctypeStatsOn $
 
 bumpCTypeStat :: CTypeStat -> IO ()
 bumpCTypeStat s = addCTypeStat s 1
+
+-- | The value; under -trace-ctype-stats, its forcing to weak head normal
+-- form adds the strings interned meanwhile to the stat, and with
+-- Just (f, True) (read before the forcing) counts one into f.  The
+-- dictionary pool's witness that its hit guard interns nothing
+-- (TCMisc.hitGuards, superKeysNF).
+{-# NOINLINE internWitness #-}
+internWitness :: CTypeStat -> Maybe (CTypeStat, Bool) -> a -> a
+internWitness s mf x
+    | ctypeStatsOn = unsafeDupablePerformIO $ do
+        fresh <- evaluate (case mf of Just (_, b) -> b; Nothing -> False)
+        n0 <- internCount
+        r <- evaluate x
+        n1 <- internCount
+        addCTypeStat s (n1 - n0)
+        case mf of
+          Just (f, _) | fresh -> bumpCTypeStat f
+          _ -> return ()
+        return r
+    | otherwise = x
 
 -- Count an event on a pure path and return the second argument, which
 -- callers pass as a value that varies per call so the bump cannot be

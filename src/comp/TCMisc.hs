@@ -554,7 +554,7 @@ sat dvs ps p =
        -- (lookfor compares the class of every entry with the goal's first
        -- and goes no further on another class, so it is given only the
        -- entries of the goal's class)
-       GivenExp p_entries ps_exp <- return (givenExp p ps)
+       GivenExp p_entries ps_exp ps_trees <- return (givenExp p ps)
        return_val <- case lookfor bound_tyvars p p_entries of
          Just (b, (s, [])) -> do
              recLog EvLookfor
@@ -666,7 +666,7 @@ sat dvs ps p =
           mdp <- getDictPool
           case mdp of
             Just dp | not dictPoolOff ->
-              poolSat dp ai dvs ps p whole_stack ps_exp bound_tyvars
+              poolSat dp ai dvs ps p whole_stack ps_trees bound_tyvars
                       recordATFs solveFor
             _ -> fmap fst solveFor
        decrementSatStack
@@ -721,15 +721,18 @@ sat dvs ps p =
 -- given or outer stack entry could meet a nested goal of the solve
 -- (lookfor's equality on undetermined positions, decided on keys without
 -- forcing, where a position without a key is no witness that they
--- differ), no such entry or last-resort variable holds an output
--- variable, no bound or last-resort variable has a number the solve
--- draws, the output variables are numbered in the record's order, and
--- they unify with the recorded types;
+-- differ; a given's entry whose types are not evaluated is keyed from
+-- what it is a substitution of, see expsBlock), no such entry or
+-- last-resort variable holds an output variable, no bound or last-resort
+-- variable has a number the solve draws, the output variables are
+-- numbered in the record's order, and they unify with the recorded types;
 -- otherwise the predicate is solved as without the pool (and after
 -- refuseLimit refusals by the context guard the key is not looked up
 -- again).  Keys are
 -- computed without forcing anything (DictPool.typeKey); a key that would
--- need a part not evaluated yet is not looked up.  A key whose solve
+-- need a part not evaluated yet is not looked up.  (The one thing the
+-- guard forces is a class declaration's superclass pattern, see
+-- superKeysNF.)  A key whose solve
 -- cannot be recorded for a reason that recurs is not tried again.
 --
 -- What a hit does not do that the solve would: force the solve's own
@@ -817,8 +820,8 @@ forceKeys kt ts0 = case go ts0 of (ks, s) -> (ks, s, kt)
     keyable (PVar _) (TVar _) = True
     keyable _ _ = False
 
-poolSat :: DictPool -> Bool -> DVS -> Givens -> VPred -> [EPred] -> [EPred] -> [TyVar]
-        -> (Subst -> TI ()) -> TI (SatResult, Bool) -> TI SatResult
+poolSat :: DictPool -> Bool -> DVS -> Givens -> VPred -> [EPred] -> [(GSeg, [ETree])]
+        -> [TyVar] -> (Subst -> TI ()) -> TI (SatResult, Bool) -> TI SatResult
 poolSat dp ai dvs ps p@(VPred w (PredWithPositions (IsIn c ts) _ _)) whole_stack givens bvs
         recordATFs solveFor
   | isPreClass c = countDP CNumericSkip 1 >> plain
@@ -883,9 +886,9 @@ poolSat dp ai dvs ps p@(VPred w (PredWithPositions (IsIn c ts) _ _)) whole_stack
                         show (eDraws e) ++ " at " ++ show c0)
       return r
 
-hitGuards :: DictPool -> Entry -> KeyInfo -> DVS -> [EPred] -> [EPred] -> [TyVar]
+hitGuards :: DictPool -> Entry -> KeyInfo -> DVS -> [EPred] -> [(GSeg, [ETree])] -> [TyVar]
           -> TI (Either Cnt (Int, Int, Int, Subst))
-hitGuards dp e ki dvs whole_stack givens bvs = do
+hitGuards dp e ki dvs whole_stack gtrees bvs = do
     (satSz, superSz) <- getSatStackSizes
     flags <- getFlags
     c0 <- getTyVarCounter
@@ -901,26 +904,44 @@ hitGuards dp e ki dvs whole_stack givens bvs = do
         outTys = [ fromJustOrErr "hitGuards: output" (lookup i (eOuts e))
                  | (i, _) <- kiOutVars ki ]
         kt = dpKeyTab dp
-        clear = goalsClear kt (eGoals e) outNums c0
+        gs = eGoals e
+        -- the givens' expansions (sat's trees), each given keyed from
+        -- its level's origin where its types are not evaluated, and the
+        -- explicit preds' (as concatMap bySuperE builds them)
+        givensBlock = expsBlock kt gs outNums c0
+                        [ (et, rootKeysNF kt (gsOrigin seg) i)
+                        | (seg, ets) <- gtrees, (i, et) <- zip [0..] ets ]
+        explBlock = expsBlock kt gs outNums c0 [ (bySuperT ep, noDKeys) | ep <- stack_eps ]
         (top_key, stack_keys) = case own_keys of
                                   (k : ks) -> (k, ks)
                                   [] -> internalError "hitGuards: sat keys"
-        (stackOK, updates) = stackClear kt (eGoals e) outNums c0 whole_stack stack_keys
+        (stackOK, updates) = stackClear kt gs outNums c0 whole_stack stack_keys
     if not (satSz + eMaxSat e < lim && superSz + eMaxSuper e < lim)
       then return (Left CFallbackDepth)
       else do
-        let ok = dvsOK && stackOK && clear givens &&
-                 clear (concatMap bySuperE stack_eps)
+        -- (-trace-ctype-stats: the guard interns nothing, pool_guard_interned)
+        let ok = internWitness PoolGuardIntern Nothing
+                   (dvsOK && stackOK && isNothing givensBlock && isNothing explBlock)
         -- keys computed for the stack's entries are kept for later guards
         when (dvsOK && not (null updates)) $
           setSatKeys (top_key : applyKeyUpdates updates stack_keys)
+        when traceDictPool $
+          if ok
+            then do
+              -- a guard the expansions' entries keyed from their own
+              -- types alone would refuse
+              let clear = goalsClear kt gs outNums c0
+              when (not (clear (concatMap (concatMap flattenT . snd) gtrees) &&
+                         clear (concatMap bySuperE stack_eps))) $
+                countDP CDerivedClear 1
+            else countDP (refusalCnt dvsOK stackOK givensBlock explBlock) 1
         if not ok
           then return (Left CFallbackContext)
           else do
             -- (none of the solve's draws is a bound or last-resort variable
             -- already, which every guard above takes for granted)
             bvss <- getBoundTVStack
-            if not (freshVars c0 dvs bvss)
+            if not (internWitness PoolGuardIntern Nothing (freshVars c0 dvs bvss))
               then return (Left CFallbackFresh)
               else case mgu bvs (map (TVar . snd) (kiOutVars ki)) outTys of
                      Just (s, []) -> return (Right (c0, satSz, superSz, s))
@@ -946,6 +967,174 @@ goalsClear kt gs outNums c0 eps = M.null gs || all clear eps
       case M.lookup (typeclassId (name c)) gs of
         Nothing -> True
         Just rows -> predClear outNums c0 c rows (fst3 (typeKeys False kt ts))
+
+-- Keys of an entry of a given's expansion that are not read from its own
+-- types, and where they are PUneval, why (counted under
+-- -trace-tc-dict-pool): the given's origin is off (a substitution since
+-- binds one of its variables), a substitution since is not evaluated
+-- (pending), the origin's own key is PUneval or not normal, or a
+-- superclass pattern position is not a class variable (or is not
+-- evaluated).  DWNone: nothing derived (the explicit preds).
+data DKeys = DKeys [PK] DWhy
+data DWhy = DWOk | DWOff | DWPending | DWOrigin | DWPattern | DWNone
+
+noDKeys :: DKeys
+noDKeys = DKeys [] DWNone
+
+dkWhy :: DKeys -> DWhy
+dkWhy (DKeys _ why) = why
+
+-- The first entry of the expansions that is not clear (goalsClear): has
+-- it a PUneval key, and why.
+data GBlock = GBlock Bool DWhy
+
+-- goalsClear over expansions (bySuperT trees), each root with its keys
+-- from elsewhere (DKeys).  An entry is keyed from its types (typeKeys,
+-- as goalsClear) and, at each position where that key is PUneval, from
+-- elsewhere: a given's from the list its level is a substitution of
+-- (rootKeysNF), a superclass entry's from its parent's keys through the
+-- class's super-list pattern (superKeysNF), a commuted entry's from its
+-- parent's commuted.  A superclass entry's types are the pattern's under
+-- the substitution of the class variables by its parent's types, so a
+-- pattern position that is a class variable has that parent position's
+-- type, and key; nothing else is assumed.  Nothing is forced that
+-- goalsClear does not force, but a class declaration's superclass
+-- pattern (superKeysNF): the keys from elsewhere read only evaluated
+-- values, are computed only at a position whose own key is PUneval
+-- (mergeKeys), and a parent of no goal class is keyed without forcing
+-- its type list's spine (typeKeysNF).  The verdict is goalsClear's on
+-- the same entries, in the same order, with these keys.
+expsBlock :: KeyTable -> GoalSum -> [Int] -> Int -> [(ETree, DKeys)] -> Maybe GBlock
+expsBlock kt gs outNums c0 ets
+  | M.null gs = Nothing
+  | otherwise = firstBlock [ treeBlock et dk | (et, dk) <- ets ]
+  where
+    treeBlock (ETree ep subs comm) dk =
+        let (blk, ks) = entryBlock ep dk
+            why = dkWhy dk
+            c = case ep of EPred _ (IsIn c' _) -> c'
+        in  firstBlock (blk : [ treeBlock et (superKeysNF c j ks why) | (j, et) <- zip [0..] subs ] ++
+                        [ fst (entryBlock ep' (DKeys (commuteK ks) why)) | ep' <- comm ])
+    entryBlock (EPred _ (IsIn c ts)) ~(DKeys dks why) =
+        case M.lookup (typeclassId (name c)) gs of
+          Just rows ->
+            let ks = mergeKeys (fst3 (typeKeys False kt ts)) dks
+            in  (if predClear outNums c0 c rows ks then Nothing
+                 else Just (GBlock (any (== PUneval) ks) why), ks)
+          Nothing ->
+            (Nothing, mergeKeys (typeKeysNF kt ts ++ repeat PUneval) dks)
+    firstBlock = listToMaybe . catMaybes
+    commuteK (a : b : rest) = b : a : rest
+    commuteK ks = ks
+
+-- Per position, the own key unless PUneval, else the one from elsewhere
+-- (PUneval past its end), which is looked at only there.
+mergeKeys :: [PK] -> [PK] -> [PK]
+mergeKeys [] _ = []
+mergeKeys (k : ks) ds = pick k : mergeKeys ks (drop 1 ds)
+  where pick PUneval = case ds of
+                         (d : _) -> d
+                         [] -> PUneval
+        pick _ = k
+
+-- The keys of a given (position i of its level) from its level's origin:
+-- the origin's i-th given's where every substitution since is known to
+-- bind none of the variables at its keyed positions (GOrigin), a ground
+-- position's whatever the substitutions; PUneval elsewhere.  Such a
+-- position's type is the origin's under substitutions that leave it
+-- alone, then expandSyn, which leaves a type with such a key (normal
+-- apart from its variables) equal.
+rootKeysNF :: KeyTable -> GOrigin -> Int -> DKeys
+rootKeysNF _ GOff _ = DKeys [] DWOff
+rootKeysNF kt (GOrigin ops subs) i =
+    case nthNF i ops of
+      Just ep | isEvaluated ep, EPred _ p <- ep, isEvaluated p, IsIn _ ts <- p,
+                Just ts' <- listNF ts ->
+        let pks = [ fst3 (typeKey False kt t) | t <- ts' ]
+            chainOK vs = null vs || all (\ s -> substAvoidsNF vs s == Just True) subs
+            varsOK = case concat <$> mapM typeVarsNF [ t | (t, PVar _) <- zip ts' pks ] of
+                       Just vs -> chainOK vs
+                       Nothing -> False
+            key k = case k of
+                      PKey _ -> k
+                      PVar _ | varsOK -> k
+                      _ -> PUneval
+            ks = map key pks
+            why | all (\ k -> isPKey k || isPVar k) ks = DWOk
+                | all (\ k -> isPKey k || isPVar k) pks = DWPending
+                | otherwise = DWOrigin
+        in  DKeys ks why
+      _ -> DKeys [] DWOrigin
+
+-- The keys of the j-th superclass entry of an entry of class c with keys
+-- ks: per position of the class's super-list pattern, the key of the
+-- class variable it is (as bySuperT's substitution finds it, by Ord
+-- TyVar), PUneval if it is not one.
+--
+-- The pattern and the class's variables are the class declaration's
+-- (MakeSymTab.getCls: its context's types converted under the class
+-- variables), not a type of the program, and are forced here when not
+-- yet evaluated (forceClassDecl): a context's conversion, which looks
+-- its variables up among the class's and its type constructors up in
+-- the symbol table.  Names are interned by the parser or the .bo
+-- reader's eager string-table read, so this interns nothing
+-- (-trace-ctype-stats: pool_pattern_interned).  The super list's spine
+-- and pairs are evaluated already (TIMonad.classTree); nothing else of
+-- the entry or its parent is forced.
+superKeysNF :: Class -> Int -> [PK] -> DWhy -> DKeys
+superKeysNF c j ks why =
+    case c of { Class { csig = cs, super = sps } ->
+    case nthNF j sps of
+      Just sp | isEvaluated sp, (_, p) <- sp, isEvaluated p, IsIn _ pts <- p ->
+        case forceClassDecl cs pts of
+          () -> let pos pt | TVar v <- pt, Just k <- indexNF v cs = Just (normal (ks !! k))
+                           | otherwise = Nothing
+                    kms = map pos pts
+                in  DKeys (map (fromMaybe PUneval) kms)
+                          (if all isJust kms then why else DWPattern)
+      _ -> DKeys [] DWPattern }
+  where
+    -- (the class's variables are distinct)
+    indexNF v vs = listToMaybe [ k | (k, w) <- zip [0..] vs, tyVarCmpNF v w == Just EQ ]
+    -- expandSyn leaves a type with such a key equal; another key's type
+    -- may expand to one with a different key
+    normal k = if isPKey k || isPVar k then k else PUneval
+
+-- The i-th element of a list, if the spine is evaluated to it.
+nthNF :: Int -> [a] -> Maybe a
+nthNF i xs
+  | not (isEvaluated xs) = Nothing
+  | otherwise = case xs of
+      [] -> Nothing
+      (x : rest) -> if i == 0 then Just x else nthNF (i - 1) rest
+
+-- The list, if its spine is evaluated.
+listNF :: [a] -> Maybe [a]
+listNF xs
+  | not (isEvaluated xs) = Nothing
+  | otherwise = case xs of
+      [] -> Just []
+      (x : rest) -> (x :) <$> listNF rest
+
+-- The counter for a refusal by the context guard: the first part that
+-- refused, and for an expansion, whether the entry had a PUneval key and
+-- why.
+refusalCnt :: Bool -> Bool -> Maybe GBlock -> Maybe GBlock -> Cnt
+refusalCnt dvsOK stackOK gb eb
+  | not dvsOK = CRefDvs
+  | not stackOK = CRefStack
+  | Just b <- gb = case b of
+      GBlock False _ -> CRefGivenKeyed
+      GBlock True why -> case why of
+        DWOff -> CRefGivenOff
+        DWPending -> CRefGivenPending
+        DWOrigin -> CRefGivenOrigin
+        DWPattern -> CRefGivenPattern
+        _ -> CRefGivenOther
+  | Just b <- eb = case b of
+      GBlock False _ -> CRefExplKeyed
+      GBlock True _ -> CRefExplUneval
+  | otherwise = CRefGivenOther
 
 -- goalsClear over the sat stack, whose entries' keys are kept from the
 -- goal's own lookup (poolSat) or an earlier guard, and computed again
@@ -2366,18 +2555,20 @@ givenEntries k segs =
              (i, et) <- pickAt (classIdxLookup (gsIdx seg) k) ets ]
 
 -- The givens' expansion as sat reads it for a goal: the entries of the
--- goal's class and the whole expansion (the pool's guards), from the same
--- trees, as both once read one list.  Without givens both are empty and
--- nothing is built or read: the goal's class is not looked at.
-data GivenExp = GivenExp [EPred] [EPred]
+-- goal's class, the whole expansion, and its trees (the pool's guard),
+-- from the same trees, as both once read one list.  Without givens all
+-- are empty and nothing is built or read: the goal's class is not looked
+-- at.
+data GivenExp = GivenExp [EPred] [EPred] [(GSeg, [ETree])]
 
 givenExp :: VPred -> Givens -> GivenExp
 givenExp vp gv =
     case givensSegs gv of
-      [] -> GivenExp [] []
+      [] -> GivenExp [] [] []
       segs -> let trees = [ (seg, map bySuperT (gsList seg)) | seg <- segs ]
               in  GivenExp (givenEntries (vpClassKey vp) trees)
                            (concatMap (concatMap flattenT . snd) trees)
+                           trees
 
 vpClassKey :: VPred -> Int
 vpClassKey vp = case toPred vp of IsIn c _ -> classKey c

@@ -2446,7 +2446,7 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
 
     let eqs = apSub s0 eqs0
         -- eqs with the level's class index
-        eqsG = givensOnList eqs0_seg eqs
+        eqsG = givensOnList eqs0_seg s0 eqs
 
     ---- Begin: Section which Lennart marked with XXXX
 

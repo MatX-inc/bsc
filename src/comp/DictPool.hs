@@ -3,6 +3,7 @@
 -- forcing-free keys it is indexed by, its entries, and the work counters.
 module DictPool(
     PK(..), KeyTable, emptyKeyTable, keyTableVersion, typeKey, isEvaluated,
+    typeKeysNF, typeVarsNF, substAvoidsNF, tyVarCmpNF, forceClassDecl,
     GKeys(..), gkValid,
     PoolKey, Slot(..), ExprT(..), Tmpl(..), Recipe(..), Entry(..), ReplayEv(..),
     GoalSum, Rope(..), ropeMapM_, Summary(..), emptySummary, catSummary,
@@ -13,6 +14,7 @@ module DictPool(
     ) where
 
 import qualified Data.Map.Strict as M
+import qualified Data.Map.Internal as MI
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import System.IO.Unsafe(unsafeDupablePerformIO)
@@ -24,6 +26,7 @@ import GHC.Exts.Heap(ClosureType(..))
 
 import Id
 import CType
+import Subst(Subst, withSubstMap)
 import Pred(Class)
 import CSyntax(CExpr)
 import SolvedBinds(SolvedBind)
@@ -176,6 +179,97 @@ typeKey alloc kt0 t0 = go kt0 t0
 -- | A key that no table entry has (lookup mode, composite not present).
 absent :: Int
 absent = minBound
+
+-- | The keys of the types of a list as far as its spine is evaluated
+-- (typeKeys without forcing the spine; lookup mode).
+typeKeysNF :: KeyTable -> [Type] -> [PK]
+typeKeysNF kt ts
+  | not (isEvaluated ts) = []
+  | otherwise = case ts of
+      [] -> []
+      (t : rest) -> (case typeKey False kt t of (k, _, _) -> k) : typeKeysNF kt rest
+
+-- | The type variables of an evaluated type (with repeats), Nothing if a
+-- part is not evaluated.  A ground node has none.
+typeVarsNF :: Type -> Maybe [TyVar]
+typeVarsNF t
+  | not (isEvaluated t) = Nothing
+  | typeCanonWordNode t >= 0 = Just []
+  | otherwise = case t of
+      TVar v | isEvaluated v -> Just [v]
+             | otherwise -> Nothing
+      TAp f a -> (++) <$> typeVarsNF f <*> typeVarsNF a
+      _ -> Just []
+
+-- | Forces a class declaration's variables (csig) and one super-list
+-- pattern's types (TCMisc.superKeysNF): the list spines, each type to
+-- weak head normal form, and each variable's number and, for a variable
+-- not drawn by the typechecker, its Id.  Under -trace-ctype-stats, the
+-- strings interned meanwhile are counted (pool_pattern_interned), and
+-- the forcings that found the pattern list unevaluated
+-- (pool_pattern_forced).
+forceClassDecl :: [TyVar] -> [Type] -> ()
+forceClassDecl cs pts =
+    internWitness PoolPatIntern (Just (PoolPatForce, not (isEvaluated pts)))
+                  (foldr (seq . forceTV) () cs `seq` foldr (seq . forceT) () pts)
+  where
+    forceT t = case t of
+                 TVar v -> forceTV v
+                 _ -> ()
+    forceTV v = case genTyVarNum v of
+                  Just _ -> ()
+                  Nothing -> case v of TyVar i n _ -> i `seq` n `seq` ()
+
+-- | Whether the substitution binds none of the variables (Just True) or
+-- one of them (Just False), decided without forcing: Nothing where that
+-- needs a part not evaluated yet.  A walk of the bindings' map with Ord
+-- TyVar's comparison (tyVarCmpNF).
+substAvoidsNF :: [TyVar] -> Subst -> Maybe Bool
+substAvoidsNF vs s
+  | not (isEvaluated s) = Nothing
+  | otherwise = withSubstMap s (\ m -> if isEvaluated m then go m vs else Nothing)
+  where
+    go _ [] = Just True
+    go m (v : rest) = case memberNF v m of
+      Just True -> Just False
+      Just False -> go m rest
+      Nothing -> case go m rest of
+                   Just False -> Just False
+                   _ -> Nothing
+
+memberNF :: TyVar -> MI.Map TyVar a -> Maybe Bool
+memberNF v m
+  | not (isEvaluated m) = Nothing
+  | otherwise = case m of
+      MI.Tip -> Just False
+      MI.Bin _ k _ l r -> case tyVarCmpNF v k of
+        Just LT -> memberNF v l
+        Just GT -> memberNF v r
+        Just EQ -> Just True
+        Nothing -> Nothing
+
+-- | Ord TyVar's compare, decided without forcing: Nothing where it needs
+-- a field not evaluated yet.  Two generated variables compare by number
+-- (equal numbers are one variable), without noting the name as compare
+-- does; any other pair by (number, Id).  (Fields are bound by matching,
+-- which gives the field itself to isEvaluated; a lazy pattern binding
+-- would give it a selector thunk.)
+tyVarCmpNF :: TyVar -> TyVar -> Maybe Ordering
+tyVarCmpNF a b
+  | not (isEvaluated a && isEvaluated b) = Nothing
+  | Just n <- genTyVarNum a, Just n' <- genTyVarNum b = Just (compare n n')
+  | TyVar ia na _ <- a, TyVar ib nb _ <- b =
+      case (num a na, num b nb) of
+        (Just n, Just n') -> case compare n n' of
+          EQ | isEvaluated ia && isEvaluated ib -> Just (compare ia ib)
+             | otherwise -> Nothing
+          o -> Just o
+        _ -> Nothing
+  | otherwise = Nothing
+  where
+    num v n = case genTyVarNum v of
+                Just g -> Just g
+                Nothing -> if isEvaluated n then Just n else Nothing
 
 -- | The table's version: it only grows, and each addition moves ktNext.
 keyTableVersion :: KeyTable -> Int
@@ -330,6 +424,9 @@ data Cnt = CReducePred | CSat | CLookup | CHitWord | CHitStr | CHitVarOut
          | CSkipNoRec | CNoRecAdd
          | CNoRecVar | CNoRecTaint | CNoRecNested
          | CSkipRefused | CRecJoinOut | CHitJoins | CRecOutDvs | CFallbackRank | CFallbackFresh
+         | CDerivedClear | CRefDvs | CRefStack | CRefGivenKeyed | CRefGivenOff
+         | CRefGivenPending | CRefGivenOrigin | CRefGivenPattern | CRefGivenOther
+         | CRefExplKeyed | CRefExplUneval
     deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- Counter keys at noRecByBase + fromEnum c count the lookups skipped for a
@@ -365,3 +462,9 @@ cntName c = case c of
     CRecJoinOut -> "rec_join_outside"; CHitJoins -> "hit_joins"
     CRecOutDvs -> "rec_output_in_dvs"; CFallbackRank -> "fallback_rank"
     CFallbackFresh -> "fallback_fresh"
+    CDerivedClear -> "derived_clear"
+    CRefDvs -> "refuse_dvs"; CRefStack -> "refuse_stack"
+    CRefGivenKeyed -> "refuse_given_keyed"; CRefGivenOff -> "refuse_given_off"
+    CRefGivenPending -> "refuse_given_pending"; CRefGivenOrigin -> "refuse_given_origin"
+    CRefGivenPattern -> "refuse_given_pattern"; CRefGivenOther -> "refuse_given_other"
+    CRefExplKeyed -> "refuse_expl_keyed"; CRefExplUneval -> "refuse_expl_uneval"

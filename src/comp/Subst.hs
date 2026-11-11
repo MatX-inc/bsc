@@ -8,6 +8,7 @@ module Subst(
              {- removeFromSubst, -}
              apSubstToSubst,
              getSubstDomain, getSubstRange, getSubstAssocs, sizeSubst,
+             withSubstMap,
              chkSubstOrder
              ) where
 
@@ -248,6 +249,12 @@ sizeSubst (S eo _) = (Map.size eo)
 
 getSubstDomain :: Subst -> [TyVar]
 getSubstDomain (S eo _) = (Map.keys eo)
+
+-- | The bindings' map as the field holds it, not forced, for a caller
+-- that asks whether it is evaluated (a field selected for an argument
+-- would be passed as a new thunk).
+withSubstMap :: Subst -> (Map.Map TyVar Type -> r) -> r
+withSubstMap (S eo _) k = k eo
 
 getSubstRange :: Subst -> [TyVar]
 getSubstRange (S eo _ ) = concat (map tv (Map.elems eo))
