@@ -682,7 +682,8 @@ sat dvs ps p =
 -- TypeCheck.tiDefns) records such a solve of a key -- the class, the
 -- keys of the input positions (canonical words, or for a literal
 -- type-level string already evaluated its intern id), and per output
--- position its key if ground or which output variable it is -- and
+-- position its key if ground, or else the rank of its variable's number
+-- among the output variables' (the solve orders variables by number) -- and
 -- answers a later occurrence of the key from the record:
 --
 --  * the counter that numbers generated names advances by the number of
@@ -769,7 +770,7 @@ poolKeyOf ai dvs c ts (pks, str, kt1) =
             code _ (False, k) = Left (keyOf k)
             code i (True, k) = case lookup i outs of
                                  Just (Just (TyVar _ n _)) ->
-                                     Right (fromJust (elemIndex n varNums))
+                                     Right (length (filter (< n) varNums))
                                  _ -> Left (keyOf k)
             key = (typeclassId (name c), ai, isJust dvs, r,
                    zipWith code [0..] (zip bs pks))

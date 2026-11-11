@@ -191,8 +191,10 @@ gkValid ver v = all ok
 -- Entries
 
 -- | Class name, the incoherence flag, last-resort flag, fundep row, and
--- per position: the key of a key position or ground output, or -1 - j
--- for an output that is the j-th distinct type variable of the outputs.
+-- per position: Left the key of a key position or ground output, or
+-- Right j for an output whose variable's number is the j-th smallest of
+-- the outputs' distinct variables' (so the key holds their sharing and
+-- the order of their numbers, which joins and unification go by).
 type PoolKey = (Id, Bool, Bool, Int, [Either Int Int])
 
 -- | A dictionary name in a recorded solve: the root predicate's, or the
