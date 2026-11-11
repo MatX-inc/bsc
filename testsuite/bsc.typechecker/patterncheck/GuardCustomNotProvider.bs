@@ -1,0 +1,7 @@
+package GuardCustomNotProvider (not) where
+
+-- Deliberately differs from Prelude.not.  The consumer imports this package
+-- qualified so that the coverage checker must compare the resolved Id, not
+-- just the source spelling.
+not :: Bool -> Bool
+not x = x

@@ -1,0 +1,19 @@
+checking package dependencies
+compiling GuardRedundant.bsv
+Warning: "GuardRedundant.bsv", line 9, column 15: (T0166)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    tagged RA
+Warning: "GuardRedundant.bsv", line 17, column 15: (T0166)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    tagged RA
+Warning: "GuardRedundant.bsv", line 26, column 15: (T0166)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    tagged RA
+Warning: "GuardRedundant.bsv", line 36, column 15: (T0166)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    tagged RA
+All packages are up to date.

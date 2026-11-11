@@ -1,0 +1,41 @@
+package PatFun where
+
+data Color = Red | Green (Bit 8) | Blue Bool
+  deriving (Eq, Bits)
+
+-- multi-clause function missing the Blue case
+missingBlue :: Color -> Bit 8
+missingBlue Red = 0
+missingBlue (Green g) = g
+
+-- the second clause can never match
+dupWild :: Maybe Bool -> Bool
+dupWild _ = True
+dupWild (Just x) = x
+
+-- tuple pattern missing (False, _)
+missingTuple :: (Bool, Bit 4) -> Bit 4
+missingTuple (True, n) = n
+
+-- integer literals never cover the whole domain
+missingInt :: Integer -> Integer
+missingInt 0 = 1
+missingInt 1 = 2
+
+-- complete matches produce no warnings
+allCons :: Color -> Bool
+allCons Red = True
+allCons (Green _) = False
+allCons (Blue b) = b
+
+sumList :: List (Bit 8) -> Bit 8
+sumList Nil = 0
+sumList (Cons x xs) = x + sumList xs
+
+swap :: (Bool, Bit 4) -> (Bit 4, Bool)
+swap (b, n) = (n, b)
+
+caseExpr :: Maybe (Bit 4) -> Bit 4
+caseExpr m = case m of
+               Just x -> x
+               Nothing -> 0

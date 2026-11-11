@@ -38,7 +38,7 @@ module CType(
   -- ** Constructing Types
   noType, tVar, tVarKind, cTVar, cTVarKind, cTVarNum, cTCon, cTNum, cTStr,
   cTApplys, setTypePosition,
-  mkGenTyVar, loadedTyVar, setTyVarKind,
+  mkGenTyVar, loadedTyVar, setTyVarKind, genTyVarNum,
 
   -- * Kinds
   Kind(..), PartialKind(..),
@@ -213,6 +213,12 @@ loadedTyVar i n k
 setTyVarKind :: TyVar -> Kind -> TyVar
 setTyVarKind (TyVarU i n _) k = TyVarU i n k
 setTyVarKind (TyVarG p n _ i) k = TyVarG p n k i
+
+-- | The number of a variable the typechecker drew, without building its
+-- name or forcing its position; Nothing for any other variable.
+genTyVarNum :: TyVar -> Maybe Int
+genTyVarNum (TyVarG _ n _ _) = Just n
+genTyVarNum (TyVarU _ _ _) = Nothing
 
 -- setIdPosition pos on the Id forced the old Id, then pos.
 setTyVarPosition :: Position -> TyVar -> TyVar

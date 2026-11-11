@@ -1,0 +1,7 @@
+checking package dependencies
+compiling GuardAlpha.bs
+Warning: "GuardAlpha.bs", line 16, column 15: (T0166)
+  This pattern in the clauses for `alphaRepeated' can never match, because the
+  preceding patterns cover all of its cases:
+    WrappedGuard y
+All packages are up to date.

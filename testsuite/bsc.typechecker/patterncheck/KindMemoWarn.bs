@@ -1,0 +1,30 @@
+package KindMemoWarn where
+
+-- Warning-producing counterparts of KindMemo: the conclusions reached on
+-- cache-hit paths must be exactly as precise as cold resolutions.
+
+data Trip = MA (Maybe Bool)
+          | MB (Maybe Bool)
+          | MC (Maybe Bool)
+  deriving (Eq, Bits)
+
+-- The missing clause is under the second constructor, whose payload kind
+-- is a cache hit; the witness must still name the exact nested value.
+tripIncomplete :: Trip -> Bit 3
+tripIncomplete (MA (Valid _)) = 0
+tripIncomplete (MA Invalid) = 1
+tripIncomplete (MB (Valid _)) = 2
+tripIncomplete (MC (Valid _)) = 4
+tripIncomplete (MC Invalid) = 5
+
+data K = KA | KB | KC
+  deriving (Eq, Bits)
+
+-- The redundancy loop threads one cache across all rows: the third
+-- clause's unreachability is proved against rows whose kinds were
+-- resolved while checking the earlier clauses.
+pairRedundant :: K -> K -> Bit 2
+pairRedundant KA _ = 0
+pairRedundant _ KA = 1
+pairRedundant KA KA = 2
+pairRedundant _ _ = 3

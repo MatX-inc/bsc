@@ -1,0 +1,15 @@
+checking package dependencies
+compiling RedundantCase.bsv
+Warning: "RedundantCase.bsv", line 11, column 22: (T0166)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    tagged Red
+Warning: "RedundantCase.bsv", line 22, column 15: (T0166)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    .*
+Warning: "RedundantCase.bsv", line 30, column 22: (T0166)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    tagged Red
+All packages are up to date.

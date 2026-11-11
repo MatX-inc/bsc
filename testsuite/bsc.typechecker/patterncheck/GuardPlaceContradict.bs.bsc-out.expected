@@ -1,0 +1,7 @@
+checking package dependencies
+compiling GuardPlaceContradict.bs
+Warning: "GuardPlaceContradict.bs", line 9, column 20: (T0166)
+  This pattern in the clauses for `contradictsPattern' can never match,
+  because the preceding patterns cover all of its cases:
+    WG b@(True)
+All packages are up to date.
