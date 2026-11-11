@@ -4123,14 +4123,17 @@ disjointReadPairs ruleNames rule_meth_map ncset meth_uses res_max
                            (m, _) <- ms ]
         usersOf m = M.findWithDefault IS.empty m meth_users
 
-        cf_partners i =
+        -- Only partners after i are read (below), and known partners need no
+        -- test; the test is pure and makes no names, so skipping it is exact.
+        cf_partners i known =
             let ui = usemapOf i
                 conflicting j = let uj = usemapOf j
                                 in  not (null (conflicts ncset ui uj)) ||
                                     not (null (conflicts ncset uj ui))
-            in  IS.filter conflicting $
+                (_, later) = IS.split i $
                     IS.unions [ M.findWithDefault IS.empty obj inst_users
                               | obj <- M.keys ui ]
+            in  IS.filter conflicting (later `IS.difference` known)
 
         -- uses that can be muxed or need a resource check
         useHasArgs (UUExpr (AMethCall { ae_args = [] }) _) = False
@@ -4165,11 +4168,11 @@ disjointReadPairs ruleNames rule_meth_map ncset meth_uses res_max
                             p <- [(i, IS.singleton j), (j, IS.singleton i)] ]
 
         partners i =
-            IS.unions $
-                [ cf_partners i ] ++
-                IM.findWithDefault [] i group_partners ++
-                [ ff_rules | IS.member i ff_rules ] ++
-                [ IM.findWithDefault IS.empty i me_partners ]
+            let known = IS.unions $
+                            IM.findWithDefault [] i group_partners ++
+                            [ ff_rules | IS.member i ff_rules ] ++
+                            [ IM.findWithDefault IS.empty i me_partners ]
+            in  IS.union known (cf_partners i known)
     in
         [ ((r, rule_arr UA.! j), IS.member j ps)
         | (i, r) <- zip [0..] ruleNames,
