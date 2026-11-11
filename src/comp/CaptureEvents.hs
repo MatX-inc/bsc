@@ -26,6 +26,10 @@ module CaptureEvents(
                      evPackMerge, evUnpackMerge, evMove,
                      evWinConcat, evWinSelect, evWinZeroExt, evWinSignExt,
                      evRepackFrom,
+                     evArrayElem, evArrayOf, evDynSelResult, evBoolBy,
+                     -- bool-by operators
+                     boolEQ, boolULT, boolULE, boolSLT, boolSLE, boolBNot, boolBAnd,
+                     boolBOr, boolIs, nBoolOps,
                      -- link kinds
                      lkMat, lkCopy,
                      -- log counters
@@ -72,6 +76,27 @@ evWinSelect = 13    -- rebuild: this def is bits [lo, lo+w) of the cell
 evWinZeroExt = 14   -- rebuild: zero-extension of the cell (its w bits at 0)
 evWinSignExt = 15   -- rebuild: sign-extension of the cell (its w bits at 0)
 evRepackFrom = 16   -- log only: the second entry of a repack, the pack's type
+
+-- Declared types the rebuild reads off a def's own cell (step 1.4)
+evArrayElem, evArrayOf, evDynSelResult, evBoolBy :: Int
+evArrayElem = 17     -- the def is element lo of a width-element array of the type
+evArrayOf = 18       -- the def's value holds a width-element array of the type
+evDynSelResult = 19  -- the def is a dynamic select (width-bit index) of an element of the type
+evBoolBy = 20        -- the def is a Bool, built by the operator lo (boolOpNames)
+
+-- the operators of bool-by
+boolEQ, boolULT, boolULE, boolSLT, boolSLE, boolBNot, boolBAnd, boolBOr,
+  boolIs, nBoolOps :: Int
+boolEQ = 1
+boolULT = 2
+boolULE = 3
+boolSLT = 4
+boolSLE = 5
+boolBNot = 6
+boolBAnd = 7
+boolBOr = 8
+boolIs = 9      -- a constructor test
+nBoolOps = 9
 
 -- Links between cells that hold the same value, which the rebuild unions
 -- (a pack's payload is never linked: it is not a bits value, so never a

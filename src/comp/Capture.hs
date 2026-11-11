@@ -18,7 +18,7 @@ module Capture(
                NetCap(..), NetName(..), Origin(..),
                capVersion, emptyCapture,
                innerKindInner, innerKindConst, innerKindDead, innerKindUnattached,
-               viaNames, stageNames, obsKindNames,
+               viaNames, stageNames, obsKindNames, boolOpNames,
                captureHeader, captureSummary, captureDump
               ) where
 
@@ -32,8 +32,10 @@ import ErrorUtil(internalError)
 -- header tag (GenABin.header).
 --   1: names (step 1.1)
 --   2: type events (step 1.2): cap_types, dr_obs, ir_obs
+--   3: declared types (step 1.4): the array-elem, array-of, dynsel-result
+--      and bool-by observations
 capVersion :: Int
-capVersion = 2
+capVersion = 3
 
 data Capture = Capture
   { cap_version  :: !Int
@@ -118,7 +120,13 @@ data Host = HDef !DefRef      -- a definition in the stored apkg
 --     or tuple of type or_type2 in cell or_link;
 --   win-concat: bits [or_lo, or_lo+or_width) of the def are cell or_link;
 --   win-select: the def is bits [or_lo, or_lo+or_width) of cell or_link;
---   win-zeroext, win-signext: the def extends cell or_link (or_width bits).
+--   win-zeroext, win-signext: the def extends cell or_link (or_width bits);
+--   array-elem: the def is element or_lo of an or_width-element array of
+--     or_type in the value of cell or_link (a def's);
+--   array-of: the def's value holds an or_width-element array of or_type;
+--   dynsel-result: the def is a dynamic select, by an or_width-bit index, of
+--     an element of type or_type;
+--   bool-by: the def is a Bool, built by the operator or_lo (boolOpNames).
 -- Cells are IExpand heap pointers: a def's own is the number in its
 -- "__h<p>" name, and NHeap names give the cells merged into it.
 data ObsRec = ObsRec { or_kind  :: !Int
@@ -175,7 +183,14 @@ obsKindNames =
   [ (1, "pack-hold"), (2, "pack-cancel"), (3, "pack-undet"), (4, "unpack-hold")
   , (5, "unpack-cancel"), (6, "unpack-undet"), (7, "unpack-const"), (8, "repack")
   , (9, "pack-merge"), (10, "unpack-merge"), (11, "move")
-  , (12, "win-concat"), (13, "win-select"), (14, "win-zeroext"), (15, "win-signext") ]
+  , (12, "win-concat"), (13, "win-select"), (14, "win-zeroext"), (15, "win-signext")
+  , (17, "array-elem"), (18, "array-of"), (19, "dynsel-result"), (20, "bool-by") ]
+
+-- bool-by's operators (or_lo)
+boolOpNames :: [(Int, String)]
+boolOpNames =
+  [ (1, "eq"), (2, "ult"), (3, "ule"), (4, "slt"), (5, "sle"), (6, "bnot")
+  , (7, "band"), (8, "bor"), (9, "is") ]
 
 stageNames :: [(Int, String)]
 stageNames =
@@ -459,7 +474,8 @@ captureDump c =
   obs (ObsRec k t ty ty2 lo w src l n) =
     lkp obsKindNames k ++ " tier " ++ show t ++ " " ++ tyref ty ++
     (if ty2 /= 0 then " from " ++ tyref ty2 else "") ++
-    (if lo >= 0 then " lo " ++ show lo else "") ++
+    (if k == 20 then " op " ++ lkp boolOpNames lo
+     else if lo >= 0 then " lo " ++ show lo else "") ++
     (if w >= 0 then " width " ++ show w else "") ++
     " cell " ++ show src ++ (if l >= 0 then " link " ++ show l else "") ++
     (if n /= 1 then " x" ++ show n else "")

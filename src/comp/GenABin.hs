@@ -39,7 +39,7 @@ import qualified Data.ByteString.Lazy as BL
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261111-32"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261111-34"
 
 headerBS :: B.ByteString
 headerBS = B.pack header

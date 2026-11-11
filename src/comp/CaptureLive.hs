@@ -33,7 +33,7 @@ module CaptureLive(
                    -- perturbation
                    perturbing, perturbMask,
                    ptHeader, ptNames, ptNetnames,
-                   ptEvents, ptCopylinks, ptMoves, ptWindows,
+                   ptEvents, ptCopylinks, ptMoves, ptWindows, ptDecl,
                    rotate
                   ) where
 
@@ -91,19 +91,23 @@ isNameFact (NameFact {}) = True
 isNameFact (ObsFact {}) = False
 
 -- A type observation (CaptureEvents' kinds): made at IExpand's rebuild from
--- the evaluator's event log, on the def whose cell the event names.  The
--- types are ones the evaluator had evaluated, so fully built (an interned
--- IType's children are evaluated at construction).
+-- the evaluator's event log, on the def whose cell the event names, or read
+-- off a def's own value (windows, declared types).  The types are ones the
+-- evaluator had evaluated, or the module's dump had, so fully built (an
+-- interned IType's children are evaluated at construction).
 data ObsL = ObsL { ol_kind  :: !Int
                  , ol_tier  :: !Int     -- 0 the def's own cell, 1 a cell eqPtrs merged
                                         -- into it, 2 a cell linked to one of those
                  , ol_type  :: !CapTy   -- the observed type
                  , ol_type2 :: !CapTy   -- a repack's pack type; a move's parent type
-                 , ol_lo    :: !Int     -- a window's offset; a move's argument index
-                 , ol_width :: !Int     -- a window's width (-1: none)
+                 , ol_lo    :: !Int     -- a window's offset; a move's argument index;
+                                        -- an array element's index; a bool-by's operator
+                 , ol_width :: !Int     -- a window's width; an array's size; a dynamic
+                                        -- select's index width (-1: none)
                  , ol_src   :: !Int     -- the cell the event named (heap pointer)
                  , ol_link  :: !Int     -- the other cell: a payload, a move's parent,
-                                        -- a window's cell (-1: none)
+                                        -- a window's cell, an array element's holder
+                                        -- (-1: none)
                  , ol_count :: !Int }   -- identical events folded
 
 data CapTy = NoTy | Ty IType
@@ -323,7 +327,8 @@ kindDead = 2
 -- permutes values already in hand.
 
 -- bit numbers, in the order of the spec's token table
-ptHeader, ptNames, ptNetnames, ptEvents, ptCopylinks, ptMoves, ptWindows :: Int
+ptHeader, ptNames, ptNetnames, ptEvents, ptCopylinks, ptMoves, ptWindows,
+  ptDecl :: Int
 ptHeader = 0
 ptNames = 1
 ptNetnames = 2
@@ -331,6 +336,7 @@ ptEvents = 3
 ptCopylinks = 4
 ptMoves = 5
 ptWindows = 6
+ptDecl = 7
 
 perturbTokens :: [(String, Int)]
 perturbTokens =

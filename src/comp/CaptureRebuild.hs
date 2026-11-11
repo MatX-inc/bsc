@@ -9,12 +9,19 @@
 -- a def, or inlined (a port's value goes to the port's record; any other
 -- inlined value is only counted).  This is identity, not propagation: no
 -- type moves through an expression.  Windows (concat, select, extract and
--- extensions of a def's cells) are read from the canonical cells' values.
+-- extensions of a def's cells) are read from the canonical cells' values,
+-- and so are the declared types of step 1.4: the arrays a def's value holds
+-- (on the def and on each element's def), dynamic-select results and Bools
+-- built by a comparison, a Bool operator or a constructor test.
 --
 -- Pure, and it forces nothing production did not: the cells' constructors
 -- and pDef's results (forced by the module's dump, ahead of the capture
 -- field), and the type arguments and literals of the window primitives,
--- which the def bodies share and the dump deepseq'd.  A move's argument
+-- which the def bodies share and the dump deepseq'd.  A def's value is
+-- walked as hToDef walks it (an application's arguments, stopping at
+-- references and constants), so each head and type argument read is one
+-- the def's body shares, and each array is one hToDef turned into a
+-- PrimBuildArray (its element pointers collPtrs forced).  A move's argument
 -- and result types are read off its function type behind evaluatedness
 -- checks (as CaptureEvents.moveSpec).  The log is folded strictly, chunk by
 -- chunk, so that the rebuild holds only the classes and the observations.
@@ -23,6 +30,7 @@ module CaptureRebuild(typeObservations) where
 import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
 import qualified Data.Map.Strict as M
+import qualified Data.Array as Array
 import Data.Array.Unboxed(UArray, (!), bounds)
 import Data.Array.ST(STUArray, newArray, readArray, writeArray, runSTUArray)
 import Control.Monad.ST(ST)
@@ -35,14 +43,19 @@ import IntLit(IntLit(..))
 import Prim(PrimOp(..))
 import ISyntax
 import IType(tCode)
-import IExpandUtils(HeapCell(..), PExpr(..), HExpr, HDef, HeapPointer)
-import CaptureLive(NameFact(..), ObsL(..), CapTy(..), perturbing, ptWindows)
+import IExpandUtils(HeapCell(..), HeapData, PExpr(..), HExpr, HDef, HeapPointer)
+import CaptureLive(NameFact(..), ObsL(..), CapTy(..), perturbing, ptWindows, ptDecl,
+                   rotate)
 import CaptureEvents
 import DictPool(isEvaluated)
 
 -- an observation's folding key: kind, tier, type code, second type code,
 -- lo, width, src, link
 type ObsKey = (Int, Int, Int, Int, Int, Int, Int, Int)
+
+-- the observations with the declared types added, the types they name,
+-- and the number of declared rows of each kind
+data Decls = Decls !(IM.IntMap (M.Map ObsKey Int)) !(IM.IntMap IType) !(IM.IntMap Int)
 
 -- the observations so far, by canonical cell, the types they name, and
 -- counters: attachments, entries reaching no cell collPtrs reached
@@ -160,11 +173,49 @@ typeObservations lg iheap ptr_map ptr_info =
             [ (c, (kind, 0, -1, -1, lo', w', c, ptran q))
             | (kind, IRefT _ q _ _, lo, w) <- winArgs e,
               let (lo', w') = if perturbing ptWindows then (w, lo) else (lo, w) ]
-        allm = foldl' (\ mm (c, k) -> IM.insertWith (M.unionWith (+)) c (M.singleton k 1) mm)
-                      obsm winObs
+        -- declared types (step 1.4), each on the def or element cell's
+        -- canonical cell
+        decls0 = concat [ declared c e | (c, (_, Just (IDef {}))) <- ptr_info,
+                                         Just e <- [cellExpr c] ]
+        declared c e =
+            rootDecl c e ++
+            concat [ (c, evArrayOf, 0, Just et, -1, n, c, -1) :
+                     [ (c, nestedSel, 0, Nothing, -1, -1, c, -1) | nsel ] ++
+                     [ (ptran p, evArrayElem, if ptran p == p then 0 else 1, Just et, k, n, p, c)
+                     | (k, ArrayCell p _) <- zip [0 ..] cells, reached p ]
+                   | (et, nsel, cells) <- arraysOf True e, let n = length cells ]
+        -- a dynamic select below a def's root: counted, not recorded
+        nestedSel = -1
+        decls | perturbing ptDecl =
+                  let tys = rotate [ t | (_, _, _, Just t, _, _, _, _) <- decls0 ]
+                      retype (r@(_, _, _, Nothing, _, _, _, _) : rs) ts = r : retype rs ts
+                      retype ((c, k, tr, Just _, lo, w, src, l) : rs) (t : ts) =
+                          (c, k, tr, Just t, lo, w, src, l) : retype rs ts
+                      retype rs _ = rs
+                      wrong (c, k, tr, t, lo, w, src, l)
+                        | k == evBoolBy = (c, k, tr, t, lo `mod` nBoolOps + 1, w, src, l)
+                        | k == evArrayElem = (c, k, tr, t, w - 1 - lo, w, src, l)
+                        | otherwise = (c, k, tr, t, lo, w, src, l)
+                  in  map wrong (retype decls0 tys)
+              | otherwise = decls0
+        addObs mm c key = IM.insertWith (M.unionWith (+)) c (M.singleton key 1) mm
+        addDecl (Decls mm tm cn) (_, k, _, _, _, _, _, _)
+          | k == nestedSel = let cn' = IM.insertWith (+) k 1 cn in cn' `seq` Decls mm tm cn'
+        addDecl (Decls mm tm cn) (c, k, tr, t, lo, w, src, l) =
+            let tc = maybe (-1) tCode t
+                mm' = addObs mm c (k, tr, tc, -1, lo, w, src, l)
+                tm' = case t of
+                        Just t' | tc >= 0 -> IM.insert tc t' tm
+                        _ -> tm
+                cn' = IM.insertWith (+) k 1 cn
+            in  mm' `seq` tm' `seq` cn' `seq` Decls mm' tm' cn'
+        Decls allm allts declCounts =
+            foldl' addDecl (Decls (foldl' (\ mm (c, k) -> addObs mm c k) obsm winObs) obsts IM.empty)
+                   decls
+        declCount k = IM.findWithDefault 0 k declCounts
 
         ty c | c < 0 = NoTy
-             | otherwise = maybe NoTy Ty (IM.lookup c obsts)
+             | otherwise = maybe NoTy Ty (IM.lookup c allts)
         obsFact ((kind, tier, c1, c2, lo, w, src, link), cnt) =
             ObsFact (ObsL kind tier (ty c1) (ty c2) lo w src link cnt)
         -- each observed canonical cell's def or port (one pass over ptr_info)
@@ -179,6 +230,9 @@ typeObservations lg iheap ptr_map ptr_info =
                 , (14, nlinks)
                 , (16, nmoves), (17, matt), (18, munr)
                 , (20, length winObs)
+                , (30, declCount evArrayOf), (31, declCount evArrayElem)
+                , (32, declCount evDynSelResult), (33, declCount evBoolBy)
+                , (34, declCount nestedSel)
                 , (21, counts ! ctNoCell), (22, counts ! ctDictMove)
                 , (23, counts ! ctMoveUnknown), (24, counts ! ctBigMove) ]
     in  (recs, stats)
@@ -214,6 +268,44 @@ winArgs (IAps (ICon _ (ICPrim _ op)) ts es) =
   where int :: Integer -> Int
         int = fromInteger
 winArgs _ = []
+
+-- A def's own declared type, from the head of its value: a dynamic
+-- select's element type, or Bool for a comparison, a Bool operator or a
+-- constructor test.
+rootDecl :: Int -> HExpr -> [(Int, Int, Int, Maybe IType, Int, Int, Int, Int)]
+rootDecl c (IAps (ICon _ (ICPrim _ PrimArrayDynSelect)) (elty : ITNum isz : _) _) =
+    [(c, evDynSelResult, 0, Just elty, -1, fromInteger isz, c, -1)]
+rootDecl c (IAps (ICon _ (ICPrim _ op)) _ _) | Just b <- boolOp op =
+    [(c, evBoolBy, 0, Nothing, b, -1, c, -1)]
+rootDecl c (IAps (ICon _ (ICIs {})) _ _) = [(c, evBoolBy, 0, Nothing, boolIs, -1, c, -1)]
+rootDecl _ _ = []
+
+boolOp :: PrimOp -> Maybe Int
+boolOp PrimEQ = Just boolEQ
+boolOp PrimULT = Just boolULT
+boolOp PrimULE = Just boolULE
+boolOp PrimSLT = Just boolSLT
+boolOp PrimSLE = Just boolSLE
+boolOp PrimBNot = Just boolBNot
+boolOp PrimBAnd = Just boolBAnd
+boolOp PrimBOr = Just boolBOr
+boolOp _ = Nothing
+
+-- The arrays in a def's value (at its root when the flag is set), walked
+-- as hToDef walks it, each with its element type, whether a dynamic select
+-- below the root selects from it (that result has no def of its own, so it
+-- is only counted), and its elements.  The element type is a dynamic
+-- select's (the type of its elements' cells; the array's own type is the
+-- one before the select's arguments were applied), else the array type's
+-- argument, which hToDef matched.
+arraysOf :: Bool -> HExpr -> [(IType, Bool, [ArrayCell HeapData])]
+arraysOf root (IAps (ICon _ (ICPrim _ PrimArrayDynSelect)) (elty : _)
+                    (ICon _ (ICLazyArray { iArray = arr, uninit = Nothing }) : es)) =
+    (elty, not root, Array.elems arr) : concatMap (arraysOf False) es
+arraysOf _ (IAps _ _ es) = concatMap (arraysOf False) es
+arraysOf _ (ICon _ (ICLazyArray { iConType = ITAp _ elty, iArray = arr, uninit = Nothing })) =
+    [(elty, False, Array.elems arr)]
+arraysOf _ _ = []
 
 -- -----
 -- Classes of linked cells: union-find over the links' cells, numbered by
