@@ -507,6 +507,8 @@ traceflags = [
           "check-isimplify-memo",
           "debug-eval-free-vars",
           "no-ctype-ids",
+          "no-symtab-reword",
+          "no-symtab-reword-insts",
           "no-tc-dict-pool",
           "tc-dict-pool-verify",
           "no-use-layout",

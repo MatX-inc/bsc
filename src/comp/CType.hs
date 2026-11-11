@@ -10,7 +10,8 @@ module CType(
   -- ** Canonical identity
   typeCanonWord, typeCanonWordNode,
   isGroundType, isNormalType, isGroundNode, isNormalNode,
-  enableCanonIds, disableCanonIds, CTypeStat(..), ctypeStat, bumpCTypeStat, cTypeStats,
+  enableCanonIds, disableCanonIds, canonIdsOpen, rewordType,
+  CTypeStat(..), ctypeStat, bumpCTypeStat, cTypeStats,
   checkLetrecBinders,
   checkEqByWord, checkCanonIds, eqStructural,
 
@@ -594,6 +595,10 @@ enableCanonIds =
 disableCanonIds :: IO ()
 disableCanonIds = writeIORef canonGate False
 
+-- Whether the gate is open now.
+canonIdsOpen :: IO Bool
+canonIdsOpen = readIORef canonGate
+
 normalWord :: Int -> Bool
 normalWord w = w >= 0 && odd w
 
@@ -746,6 +751,37 @@ mkTAp f a = unsafeDupablePerformIO $ do
                   return (TAp_ w f a)
       else do bumpCTypeStat PreGateBuilt
               return (TAp_ (-1) f a)
+
+-- The type with each node that was built while the gate was shut, and
+-- that a construction now would give a word, built again through the
+-- smart constructors; every other node, and so every subtree with
+-- nothing to rebuild, is the caller's.  For a table built before the gate
+-- opened and read after it (MakeSymTab.mkSymTabExtendRewording).  Called
+-- only while the gate is open (canonIdsOpen); while it is shut it would
+-- rebuild every pre-gate leaf for nothing.  Forcing: the whole tree to
+-- WHNF and each TyCon leaf as mkTCon does, never a TyVar -- what building
+-- the same tree with the gate open forces -- so the gate's argument (see
+-- Forcing above) covers it: a word computed now interns no name.
+rewordType :: Type -> Type
+rewordType t = fromMaybe t (reword t)
+  where
+    -- Nothing: the node and its subtree are kept.  A node whose children
+    -- are kept has a final slot: worded, or refused (TVar, TGen, a refused
+    -- leaf or a node with a refused child), which mkTAp would refuse again.
+    reword (TAp_ w f a)
+      | w >= 0 = Nothing
+      | otherwise =
+          case (reword f, reword a) of
+            (Nothing, Nothing)
+              | typeCanonWordNode f >= 0 && typeCanonWordNode a >= 0 ->
+                  Just (mkTAp f a)
+              | otherwise -> Nothing
+            (mf, ma) -> Just (mkTAp (fromMaybe f mf) (fromMaybe a ma))
+    reword (TCon_ w c)
+      | w >= 0 = Nothing
+      | LeafKey _ _ <- leafKey c = Just (mkTCon c)
+      | otherwise = Nothing
+    reword _ = Nothing
 
 -- The canonical word of a type, -1 if none.  A leaf built before the gate
 -- has its word recomputed from its key (while the gate is open); that is
