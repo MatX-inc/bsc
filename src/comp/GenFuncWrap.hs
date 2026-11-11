@@ -1,4 +1,4 @@
-module GenFuncWrap(genFuncWrap, addFuncWrap,
+module GenFuncWrap(genFuncWrap, addFuncWrap, FuncInfo,
                    makeGenFuncId
                   ) where
 
