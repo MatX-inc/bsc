@@ -813,7 +813,9 @@ eqWordOn :: Bool
 eqWordOn = not ("-hack-no-eq-word" `elem` progArgs)
 
 -- Counters, kept and printed (by bsc at exit) only under
--- -trace-ctype-stats; every bump is a no-op otherwise.
+-- -trace-ctype-stats; every bump is a no-op otherwise.  The ISimplify
+-- counters belong to the self-reference guard memo of
+-- ISimplify.selectTuple (see notSelfRef there).
 data CTypeStat
     = TApBuilt | TConBuilt | PreGateBuilt | TableHit | TableNew
     | RefuseChild | RefuseUnqual | RefuseTyStr | LeafRecompute
@@ -823,6 +825,8 @@ data CTypeStat
     | InstShortcut | MguShortcut | MatchShortcut | GetFreeTShortcut
     | ChkTApShortcut | IConvMemoHit | IConvMemoMiss
     | CSubstShortcut | CSubstNodeShortcut
+    | ISimplifyQuery | ISimplifySelfRef | ISimplifyMemoRef | ISimplifyMemoFill
+    | ISimplifyMemoWalk
     deriving (Eq, Ord, Enum, Bounded)
 
 statName :: CTypeStat -> String
@@ -855,6 +859,11 @@ statName IConvMemoHit = "iconv_memo_hit"
 statName IConvMemoMiss = "iconv_memo_miss"
 statName CSubstShortcut = "csubst_shortcut"
 statName CSubstNodeShortcut = "csubst_node_shortcut"
+statName ISimplifyQuery = "isimplify_query"
+statName ISimplifySelfRef = "isimplify_self_ref"
+statName ISimplifyMemoRef = "isimplify_memo_ref"
+statName ISimplifyMemoFill = "isimplify_memo_fill"
+statName ISimplifyMemoWalk = "isimplify_memo_walk"
 
 {-# NOINLINE ctypeStatsOn #-}
 ctypeStatsOn :: Bool
