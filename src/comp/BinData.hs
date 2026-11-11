@@ -199,6 +199,15 @@ itype_key (ITCon i k s)      = ITKC (id_key i) k s
 itype_key (ITNum n)          = ITKN n
 itype_key (ITStr s)          = ITKS s
 
+-- A stored Position's key: its file, line and column, which are what
+-- Position's Eq and Ord compare.  Position's fields are strict, so
+-- this forces exactly what any comparison of the Position would.
+data PosKey = PosKey {-# UNPACK #-} !Int {-# UNPACK #-} !Int {-# UNPACK #-} !Int
+  deriving (Eq, Ord)
+
+pos_key :: Position -> PosKey
+pos_key (Position f l c _) = PosKey (fstringId f) l c
+
 -- -------------------------------------------------------------
 -- Byte buffers
 
@@ -378,10 +387,12 @@ wbFree (WBuf h) = do
    entries of their own.  So indices are assigned per kind in
    first-occurrence order of the walk, a parent's before its children's.
 
-   A shared value is found by looking its key up in a map: FStrings and
-   Positions are their own keys, while Ids, Types and ITypes are keyed
-   by the structural keys above, compared only by the map's own lookups
-   and inserts.
+   A shared value is found by looking its key up in a map, and the maps
+   are what decides how much of a value its key forces: an FString and
+   a Position are forced whole by any comparison (their fields are
+   strict), so they are keyed by numbers, while Ids, Types and ITypes
+   are keyed by the structural keys above, compared only by the map's
+   own lookups and inserts.
 -}
 
 newtype Out a = Out (W -> IO a)
@@ -422,16 +433,18 @@ data W = W
   , wDepth    :: !(IORef Int)        -- open table entries
   , wSpare    :: !(IORef [WBuf])     -- entry buffers not in use
   , wRemap    :: Bool -> FString -> FString  -- -remap-path-prefix
-    -- remapped file names, by pos_is_stdlib and file name
-  , wFiles    :: !(IORef (M.Map (Bool, FString) FString))
-    -- strings: index; first occurrences, most recent first
-  , wStrIdx   :: !(IORef (M.Map FString Int))
+    -- remapped file names, by pos_is_stdlib and FString id
+  , wFiles    :: !(IORef (IM.IntMap FString, IM.IntMap FString))
+    -- strings: index by FString id; first occurrences, most recent first
+  , wStrIdx   :: !(IORef (IM.IntMap Int))
   , wStrs     :: !(IORef [FString])
   , wNStr     :: !(IORef Int)
   , wIdKeys   :: !(IORef (M.Map IdKey Int))
-  , wPosKeys  :: !(IORef (M.Map Position Int))
+  , wPosKeys  :: !(IORef (M.Map PosKey Int))
   , wTypeKeys :: !(IORef (M.Map TypeKey Int))
   , wITKeys   :: !(IORef (M.Map ITypeKey Int))
+    -- the interior entries of wITKeys, by node id
+  , wITNodes  :: !(IORef (IM.IntMap Int))
   , wIds       :: !WTable
   , wPositions :: !WTable
   , wTypes     :: !WTable
@@ -450,9 +463,10 @@ newW remapF = do
   cur <- mallocBytes 8
   poke cur h
   W cur body <$> newIORef 0 <*> newIORef [] <*> pure remapF
-    <*> newIORef M.empty
-    <*> newIORef M.empty <*> newIORef [] <*> newIORef 0
+    <*> newIORef (IM.empty, IM.empty)
+    <*> newIORef IM.empty <*> newIORef [] <*> newIORef 0
     <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty
+    <*> newIORef IM.empty
     <*> newWTable <*> newWTable <*> newWTable <*> newWTable
     <*> newIORef IM.empty <*> newIORef 0
 
@@ -537,12 +551,13 @@ inEntry w t n payload = do
 stringIdx :: W -> FString -> IO Int
 stringIdx w s = do
   m <- readIORef (wStrIdx w)
-  case M.lookup s m of
+  let !k = fstringId s
+  case IM.lookup k m of
     Just n -> return n
     Nothing -> do
       n <- readIORef (wNStr w)
       writeIORef (wNStr w) $! n + 1
-      writeIORef (wStrIdx w) $! M.insert s n m
+      writeIORef (wStrIdx w) $! IM.insert k n m
       modifyIORef' (wStrs w) (s :)
       return n
 
@@ -553,15 +568,17 @@ stringIdx w s = do
 -- first one interned.
 writePosition :: W -> Position -> IO ()
 writePosition w p@(Position f l c lib) = do
-  fs <- readIORef (wFiles w)
-  f' <- case M.lookup (lib, f) fs of
+  (fs0, fs1) <- readIORef (wFiles w)
+  let kf = fstringId f
+  f' <- case IM.lookup kf (if lib then fs1 else fs0) of
           Just g -> return g
           Nothing -> do
             let g = wRemap w lib f
-            writeIORef (wFiles w) $! M.insert (lib, f) g fs
+            writeIORef (wFiles w) $!
+              (if lib then (fs0, IM.insert kf g fs1) else (IM.insert kf g fs0, fs1))
             return g
   let p' = if f' == f then p else Position f' l c lib
-  runOut (shared wPosKeys wPositions p' (writeBytes p')) w
+  runOut (shared wPosKeys wPositions (pos_key p') (writeBytes p')) w
 
 -- Write a sub-value as a lazy chunk: the reader skips its bytes and
 -- decodes them on first force of the returned value (see fromBinLazy).
@@ -1736,7 +1753,26 @@ instance Bin IType where
                      n -> internalError $ "BinData.Bin(IType).readBytes: " ++ show n
 
     -- IType is shared
-    toBin t = shared wITKeys wITypes (itype_key t) (writeBytes t)
+    toBin t = Out $ \w ->
+              case t of
+                ITForAll _ _ _ -> interior w
+                ITAp _ _ -> interior w
+                _ -> runOut (shared wITKeys wITypes (itype_key t) (writeBytes t)) w
+      -- An interior node's key is its node id, compared only with other
+      -- node ids, so it is found by number; it still goes into wITKeys,
+      -- whose shape decides how much of a leaf's key a lookup forces.
+      where interior w = do
+              let !nid = iTypeNodeId t
+              m <- readIORef (wITNodes w)
+              case IM.lookup nid m of
+                Just n -> putIdx w n
+                Nothing -> do
+                  let tbl = wITypes w
+                  n <- newIndex tbl
+                  writeIORef (wITNodes w) $! IM.insert nid n m
+                  modifyIORef' (wITKeys w) (M.insert (ITKI nid) n)
+                  putIdx w n
+                  inEntry w tbl n (writeBytes t)
     fromBin = readShared
 
 instance Bin IKind where
