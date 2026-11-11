@@ -4,10 +4,11 @@
 
 For the same commit, toolchain, dependencies, and build options, serial,
 parallel, and relocated builds must produce identical binaries so that
-compiler behavior does not depend on how it was built. An incremental build
-after an edit and revert must produce the same bytes.
+compiler behavior does not depend on how it was built. A rebuild in place with
+nothing changed and, on GHC >= 9.12, after an edit and revert must produce the
+same bytes. This is verified by the determinism ladder (section 7).
 
-Validation of these requirements is incomplete. To achieve them, the build:
+To achieve this, the build:
 
 - Compiles the compiler library once and links every executable against it (section 2).
 - Loads external package interfaces in a deterministic order via `Warmup` (section 4).
@@ -165,3 +166,14 @@ executable example
 
 Add the name to the matching list in `src/comp/Makefile` (`UTILEXES` for a
 utility) so that `make` builds and installs it.
+
+## 7. The determinism ladder
+
+`util/cabal-ladder.sh run` tests build determinism across six fresh checkouts
+of `HEAD` (`c-j1` as the reference, `a-j1`, `c-j16`, `c-j64`, `a-j64`, and
+`d-j64`), building and installing each in its own directory at the `-j` count
+in its name, hashing the build tree and `inst/bluehs`, and comparing every leg
+against the reference. The serial legs (`c-j1`, `a-j1`) also rebuild in place
+with no changes and, on GHC >= 9.12, after a comment edit and revert. Run
+`util/cabal-ladder.sh` with no arguments for subcommand and environment-variable
+usage.
