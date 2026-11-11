@@ -168,15 +168,17 @@ done
 [ -z "${GHCJOBS:-}" ] || CABAL_ARGS+=("-j$GHCJOBS")
 [ -z "${GHCRTSFLAGS:-}" ] || CABAL_ARGS+=("--ghc-options=$GHCRTSFLAGS")
 (cd "$WORK/proj" && LIBRARY_PATH="$SOLVER_DIR${LIBRARY_PATH:+:$LIBRARY_PATH}" \
-    "${CABAL_CMD[@]}" build "${CABAL_ARGS[@]}" bsc:lib:bsc >"$WORK/cabal-build.log" 2>&1) \
+    "${CABAL_CMD[@]}" build "${CABAL_ARGS[@]}" bsc:lib:bsc bsc-json:lib:bsc-json \
+        >"$WORK/cabal-build.log" 2>&1) \
     || { tail -30 "$WORK/cabal-build.log" >&2; exit 1; }
 PLAN=$WORK/proj/dist-newstyle/cache/plan.json
 [ -f "$PLAN" ] || die "no build plan at $PLAN"
 
-# The libraries the bsc library is built from, through to the boot
-# packages: what a script can import, so what bsc.env exposes and what the
-# store copy ships.  A unit built per package lists its components; only
-# its library's dependencies link into the library.
+# The project's libraries (bsc and bsc-json) and those they are built
+# from, through to the boot packages: what a script can import, so what
+# bsc.env exposes and what the store copy ships.  A unit built per package
+# lists its components; only its library's dependencies link into the
+# library.
 CLOSURE=$(python3 -c '
 import json, sys
 units = {u["id"]: u for u in json.load(open(sys.argv[1]))["install-plan"]}
@@ -185,7 +187,8 @@ def depends(u):
         return u["components"].get("lib", {}).get("depends", [])
     return u.get("depends", [])
 todo = [i for i, u in units.items()
-        if u["pkg-name"] == "bsc" and u.get("component-name", "lib") == "lib"]
+        if u["pkg-name"] in ("bsc", "bsc-json")
+        and u.get("component-name", "lib") == "lib"]
 seen = set(todo)
 while todo:
     for d in depends(units[todo.pop()]):
@@ -361,9 +364,9 @@ done
 sorted_cache "$STORE/package.db"
 
 # ----------------------------------------------------------------------
-# 4. Package environment: the bsc package and everything it depends on,
-#    boot packages included, and nothing else.  The other boot packages
-#    stay hidden, as they are to the bsc package itself.
+# 4. Package environment: the project's libraries and everything they
+#    depend on, boot packages included, and nothing else.  The other boot
+#    packages stay hidden, as they are to the bsc package itself.
 
 msg "writing package environment"
 GLOBALDB=$(ls -d "$DIST/hs/ghc/lib/ghc-$GHC_VER/lib/package.conf.d")
@@ -597,6 +600,8 @@ import Control.Exception (SomeException, try)
 import Control.Monad (unless)
 -- a dependency of a dependency (mtl's), exposed as in a checkout
 import Control.Monad.Trans.Class ()
+-- the second library, with aeson's packages
+import InternRestore ()
 import qualified STP
 import System.Exit (die)
 import Version (bscVersionStr)

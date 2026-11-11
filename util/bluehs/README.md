@@ -21,6 +21,14 @@ uses that library, and the installed tree under `inst` (the default
 `PREFIX`) for the solvers and `BLUESPECDIR`. Make refreshes
 `src/comp/BuildVersion.hs` before building (doc/cabal.md section 4).
 
+The readers of the JSON files `bsc` writes are a second library,
+`bsc-json` in this directory, which depends on `aeson`. `make install-src`
+leaves it out, so that a compiler build needs no `aeson`; `make
+install-bluehs` builds it in the checkout too, as does `make -C src/comp
+bsc-json` alone. The environment file names it only while it is built
+against the current library: build it again after a `make install-src`
+that rebuilt the library, as any on a new commit does.
+
 **Re-run `make install-src` after pulling or switching commits**, not a
 bare `cabal build`, which can leave the version stale. This is a
 correctness requirement, not hygiene: `.bo`/`.ba` files embed the build
@@ -119,6 +127,30 @@ The runtime probe exercises these boundaries with the compiled package:
 
     util/bluehs/bluehs util/bluehs/tests/with-bluetcl.hs
 
+## Restoring a compile's intern table
+
+`SString`, the compiler's interned string, orders by interning order, not
+by spelling, so a script that decodes a compile's `.bo` or `.ba` files and
+runs passes over them orders names as that compile did only if it first
+restores that compile's intern table, which `bsc -trace-intern-table`
+writes as JSON when it exits. `InternRestore` (`bsc-json`) reads the
+table and restores it; restoring must come before anything in the script
+interns a string:
+
+```haskell
+import InternRestore (withRestoredInterns)
+
+main = withRestoredInterns "Top.intern.json" $ do
+    ...  -- decode the .ba and run passes
+```
+
+`readInternTable` accepts only the bytes `-trace-intern-table` writes. A
+spelling holding a lone surrogate (from a file name that is not UTF-8, for
+one) is written as an escape JSON text cannot hold, so such a table cannot
+be read; the error names its line. The restore itself is
+`SpeedyString.restoreInternState`, in the compiler library, which takes a
+snapshot however it was obtained.
+
 ## Caveats and invariants
 
 * **Do not start `ghci` with cwd `src/comp`.** The `src/comp/.ghci` there
@@ -153,7 +185,7 @@ The runtime probe exercises these boundaries with the compiled package:
 
 `make install-bluehs` runs `make install-src` and then installs a
 self-contained copy of all this at `inst/bluehs`: a pruned GHC runtime, a
-package store holding the compiled bsc library and its dependencies, the
+package store holding the compiled bsc libraries and their dependencies, the
 SAT solver libraries, the tool entry scripts (every program of `bsc.cabal`
 but `bluetcl`), and this launcher as `bin/bluehs`. It runs scripts with
 **no Haskell toolchain installed**, and the tree can be moved with the rest
@@ -174,7 +206,7 @@ for the Linux bindist); other scripts run with no C compiler reachable.
 directory, so the checkout's own build and environment file are untouched,
 and resolves dependencies against the project's `index-state` into the
 cabal store rather than one under the checkout, whose path the files a
-dependency builds would record. It ships the bsc library and its
+dependency builds would record. It ships the bsc libraries and their
 dependencies and no build tool, strips the solver libraries, and fails if
 any file still names the checkout, or the work directory or the GHC
 installation outside the header lists that interface files keep for

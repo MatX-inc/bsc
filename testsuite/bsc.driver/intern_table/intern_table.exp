@@ -22,3 +22,16 @@ compare_file InternTable.env.intern.json InternTable.default.intern.json
 foreach mode {invalid late noted empty generated lazycount} {
     bluehs_run_pass RestoreReject.hs [list $mode] RestoreReject.hs.$mode.bluehs-out
 }
+
+# The table read back with InternRestore (util/bluehs/bsc-json) restores in
+# a fresh process, and the table it then writes is the same bytes.
+# ReadInternTable.hs checks the reader's strictness and writes a table of
+# awkward spellings for a second round trip.
+if {[bluehs_run_pass RestoreRoundTrip.hs {InternTable.default.intern.json InternTable.restored.intern.json}]} {
+    compare_file InternTable.restored.intern.json InternTable.default.intern.json
+}
+if {[bluehs_run_pass ReadInternTable.hs {InternTable.default.intern.json Awkward.intern.json}]} {
+    if {[bluehs_run_pass RestoreRoundTrip.hs {Awkward.intern.json Awkward.restored.intern.json} RestoreRoundTrip.hs.awkward.bluehs-out]} {
+        compare_file Awkward.restored.intern.json Awkward.intern.json
+    }
+}

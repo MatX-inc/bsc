@@ -172,9 +172,16 @@ install-showrules: $(PKGINFO)
 install-checkers: $(addprefix $(BINDIR)/,$(CHECKEXES))
 install-checkers: $(PKGINFO)
 
-# The bluehs runtime builds the library again, with this build's settings.
+# The JSON readers for scripts run from the checkout (util/bluehs/bsc-json).
+# install-src leaves them out, so that a compiler build needs no aeson; the
+# environment file names them until the bsc library next changes.
+.PHONY: bsc-json
+bsc-json: version
+	cd $(TOP) && $(CABAL_ENV) $(CABAL) build -j$(GHCJOBS) $(CABAL_FLAGS) bsc-json:lib:bsc-json
+
+# The bluehs runtime builds the libraries again, with this build's settings.
 .PHONY: install-bluehs
-install-bluehs:
+install-bluehs: bsc-json
 	GHC='$(GHC)' CABAL='$(CABAL)' GHCJOBS='$(GHCJOBS)' GHCRTSFLAGS='$(GHCRTSFLAGS)' BSC_BUILD='$(BSC_BUILD)' \
 		$(TOP)/util/bluehs/mk-dist.sh $(PREFIX)/bluehs $(BUILDDIR)/bluehs
 
