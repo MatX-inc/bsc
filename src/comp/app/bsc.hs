@@ -342,26 +342,26 @@ compile_with_deps errh flags name = do
                                showCodeGen = verb }
         -- the flags when re-compiling this module
         flags_this = flags_depend { genName = genName flags }
-        -- -check-only checks each import it recompiles after a
-        -- -signature-only pass has written the import's .bi (and .tci),
-        -- which later packages read; the named package is only checked
-        passes fn | fn == name = [flags_this]
-                  | checking   = [flags_depend { frontEndMode = SignatureOnly },
-                                  flags_depend]
-                  | otherwise  = [flags_depend]
-        comp biSeen (success, binmap0, hashmap0) (fn, pkg, parse_warns) = do
+        -- -check-only gives each package it recompiles a -signature-only
+        -- pass, which writes the .bi that later packages read and the
+        -- .tci, and then checks that .tci as -check-only X.tci does
+        comp biSeen (success, binmap, hashmap) (fn, pkg, parse_warns) = do
             when (verb) $ putStrLnF ("compiling " ++ fn)
-            let pass (ok, binmap, hashmap) fl = do
-                    -- a .chk records only its own pass's diagnostics
-                    when checking $ takeDiagnostics errh >> return ()
-                    -- Show warnings for this file
-                    when (not $ null parse_warns) $ bsWarning errh parse_warns
-                    t <- getNow
-                    removeStaleTci errh fl fn
-                    (cur_success, binmap', hashmap')
-                        <- compileParsed errh fl t binmap hashmap biSeen fn pkg
-                    return (cur_success && ok, binmap', hashmap')
-            foldM pass (success, binmap0, hashmap0) (passes fn)
+            let fl = if fn == name then flags_this else flags_depend
+                fl_pass = if checking then fl { frontEndMode = SignatureOnly } else fl
+            -- Show warnings for this file
+            when (not $ null parse_warns) $ bsWarning errh parse_warns
+            t <- getNow
+            removeStaleTci errh fl_pass fn
+            (cur_success, binmap', hashmap')
+                <- compileParsed errh fl_pass t binmap hashmap biSeen fn pkg
+            -- a failed signature pass writes no .tci
+            ok <- if checking && cur_success
+                  then do -- the .chk records only the check's diagnostics
+                          _ <- takeDiagnostics errh
+                          checkTci errh fl (putInDir (bdir fl) fn tciSuffix)
+                  else return cur_success
+            return (ok && success, binmap', hashmap')
     when (verb) $ putStrLnF "checking package dependencies"
 
     t <- getNow
@@ -379,8 +379,8 @@ compile_with_deps errh flags name = do
     _ <- dump errh flags t DFdepend dumpnames (map fst3 pkgs)
 
     -- compile them
-    biSeen <- newIORef S.empty
-    (ok, _, _) <- foldM (comp (Just biSeen)) (True, M.empty, M.empty) pkgs
+    biSeen <- if checking then Just <$> newIORef S.empty else return Nothing
+    (ok, _, _) <- foldM (comp biSeen) (True, M.empty, M.empty) pkgs
 
     when (verb) $
       putStrLnF $ case (checking, ok) of
@@ -406,16 +406,16 @@ compile_no_deps errh flags name = do
 -- (compilePackage), -signature-only (signaturePackage) or -check-only
 -- (checkPackage).  Only the full compile reads .bo files, so the
 -- front-end-only pipelines leave the maps of those read so far as they
--- are.  biSeen: -u -check-only's record of the packages whose .bi earlier
--- checks read (readImportsBi).
+-- are.  biSeen: -u -check-only's record of the packages whose .bi its
+-- signature passes have read (readImportsBi).
 compileParsed :: ErrorHandle -> Flags -> TimeInfo -> BinMap HeapData -> HashMap ->
                  Maybe (IORef (S.Set String)) -> String -> CPackage ->
                  IO (Bool, BinMap HeapData, HashMap)
 compileParsed errh flags t binmap hashmap biSeen name pkg =
     case frontEndMode flags of
       FullCompile   -> compilePackage errh flags t binmap hashmap name pkg
-      SignatureOnly -> unchanged <$> signaturePackage errh flags t name pkg
-      CheckOnly     -> unchanged <$> checkPackage errh flags t biSeen name pkg
+      SignatureOnly -> unchanged <$> signaturePackage errh flags t biSeen name pkg
+      CheckOnly     -> unchanged <$> checkPackage errh flags t name pkg
   where unchanged ok = (ok, binmap, hashmap)
 
 -- -signature-only first removes the package's .tci, so that a compile
@@ -429,17 +429,18 @@ removeStaleTci errh flags name =
 
 -- -signature-only: the phases through CtxReduce (ctxReducePackage), with
 -- the imports read from .bi files, then the package's .bi and .tci
--- (writeSignature, writeTci).  readImportsBi reports an import's failed
--- check at the first check of a -u run that reads its .bi; this pipeline
--- reads no .chk, so its reads are not recorded.
-signaturePackage :: ErrorHandle -> Flags -> TimeInfo -> String -> CPackage -> IO Bool
-signaturePackage errh flags tStart name_orig min@(CPackage pkgId _ _ _ _ _ _) = do
+-- (writeSignature, writeTci).  biSeen: as compileParsed; with it,
+-- readImportsBi reports an import whose check failed, the first time a
+-- signature pass of the -u -check-only run reads its .bi.
+signaturePackage :: ErrorHandle -> Flags -> TimeInfo -> Maybe (IORef (S.Set String)) ->
+                    String -> CPackage -> IO Bool
+signaturePackage errh flags tStart biSeen name_orig min@(CPackage pkgId _ _ _ _ _ _) = do
     (name, pwd, dumpnames) <- beginPackage flags name_orig pkgId
     (biClosure, CtxReduced { cr_time = t, cr_pkgsUsedInTypes = pkgsUsedInTypes,
                              cr_mctx = mctx, cr_pkgsUsedInCtxReduce = pkgsUsedInCtxReduce,
                              cr_atfCache = atfCacheFromCtxReduce, cr_symt = symt })
         <- ctxReducePackage errh flags tStart dumpnames
-               (frontEndImports errh flags Nothing min)
+               (frontEndImports errh flags biSeen min)
     -- what a check of this package would have interned by now
     handoffStrings <- internedFStringsSince 0
     (ok, pkgsUsedInExports) <-
@@ -449,12 +450,12 @@ signaturePackage errh flags tStart name_orig min@(CPackage pkgId _ _ _ _ _ _) = 
                  (pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInExports)
     return ok
 
--- -check-only from source: the phases through CtxReduce
--- (ctxReducePackage), with the imports read from .bi files, the
--- typecheck (typecheckPackage), then the package's .chk (writeCheck).
-checkPackage :: ErrorHandle -> Flags -> TimeInfo -> Maybe (IORef (S.Set String)) ->
-                String -> CPackage -> IO Bool
-checkPackage errh flags tStart biSeen name_orig min@(CPackage pkgId _ _ _ _ _ _) = do
+-- -check-only from source, without -u (see compile_with_deps): the
+-- phases through CtxReduce (ctxReducePackage), with the imports read from
+-- .bi files, the typecheck (typecheckPackage), then the package's .chk
+-- (writeCheck).
+checkPackage :: ErrorHandle -> Flags -> TimeInfo -> String -> CPackage -> IO Bool
+checkPackage errh flags tStart name_orig min@(CPackage pkgId _ _ _ _ _ _) = do
     (name, pwd, dumpnames) <- beginPackage flags name_orig pkgId
     (biClosure, CtxReduced { cr_time = t, cr_symt11 = symt11, cr_mder = mder,
                              cr_pkgsUsedInTypes = pkgsUsedInTypes, cr_mctx = mctx,
@@ -462,7 +463,7 @@ checkPackage errh flags tStart biSeen name_orig min@(CPackage pkgId _ _ _ _ _ _)
                              cr_atfCache = atfCacheFromCtxReduce,
                              cr_signProvisos = signProvisos, cr_symt = symt })
         <- ctxReducePackage errh flags tStart dumpnames
-               (frontEndImports errh flags biSeen min)
+               (frontEndImports errh flags Nothing min)
     (mod, tcErrors, pkgsUsedInCode, ctypeATFCache, t) <-
         typecheckPackage errh flags t dumpnames symt mctx
     -- Off by default; when off, this evaluates nothing the check would not.
@@ -482,6 +483,10 @@ checkPackage errh flags tStart biSeen name_orig min@(CPackage pkgId _ _ _ _ _ _)
 -- and the package, after the canonical-word gate opens: the .tci's
 -- strings, interned first, are every string a type here can reach.
 -- It shares typecheckPackage and writeCheck with checkPackage.
+-- -u -check-only checks each package's .tci in the process that wrote it
+-- (compile_with_deps), where every string of the .tci is interned
+-- already, in the run's order rather than the writer's alone, so reading
+-- the .tci and the library .bi files interns nothing.
 checkTci :: ErrorHandle -> Flags -> String -> IO Bool
 checkTci errh flags name_tci = do
     tStart <- getNow
@@ -503,7 +508,8 @@ checkTci errh flags name_tci = do
     -- it needs the package before context reduction
     when warnRedundantProvisos $
         bsError errh [(cmdPosition, EGeneric
-            "-warn-redundant-provisos needs the source file, not a .tci file.")]
+            ("-warn-redundant-provisos needs a check of the source file " ++
+             "(-check-only without -u), not of a .tci file."))]
     tci <- readTciLibraries errh (verbose flags) (ifcPath flags) tci0
     let mctx@(CPackage pkgId _ _ impsigs _ _ _) = tci_package tci
         dumpnames = (Just (baseName (dropSuf name)), Just (getIdString (unQualId pkgId)), Nothing)
@@ -1149,8 +1155,10 @@ showTciStats fn hash st =
 -- verbosity and the dumps (-remap-path-prefix is not among them);
 -- -stdlib-names, which print-flags-raw leaves out; and the hidden flags
 -- that are looked up in the arguments (FlagsDecode.traceflags, with
--- BSC_OPTIONS), except the -trace-* ones.  The .tci records it, and
--- -check-only of a .tci requires its own to match.
+-- BSC_OPTIONS), except the -trace-* ones.  showCodeGen, which only
+-- prints and which -u sets for every package it compiles, is hashed as
+-- False.  The .tci records it, and -check-only of a .tci requires its
+-- own to match.
 flagsFingerprint :: Flags -> String
 flagsFingerprint flags =
     let excluded = [ "frontEndMode", "bdir", "vdir", "cdir", "fdir", "infoDir", "oFile"
@@ -1163,7 +1171,7 @@ flagsFingerprint flags =
                    _ -> True
         hidden = S.toAscList (S.fromList [ a | a@('-' : f) <- progArgs, f `elem` traceflags
                                              , not ("trace-" `isPrefixOf` f) ])
-        txt = unlines (filter keep (lines (showFlagsRaw flags)) ++
+        txt = unlines (filter keep (lines (showFlagsRaw flags { showCodeGen = False })) ++
                        ["\tstdlibNames = " ++ show (stdlibNames flags)] ++ hidden)
     in  showHash (foldl' nextHashByte hashInit
                          (B.unpack (TE.encodeUtf8 (T.pack txt))))
@@ -1173,7 +1181,7 @@ flagsFingerprint flags =
 -- typecheck: a foreign function imported twice (genForeign), a local
 -- mutual recursion that iConvPackage cannot convert, then genSignatures'
 -- messages and what writing the .bo's signatures raises.  The other
--- messages of later stages are not produced.  The .bi of an import that
+-- messages of later stages are not produced.  The .bi of a package that
 -- -u -check-only checks comes from a -signature-only pass
 -- (compile_with_deps), not from here.  Checking a .tci, the packages used
 -- by the exports come from the .tci: genUserSign, and its messages,

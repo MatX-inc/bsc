@@ -11,8 +11,6 @@ import Control.Monad(when, foldM)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Flags(Flags,
-             FrontEndMode(..),
-             frontEndMode,
              ifcPath,
              enablePoisonPills,
              usePrelude,
@@ -264,8 +262,9 @@ type BiMap = M.Map String (String, BiFile, String)
 -- Under -u -check-only, whose dependency check has made each .chk current
 -- with its .bi, a .chk beside the .bi that records a failed check is
 -- reported as readImports reports a .bo with poisoned definitions, the
--- first time a check of the run reads the package.  seen0 is Just the
--- packages read by earlier checks of the -u run, returned updated.
+-- first time a signature pass of the run reads the package.  seen0 is
+-- Just the packages read by its earlier signature passes, returned
+-- updated (Nothing outside -u -check-only).
 readImportsBi :: ErrorHandle -> Flags -> HashMap -> Maybe (S.Set String) ->
                  CPackage ->
                  IO (CPackage, HashMap, Maybe (S.Set String), [(Id, String)])
@@ -307,7 +306,6 @@ readBi :: ErrorHandle -> Flags -> String -> BiMap -> HashMap ->
           Maybe (S.Set String) -> Id -> IO (BiMap, HashMap, Maybe (S.Set String))
 readBi errh flags pkgName bimap0 hashmap0 seen0 p0 = go bimap0 hashmap0 seen0 [p0]
   where
-    checking = frontEndMode flags == CheckOnly
     firstRead p = maybe False (not . S.member (getIdString p))
     pillMsg = if (enablePoisonPills flags)
               then bsWarning errh
@@ -329,7 +327,7 @@ readBi errh flags pkgName bimap0 hashmap0 seen0 p0 = go bimap0 hashmap0 seen0 [p
           when (bi_name bi /= p) $
               bsError errh [(noPosition, EBinFilePkgNameMismatch name
                                              (pfpString p) (pfpString (bi_name bi)))]
-          when (checking && firstRead p seen) $ do
+          when (firstRead p seen) $ do
               status <- readChkStatus (dropSuf name ++ "." ++ chkSuffix)
               when (status == Just False) $
                   pillMsg [(getIdPosition (bi_name bi),

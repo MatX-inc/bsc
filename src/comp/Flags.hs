@@ -188,8 +188,9 @@ data Flags = Flags {
 -- package's interface, a .bi file written after context reduction
 -- (-signature-only); or only the typecheck result, a .chk file
 -- (-check-only).  The front-end-only modes read imported packages from
--- .bi files.  -u -check-only gives each import it recompiles a
--- SignatureOnly pass, which writes the .bi, and then a CheckOnly pass.
+-- .bi files.  -u -check-only gives each package it recompiles a
+-- SignatureOnly pass, which writes the .bi and the .tci, and then checks
+-- the .tci.
 data FrontEndMode = FullCompile | SignatureOnly | CheckOnly
     deriving (Eq, Show)
 
