@@ -1077,7 +1077,7 @@ makeCSIForModule curmod_abi =
         curmod_drdb = exclRulesDBToDisjRulesDB $
                           asi_exclusive_rules_db curmod_aschedinfo
 
-        (RuleRelationDB _ curmod_rule_rel_map)
+        (RuleRelationDB curmod_rule_rel_map)
             = asi_rule_relation_db curmod_aschedinfo
 
         curmod_apkg    = abmi_apkg            curmod_abi

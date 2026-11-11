@@ -11,13 +11,11 @@ module AScheduleInfo (
     areRulesDisjoint,
     areRulesExclusive,
     defaultRuleRelationship,
-    erdbFromList,
-    erdbToList,
+    erdbDisjointSets,
     getRuleRelation,
     getSchedNodeId,
     isSchedNode,
     printRuleRelationInfo,
-    rrdbFromList,
     unionRuleRelationInfo
 ) where
 
@@ -175,11 +173,15 @@ instance PPrint AScheduleErrInfo where
 -- * Are the WILL_FIRE signals for the rules disjoint?
 --   (This is a superset which also takes into account rule executions
 --    that have been forced to be exclusive due to conflicts etc.)
-newtype ExclusiveRulesDB =
+-- A .ba file records only the disjoint sets (DisjointRulesOnly): Bluesim
+-- reads them, while the exclusive sets serve the scheduler and AState.
+data ExclusiveRulesDB =
     ExclusiveRulesDB (M.Map ARuleId (S.Set ARuleId, S.Set ARuleId))
+  | DisjointRulesOnly (M.Map ARuleId (S.Set ARuleId))
 
 instance NFData ExclusiveRulesDB where
   rnf (ExclusiveRulesDB m) = rnf m
+  rnf (DisjointRulesOnly m) = rnf m
 
 -- Are the WILL_FIRE signals of the rules exclusive?
 -- (Used in Verilog backend for determining if a priority mux is needed.)
@@ -190,6 +192,8 @@ areRulesExclusive :: ExclusiveRulesDB -> ARuleId -> ARuleId -> Bool
 areRulesExclusive (ExclusiveRulesDB exclusive_fmap) r1 r2 =
     let (disj_set, excl_set) = M.findWithDefault (S.empty, S.empty) r1 exclusive_fmap
     in (S.member r2 disj_set) || (S.member r2 excl_set)
+areRulesExclusive (DisjointRulesOnly _) _ _ =
+    internalError "areRulesExclusive: exclusive rules are not recorded in .ba files"
 
 -- Are the CAN_FIRE signals of the rules exclusive?
 -- (Used in Bluesim backend for short-circuiting the CF computation,
@@ -199,19 +203,20 @@ areRulesDisjoint :: ExclusiveRulesDB -> ARuleId -> ARuleId -> Bool
 areRulesDisjoint (ExclusiveRulesDB exclusive_fmap) r1 r2 =
     let (disj_set, _) = M.findWithDefault (S.empty, S.empty) r1 exclusive_fmap
     in  S.member r2 disj_set
+areRulesDisjoint (DisjointRulesOnly disjoint_fmap) r1 r2 =
+    S.member r2 (M.findWithDefault S.empty r1 disjoint_fmap)
 
-erdbToList :: ExclusiveRulesDB -> [(ARuleId,([ARuleId],[ARuleId]))]
-erdbToList (ExclusiveRulesDB exclusive_map) =
-    let conv (r, (d_set, e_set)) = (r, (S.toList d_set, S.toList e_set))
-    in  map conv (M.toList exclusive_map)
-
-erdbFromList :: [(ARuleId,([ARuleId],[ARuleId]))] -> ExclusiveRulesDB
-erdbFromList xs =
-    let conv (r, (ds, es)) = (r, (S.fromList ds, S.fromList es))
-    in  ExclusiveRulesDB (M.fromList (map conv xs))
+-- The disjoint set of every rule in the map (including empty sets)
+erdbDisjointSets :: ExclusiveRulesDB -> M.Map ARuleId (S.Set ARuleId)
+erdbDisjointSets (ExclusiveRulesDB exclusive_map) = M.map fst exclusive_map
+erdbDisjointSets (DisjointRulesOnly disjoint_map) = disjoint_map
 
 instance Show ExclusiveRulesDB where
-    show erdb = show (erdbToList erdb)
+    show (ExclusiveRulesDB exclusive_map) =
+        let conv (r, (d_set, e_set)) = (r, (S.toList d_set, S.toList e_set))
+        in  show (map conv (M.toList exclusive_map))
+    show (DisjointRulesOnly disjoint_map) =
+        show (M.toList (M.map S.toList disjoint_map))
 
 -- ---------------
 
@@ -258,16 +263,16 @@ instance Ord FastSchedNode where
 -- ---------------
 
 -- This structure represents information about pairs of rules:
---   - If a pair is not in the set, then their predicates are not disjoint
 --   - If a pair is not in the map, then the rules have no conflicts
 --   - If a pair maps to a RuleRelationInfo value, then the breakdown
 --     of conflicts is given in the RuleRelationInfo structure.
-data RuleRelationDB =
-    RuleRelationDB (S.Set (ARuleId,ARuleId))                  -- disjointness
-                   (M.Map (ARuleId,ARuleId) RuleRelationInfo) -- conflicts
+-- Predicate disjointness is not recorded: -show-rule-rel asks the
+-- scheduler's own test, and Bluesim uses the ExclusiveRulesDB.
+newtype RuleRelationDB =
+    RuleRelationDB (M.Map (ARuleId,ARuleId) RuleRelationInfo) -- conflicts
 
 instance NFData RuleRelationDB where
-  rnf (RuleRelationDB s m) = rnf2 s m
+  rnf (RuleRelationDB m) = rnf m
 
 data RuleRelationInfo = RuleRelationInfo { mCF :: Maybe Conflicts
                                          , mSC :: Maybe Conflicts
@@ -291,27 +296,12 @@ defaultRuleRelationship = RuleRelationInfo { mCF     = Nothing
                                            }
 
 
-rrdbToList :: RuleRelationDB ->
-              [((ARuleId,ARuleId),Bool,(Maybe RuleRelationInfo))]
-rrdbToList (RuleRelationDB dset cmap) =
-    let all_pairs = dset `S.union` (M.keysSet cmap)
-    in [ (k, k `S.member` dset, M.lookup k cmap) | k <- S.toList all_pairs ]
-
-rrdbFromList :: [((ARuleId,ARuleId),Bool,(Maybe RuleRelationInfo))] ->
-                RuleRelationDB
-rrdbFromList xs =
-    let dset = S.fromList [ k | (k,True,_) <- xs ]
-        cmap = M.fromList [ (k,rri) | (k,_,(Just rri)) <- xs ]
-    in RuleRelationDB dset cmap
-
 instance Show RuleRelationDB where
-    show rrdb = show (rrdbToList rrdb)
+    show (RuleRelationDB cmap) = show (M.toList cmap)
 
-getRuleRelation :: RuleRelationDB -> ARuleId -> ARuleId -> (Bool,RuleRelationInfo)
-getRuleRelation (RuleRelationDB dset cmap) r1 r2 =
-    let disj = S.member (r1,r2) dset
-        rri  = M.findWithDefault defaultRuleRelationship (r1,r2) cmap
-    in (disj,rri)
+getRuleRelation :: RuleRelationDB -> ARuleId -> ARuleId -> RuleRelationInfo
+getRuleRelation (RuleRelationDB cmap) r1 r2 =
+    M.findWithDefault defaultRuleRelationship (r1,r2) cmap
 
 -- -----
 
@@ -376,8 +366,10 @@ instance NFData Conflicts where
 
 -- -----
 
-printRuleRelationInfo :: ARuleId -> ARuleId -> Bool -> RuleRelationInfo -> Doc
-printRuleRelationInfo rule1 rule2 isDisjoint
+-- Nothing for the disjointness means it is not known
+printRuleRelationInfo :: ARuleId -> ARuleId -> Maybe Bool -> RuleRelationInfo ->
+                         Doc
+printRuleRelationInfo rule1 rule2 mDisjoint
         (RuleRelationInfo mCF mSC mRes mCycle mPragma mArb) =
     let
         -- print a single conflict of a given type
@@ -390,10 +382,13 @@ printRuleRelationInfo rule1 rule2 isDisjoint
          pPrint PDReadable 0 rule1 <> text "\" and \"" <>
          pPrint PDReadable 0 rule2 <> text "\":")
         $+$
-        sep [text "predicates",
-             (if isDisjoint
-              then text "are" else text "are not"),
-              text "disjoint"]
+        (case mDisjoint of
+           Just isDisjoint ->
+               sep [text "predicates",
+                    (if isDisjoint
+                     then text "are" else text "are not"),
+                     text "disjoint"]
+           Nothing -> s2par "predicate disjointness not recorded")
         $+$
         nest 4 (pp_conflict "<>" mCF $+$
                 pp_conflict "<" mSC $+$

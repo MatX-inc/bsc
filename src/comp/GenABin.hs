@@ -36,7 +36,7 @@ import qualified Data.ByteString.Lazy as BL
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261030-15"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261108-16"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -423,19 +423,21 @@ instance Bin RuleUses where
     readBytes = do pus <- fromBin; rus <- fromBin; wus <- fromBin
                    return (RuleUses pus rus wus)
 
+-- Only the disjoint sets are recorded (see ExclusiveRulesDB)
 instance Bin ExclusiveRulesDB where
-    writeBytes erdb = section "ExclusiveRulesDB" $ toBin (erdbToList erdb)
-    readBytes = do es <- fromBin; return (erdbFromList es)
+    writeBytes erdb =
+        section "ExclusiveRulesDB" $
+            toBin [ (r, S.toList ds)
+                  | (r, ds) <- M.toList (erdbDisjointSets erdb) ]
+    readBytes = do ds <- fromBin
+                   let conv (r, rs) = (r, S.fromList rs)
+                   return (DisjointRulesOnly (M.fromList (map conv ds)))
 
 instance Bin RuleRelationDB where
-    writeBytes (RuleRelationDB dset cmap) =
-        section "RuleRelationDB" $ do toBin (S.toList dset)
-                                      toBin (M.toList cmap)
-    readBytes = do dset_list <- fromBin
-                   cmap_list <- fromBin
-                   let dset = S.fromList dset_list
-                       cmap = M.fromList cmap_list
-                   return (RuleRelationDB dset cmap)
+    writeBytes (RuleRelationDB cmap) =
+        section "RuleRelationDB" $ toBin (M.toList cmap)
+    readBytes = do cmap_list <- fromBin
+                   return (RuleRelationDB (M.fromList cmap_list))
 
 instance Bin RuleRelationInfo where
     writeBytes (RuleRelationInfo mCF mSC mRes mCycle mPragma mArb) =
