@@ -5,12 +5,13 @@ module DisjointTest(
                     checkDisjointExpr,
                     checkDisjointExprWithCtx,
                     genDisjointSet,
+                    traceExprCounts,
                     RuleDisjointTest
                    ) where
 
 import qualified Data.Set as S
 import qualified Data.Map as M
-import Control.Monad(foldM {- , when -})
+import Control.Monad(foldM, when)
 import Data.List (genericIndex, foldl')
 
 import Util(ordPair)
@@ -34,7 +35,7 @@ import qualified AExpr2STP as STP
 import qualified AExpr2Yices as Yices
          (YState, initYState, addADefToYState,
           checkDisjointRulePair, convertRulePair, decideRulePairs, YTerm,
-          checkDisjointExpr)
+          checkDisjointExpr, traceWitness, traceExprCounts)
 
 -- -------------------------
 
@@ -107,6 +108,15 @@ checkDisjointExprWithCtx dts ctx1 ctx2 e1 e2 = do
               let e1' = aAnd ctx1 e1
                   e2' = aAnd ctx2 e2
               checkDisjointExpr dts' e1' e2'
+
+-- The -trace-smt-witness counts of the Yices expression queries made
+-- between two states (see Yices.traceExprCounts)
+traceExprCounts :: String -> DisjointTestState -> DisjointTestState -> IO ()
+traceExprCounts site s0 s1 =
+    when Yices.traceWitness $
+      case (s0, s1) of
+        (DTS_Yices _ y0, DTS_Yices _ y1) -> Yices.traceExprCounts site y0 y1
+        _ -> return ()
 
 -- -------------------------
 
