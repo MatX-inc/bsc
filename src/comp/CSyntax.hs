@@ -870,7 +870,7 @@ impSigName (CImpSign _ _ (CSignature i _ _ _)) = i
 -- swapped order of (CVar i) es and e [] patterns
 -- to make optional default arguments for $finish and $stop work
 cmtApply :: Int -> CExpr -> [CExpr] -> CExpr
-cmtApply n e@(CVar i) es | isTaskName (getIdBaseString i) = CTaskApply e es
+cmtApply n e@(CVar i) es | isTaskId i = CTaskApply e es
 cmtApply n e es = cApply (100 + n) e es
 
 cApply :: Int -> CExpr -> [CExpr] -> CExpr
@@ -882,18 +882,24 @@ cApply n (CTaskApply e es) es' = CTaskApply e (es ++ es')
 cApply n e as = CApply e as
 
 cVApply :: Id -> [CExpr] -> CExpr
-cVApply i es | isTaskName (getIdBaseString i) =
+cVApply i es | isTaskId i =
     internalError $ "cVApply to " ++ (show i) ++ "\n"
 cVApply i es = cApply 2 (CVar i) es
 
 cVar :: Id -> CExpr
-cVar name | isTaskName (getIdBaseString name) = CTaskApply (CVar name) []
+cVar name | isTaskId name = CTaskApply (CVar name) []
           | otherwise = CVar name
 
 -- tasks start with $ followed by a letter
 isTaskName :: String -> Bool
 isTaskName ('$':c:_) = isAlpha c
 isTaskName _ = False
+
+-- isTaskName (getIdBaseString i), from the bytes: only a name starting
+-- with $ has its first two Chars decoded
+isTaskId :: Id -> Bool
+isTaskId i = headFString b == Just '$' && isTaskName (takeFString 2 b)
+  where b = getIdBase i
 
 cTApply :: CExpr -> [CType] -> CExpr
 cTApply f [] = f
