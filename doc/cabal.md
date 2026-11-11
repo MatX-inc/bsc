@@ -3,10 +3,11 @@
 ## 1. Determinism requirements
 
 For the same commit, toolchain, dependencies, and build options, serial,
-parallel, and relocated builds must produce identical binaries so that
-compiler behavior does not depend on how it was built. A rebuild in place with
-nothing changed and, on GHC >= 9.12, after an edit and revert must produce the
-same bytes. This is verified by the determinism ladder (section 7).
+parallel, and relocated builds must produce identical binaries and the same
+installed tree so that compiler behavior does not depend on how it was built. A
+rebuild in place with nothing changed and, on GHC >= 9.12, after an edit and
+revert must produce the same bytes. This is verified by the determinism ladder
+(section 7).
 
 To achieve this, the build:
 
@@ -20,6 +21,12 @@ To achieve this, the build:
   GHC link-stub filenames after linking (section 4).
 - Tracks the selected version so incremental builds reflect Git metadata or
   an explicitly frozen version (section 4).
+
+In the installed tree, the compiler stores file names relative to the build
+directory (upstream 1135), the Bluesim and VPI libraries map the checkout out
+of their debug information (`-ffile-prefix-map`), and the yices library's
+version stamp carries the source's commit date, not the build day
+(`make_source_version`).
 
 ## 2. Package layout
 
@@ -169,20 +176,21 @@ utility) so that `make` builds and installs it.
 
 ## 7. The determinism ladder
 
-`util/cabal-ladder.sh run` tests build determinism across six fresh checkouts
-of `HEAD` (`c-j1` as the reference, `a-j1`, `c-j16`, `c-j64`, `a-j64`, and
-`d-j64`), building and installing each in its own directory at the `-j` count
-in its name, hashing the build tree and `inst/bluehs`, and comparing every leg
-against the reference. The serial legs (`c-j1`, `a-j1`) also rebuild in place
-with no changes and, on GHC >= 9.12, after a comment edit and revert. Run
-`util/cabal-ladder.sh` with no arguments for subcommand and environment-variable
-usage.
+`util/cabal-ladder.sh run` checks the claim on one machine: six fresh checkouts
+of `HEAD`, the legs `c-j1` (the reference), `a-j1`, `c-j16`, `c-j64`, `a-j64`
+and `d-j64`, built and installed in directories of their own at the jobs count
+in the name, hashed with the installed tree, `inst`, and compared with the
+reference; the serial legs then rebuild in place, with nothing changed and,
+from GHC 9.12, after an edit and its revert. A failed leg is MISSING in the
+verdict. The script's usage text names its subcommands and variables.
 
-`.github/workflows/cabal.yml` runs the ladder (one job per platform on
-`ubuntu-24.04` and `macos-15`) on pull requests that touch build files,
-nightly, and on manual dispatch (defaulting to GHC 9.14.1), uploading the hash
-lists, toolchain records, and logs as an artifact. Source-only PRs skip this
-workflow because `src/comp/check-warmup-roots.sh` already enforces the
-`Warmup` root-import invariant on every PR. If the ladder fails, check for a
-root module missing `import Warmup ()`, non-deterministic interface content, or
-an executable entry module discrepancy.
+`.github/workflows/cabal.yml` runs it, one job per platform (ubuntu-24.04 and
+macos-15, so every leg of a platform builds on one machine), on the project's
+pull requests that touch the build files, nightly, and on a dispatch that picks
+the GHC (default 9.14.1); the lists and logs are its artifact. Source changes
+do not run it: the one source invariant it guards, that every root module
+imports Warmup, is checked on every pull request
+(`src/comp/check-warmup-roots.sh`). A difference is a design question before
+it is a fix; the first suspects are a root module without the Warmup import,
+interface content the direct-dependency rule does not cover, and a program's
+entry module.

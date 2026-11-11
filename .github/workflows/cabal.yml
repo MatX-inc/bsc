@@ -1,19 +1,27 @@
 name: Cabal build
 
-# Determinism ladder for the Cabal build (bsc.cabal, cabal.project,
-# SetupHooks.hs) and the installed bluehs runtime (util/bluehs).
-#
-# Runs `util/cabal-ladder.sh run` on a single runner per platform so every leg
-# shares the same host environment: six fresh checkouts (`c-j1` reference,
-# `a-j1`, `c-j16`, `c-j64`, `a-j64`, `d-j64`) plus in-place rebuild/edit/revert
-# rounds on the serial legs. On GHC >= 9.12 (`-fobject-determinism`), legs vary
-# both GHC and Cabal parallelism; on older GHC, legs vary Cabal package jobs
-# and checkout paths.
-#
-# Triggered on B-Lang-org/bsc PRs touching build files, nightly on the default
-# branch, and via workflow_dispatch (including on forks). Ordinary source
-# changes do not trigger this workflow; `src/comp/check-warmup-roots.sh` checks
-# the root-module Warmup import invariant on every PR.
+# The cabal build of the compiler (bsc.cabal, cabal.project, SetupHooks.hs)
+# and its determinism ladder: the same commit built serially, oversubscribed
+# and in other checkout directories must give bit-identical objects,
+# interfaces, archives, shared objects and programs, and the same bytes in the
+# installed tree and the bluehs script runtime (util/bluehs) installed from it.
+# The ladder is six legs: the serial build against a second serial build,
+# -j16, and three -j64 builds, each in a fresh checkout directory of its own;
+# the two serial legs then rebuild in place, with nothing changed and, from
+# GHC 9.12, after a marker edit and its revert, and those rebuilds are held to
+# the reference as well.  The legs run on one machine per platform
+# (util/cabal-ladder.sh run, which hashes every leg and gives the verdict), so
+# a difference is the build's and not two runner images'.  From GHC 9.12 the
+# legs vary GHC's own parallelism as well as cabal's: that is where
+# -fobject-determinism exists and cabal.project compiles in parallel.  Below
+# it GHC compiles serially, and the legs vary cabal's package jobs and the
+# checkout directory.
+# It runs on the project's own pull requests that touch the build, nightly on
+# the project's default branch, and on a dispatch; a fork's pull requests and
+# schedule do not run it, since a fork's branches are a developer's loop, and
+# a fork dispatches it when it qualifies a release.  Source changes do not run
+# it: the one source invariant it guards, that every root module imports
+# Warmup, is checked on every pull request (src/comp/check-warmup-roots.sh).
 
 on:
   pull_request:
@@ -30,7 +38,7 @@ on:
   workflow_dispatch:
     inputs:
       ghc_version:
-        description: GHC version (from 9.12 on, legs vary GHC parallelism and run the edit/revert round)
+        description: GHC version, as a number (from 9.12 the legs vary GHC's own parallelism and hold the serial legs' revert rebuild)
         required: false
         default: '9.14.1'
         type: string
@@ -51,14 +59,16 @@ permissions:
 jobs:
   ladder:
     name: "Ladder ${{ matrix.os }}"
-    # Run on B-Lang-org/bsc PRs/schedule, or when manually dispatched.
+    # The project's pull requests and nightly, and any dispatch; not a fork's.
     if: ${{ github.event_name == 'workflow_dispatch' || github.repository == 'B-Lang-org/bsc' }}
     strategy:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(inputs.platforms == 'ubuntu' && '["ubuntu-24.04"]' || inputs.platforms == 'macos' && '["macos-15"]' || '["ubuntu-24.04","macos-15"]') }}
     runs-on: ${{ matrix.os }}
-    # Six legs plus serial rebuild rounds take ~2h on ubuntu-24.04 and ~4h on macos-15.
+    # Six legs on one machine, up to two at a time on a 16 GB runner and one
+    # on a 7 GB one (util/cabal-ladder.sh run), the serial legs' rounds
+    # included: about two hours on ubuntu-24.04, four on macos-15.
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v6
@@ -68,28 +78,32 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo .github/workflows/install_dependencies_ubuntu.sh
-          # Needed by util/bluehs/mk-dist.sh to rewrite RPATHs and bundle libraries.
+          # mk-dist.sh rewrites the shipped libraries' search paths
           sudo apt-get install -y patchelf cpio
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           .github/workflows/install_dependencies_macos.sh
-          # Workaround matching build-and-test-macos.yml: remove stray
-          # /usr/local/include/tcl.h so it does not shadow system Tcl.
+          # The same workaround as build-and-test-macos.yml: a stray tcl.h in
+          # /usr/local/include shadows the system Tcl and breaks the bluetcl
+          # link.
           rm -f /usr/local/include/tcl.h
-      # Pin cabal-install 3.16.1.0 for jsem v1 compatibility with GHC 9.8-9.14.1
-      # (cabal-install 3.18+ requires jsem v2 from GHC 9.10.4/9.12.5/9.14.2+).
+      # cabal-install 3.16 speaks the GHC job semaphore protocol v1, GHC's since 9.8; 3.18 speaks
+      # only v2, which GHC adds in 9.10.4, 9.12.5, 9.14.2 and 10.0.1, so with it no -jsem is used.
       - name: Install GHC
         uses: haskell/ghcup-setup@v1
         with:
           ghc: ${{ inputs.ghc_version || '9.14.1' }}
           cabal: 3.16.1.0
+      # The legs' builds fetch the compiler's Haskell libraries from Hackage,
+      # the reference leg first; the others share what it built.
       - name: Update the package index
         run: cabal update
       - name: The ladder
         env:
           OUT: ${{ github.workspace }}/determinism-results
         run: util/cabal-ladder.sh run
+      # The lists, the toolchain records and the logs, after a failed ladder too.
       - uses: actions/upload-artifact@v6
         if: ${{ !cancelled() }}
         with:
