@@ -93,13 +93,13 @@ These tests are disabled if `showrules` is not found in the
 
 #### bluehs
 
-Some tests run scripts against the bsc library with `bluehs` (for
-example the intern-table restore tests in `bsc.driver/intern_table`).
-They are untested if `bluehs` is not found in `TEST_RELEASE` at
-`bluehs/bin/bluehs`, where `make install-bluehs` installs it, or at the
-path `TEST_BLUEHS` names. A checkout's `util/bluehs/bluehs` runs the
-scripts that import `InternRestore` only while the checkout's `bsc-json`
-library is built (`util/bluehs/README.md`).
+Some tests run scripts against the bsc library with `bluehs`: the
+library tests in `bsc.bluehs` and the intern-table restore tests in
+`bsc.driver/intern_table`. They do not run if `bluehs` is not found in
+`TEST_RELEASE` at `bluehs/bin/bluehs`, where `make install-bluehs`
+installs it, or at the path `TEST_BLUEHS` names. A checkout's
+`util/bluehs/bluehs` runs the scripts that import `InternRestore` only
+while the checkout's `bsc-json` library is built (`util/bluehs/README.md`).
 
 #### Developer tools
 
