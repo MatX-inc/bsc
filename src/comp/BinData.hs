@@ -3,7 +3,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables, BangPatterns #-}
 {-# LANGUAGE PatternSynonyms, OverloadedLists, TypeFamilies #-}
-{-# LANGUAGE MagicHash, UnboxedTuples #-}
+{-# LANGUAGE MagicHash, UnboxedTuples, RankNTypes #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
 module BinData ( Byte
                , putBs, putB, putI
@@ -73,7 +73,6 @@ module BinData ( Byte
 -}
 
 import ErrorUtil(internalError)
-import System.IO.Unsafe(unsafePerformIO, unsafeInterleaveIO)
 
 import FStringCompat
 import PreIds(idDefaultClock)
@@ -97,14 +96,14 @@ import Util(hashInit, nextHashByte, showHash)
 
 import Data.List(sort, intercalate, mapAccumL)
 import Control.Monad(liftM, ap, when)
-import Control.Exception(evaluate)
-import Foreign.ForeignPtr(mallocForeignPtrBytes, withForeignPtr)
-import Foreign.Ptr(Ptr)
-import Foreign.Storable(peekByteOff, pokeByteOff)
+import Control.Monad.ST(ST, runST)
+import GHC.ST(ST(..))
 import Data.Array.IArray()
 import Data.Array.Unboxed
+import Data.Array.ST(STUArray, newArray)
+import Data.Array.Base(unsafeRead, unsafeWrite)
 import GHC.Arr(Array(..))
-import GHC.Exts(IsList(..), Int(I#), indexArray#)
+import GHC.Exts(IsList(..), Int(I#), indexArray#, seq#)
 import Data.Bits
 import Data.Word
 import qualified Data.ByteString as BS
@@ -407,22 +406,24 @@ data Tables = Tables { tBytes      :: !BS.ByteString
 -- strict run (decodeStrict) a lazy chunk is decoded in place instead of
 -- being deferred.
 
-data Env = Env { envBytes  :: !BS.ByteString
-               , envState  :: !(Ptr Word8) -- see stateOffset .. stateSize
-               , envTables :: !Tables
-               , envStrict :: !Bool
-               }
+data Env s = Env { envBytes  :: !BS.ByteString
+                 , envState  :: !(STUArray s Int Int) -- see stateOffset .. stateSize
+                 , envTables :: !Tables
+                 , envStrict :: !Bool
+                 }
 
--- Layout of the mutable state block: the read offset (Int), the offset
--- this run may not read past (Int), and the number of chunks decoded in
--- place (Int, strict runs only).
+-- Slots of the mutable state block: the read offset, the offset this run
+-- may not read past, and the number of chunks decoded in place (strict
+-- runs only).
 stateOffset, stateLimit, stateChunks, stateSize :: Int
 stateOffset = 0
-stateLimit  = 8
-stateChunks = 16
-stateSize   = 24
+stateLimit  = 1
+stateChunks = 2
+stateSize   = 3
 
-newtype In a = In (Env -> IO a)
+-- Each run is a local strict ST computation (see runAt); a deferred
+-- decode is a pure thunk over the immutable tables.
+newtype In a = In (forall s. Env s -> ST s a)
 
 instance Monad In where
   return = pure
@@ -437,13 +438,17 @@ instance Applicative In where
   pure x = In $ \_ -> return x
   (<*>) = ap
 
-runInEnv :: In a -> Env -> IO a
+runInEnv :: In a -> Env s -> ST s a
 runInEnv (In f) env = f env
+
+-- Control.Exception.evaluate for ST: force x when the action runs.
+evaluateST :: a -> ST s a
+evaluateST x = ST (\s -> seq# x s)
 
 getN :: Int -> In [Byte]
 getN n = readN n getB
 
--- Read n values in order. In runs in IO, where replicateM and a recursive
+-- Read n values in order. In runs in strict ST, where replicateM and a recursive
 -- (x:) <$> ... hold one stack frame per element until the list ends; a long
 -- list overflows the stack. Accumulating and reversing runs in constant stack.
 {-# INLINE readN #-}
@@ -454,14 +459,14 @@ readN n0 r = go n0 []
 
 -- Advance the read offset past n bytes and return where they start.
 {-# INLINE advance #-}
-advance :: String -> Env -> Int -> IO Int
+advance :: String -> Env s -> Int -> ST s Int
 advance who env n = do
   let st = envState env
-  off <- peekByteOff st stateOffset :: IO Int
-  lim <- peekByteOff st stateLimit :: IO Int
+  off <- unsafeRead st stateOffset
+  lim <- unsafeRead st stateLimit
   if n < 0 || off + n > lim
     then internalError ("BinData." ++ who ++ ": unexpected end of byte stream")
-    else do pokeByteOff st stateOffset (off + n)
+    else do unsafeWrite st stateOffset (off + n)
             return off
 
 {-# INLINE getB #-}
@@ -518,7 +523,7 @@ mkAddKey get set k _ bc = let (Known n m) = get bc
 -- Index a boxed array without forcing the element: a table entry stays
 -- the memoized thunk it is until a consumer needs the value.
 {-# INLINE lazyIndex #-}
-lazyIndex :: String -> Array Int v -> Int -> IO v
+lazyIndex :: String -> Array Int v -> Int -> ST s v
 lazyIndex who arr idx =
   case arr of
     Array lo hi _ arr# ->
@@ -535,7 +540,7 @@ lazyIndex who arr idx =
 mkLookupIdx :: String -> (Tables -> Array Int v) -> Int -> In v
 mkLookupIdx who get idx = In $ \env ->
   let tbl = envTables env
-  in if tWalk tbl then lazyIndex who (get tbl) idx >>= evaluate
+  in if tWalk tbl then lazyIndex who (get tbl) idx >>= evaluateST
      else lazyIndex who (get tbl) idx
 
 -- A shared value occurs in the stream as its index into the table for
@@ -590,45 +595,42 @@ fromBinLazy = In $ \env -> do
     internalError $ "BinData.fromBinLazy: invalid chunk number " ++ show c
   let off = tChunks tbl ! (2*c)
       len = tChunks tbl ! (2*c+1)
-  cur <- peekByteOff st stateOffset :: IO Int
+  cur <- unsafeRead st stateOffset
   when (cur /= off) $
     internalError $ "BinData.fromBinLazy: chunk " ++ show c ++
                     " expected at " ++ show off ++ ", found at " ++ show cur
   if envStrict env
     then do x <- runInEnv fromBin env
-            end <- peekByteOff st stateOffset :: IO Int
+            end <- unsafeRead st stateOffset
             when (end /= off + len) $
               internalError $ "BinData.fromBinLazy: chunk " ++ show c ++
                               " decoded " ++ show (end - off) ++ " of " ++
                               show len ++ " bytes"
-            n <- peekByteOff st stateChunks :: IO Int
-            pokeByteOff st stateChunks (n + 1)
+            n <- unsafeRead st stateChunks
+            unsafeWrite st stateChunks (n + 1)
             return x
     else do _ <- advance "fromBinLazy" env len
-            unsafeInterleaveIO $
-              runAt tbl False off (off + len) ("chunk " ++ show c) fromBin
+            return (runST (runAt tbl False off (off + len) ("chunk " ++ show c) fromBin))
 
 -- Run a reader over [start, end) of the container with a fresh state
 -- block, requiring it to consume exactly those bytes.
-runAt :: Tables -> Bool -> Int -> Int -> String -> In a -> IO a
+runAt :: Tables -> Bool -> Int -> Int -> String -> In a -> ST s a
 runAt tbl strict start end what (In f) = do
-  fp <- mallocForeignPtrBytes stateSize
-  withForeignPtr fp $ \st -> do
-    pokeByteOff st stateOffset start
-    pokeByteOff st stateLimit end
-    pokeByteOff st stateChunks (0 :: Int)
-    x <- f (Env (tBytes tbl) st tbl strict)
-    off <- peekByteOff st stateOffset :: IO Int
-    when (off /= end) $
-      internalError $ "BinData.decode: " ++ what ++ " decoded " ++
-                      show (off - start) ++ " of " ++ show (end - start) ++
-                      " bytes"
-    when strict $ do
-      seen <- peekByteOff st stateChunks :: IO Int
-      when (seen /= tChunkCount tbl) $
-        internalError $ "BinData.decodeStrict: " ++ show seen ++ " of " ++
-                        show (tChunkCount tbl) ++ " chunks reached"
-    return x
+  st <- newArray (0, stateSize - 1) 0
+  unsafeWrite st stateOffset start
+  unsafeWrite st stateLimit end
+  x <- f (Env (tBytes tbl) st tbl strict)
+  off <- unsafeRead st stateOffset
+  when (off /= end) $
+    internalError $ "BinData.decode: " ++ what ++ " decoded " ++
+                    show (off - start) ++ " of " ++ show (end - start) ++
+                    " bytes"
+  when strict $ do
+    seen <- unsafeRead st stateChunks
+    when (seen /= tChunkCount tbl) $
+      internalError $ "BinData.decodeStrict: " ++ show seen ++ " of " ++
+                      show (tChunkCount tbl) ++ " chunks reached"
+  return x
 
 -- ------------------------------------------------------------------
 -- The Bin typeclass defines automatic conversions to/from a
@@ -1915,16 +1917,13 @@ getU32 :: In Int
 getU32 = do b0 <- getI; b1 <- getI; b2 <- getI; b3 <- getI
             return (b0 .|. (b1 `shiftL` 8) .|. (b2 `shiftL` 16) .|. (b3 `shiftL` 24))
 
-inIO :: IO a -> In a
-inIO act = In $ \_ -> act
 
 -- Validate the indices, intern the string table in order, and build
--- the lazy tables.  A table entry is a thunk that decodes its bytes on
--- first force (memoized by the array; unsafePerformIO applies
--- noDuplicate, so two threads cannot both decode it); a parent entry
--- may reference entries with higher indices.  When walking (a strict
+-- the lazy tables.  A table entry is a pure thunk that decodes its
+-- bytes on first force (a local ST run over the immutable input); a
+-- parent entry may reference entries with higher indices.  When walking (a strict
 -- decode), strings are left for mkLookupIdx to intern.
-mkTables :: Bool -> BS.ByteString -> Footer -> IO Tables
+mkTables :: Bool -> BS.ByteString -> Footer -> ST s Tables
 mkTables walk s ft = do
   let bodiesEnd = fBodiesEnd ft
       bad what = internalError $ "BinData.decode: malformed container (" ++ what ++ ")"
@@ -1957,7 +1956,7 @@ mkTables walk s ft = do
                   | i >= n    = return (reverse acc)
                   | otherwise = do str <- readBytes
                                    fs <- if walk then return (mkFString str)
-                                         else inIO (evaluate (mkFString str))
+                                         else In (\_ -> evaluateST (mkFString str))
                                    loop (i + 1) (fs : acc)
             loop (0 :: Int) []
   let strArr = listArray (0, fStrCount ft - 1) strs :: Array Int FString
@@ -1979,8 +1978,7 @@ mkTables walk s ft = do
       lazyTable k =
         let t@(_, _, n) = fTables ft !! fromEnum k
             entry i = let (a, b) = entryBounds t i
-                      in unsafePerformIO
-                           (runAt tables False a b (show k ++ " entry " ++ show i) readBytes)
+                      in runST (runAt tables False a b (show k ++ " entry " ++ show i) readBytes)
         in listArray (0, n - 1) [ entry i | i <- [0 .. n - 1] ]
       tables = Tables { tBytes = s, tStrings = strArr
                       , tIds = lazyTable KId, tPositions = lazyTable KPosition
@@ -1990,13 +1988,13 @@ mkTables walk s ft = do
   return tables
 
 decodeContainer :: (Bin a) => Bool -> BS.ByteString -> a
-decodeContainer strict s = unsafePerformIO $ do
+decodeContainer strict s = runST $ do
   let ft = parseFooter s
   tbl <- mkTables strict s ft
   x <- runAt tbl strict 0 (fBodiesEnd ft) "root" fromBin
   when strict $ do
-    let force :: forall v . Array Int v -> IO ()
-        force arr = mapM_ evaluate (elems arr)
+    let force :: forall v s . Array Int v -> ST s ()
+        force arr = mapM_ evaluateST (elems arr)
     force (tIds tbl)
     force (tPositions tbl)
     force (tTypes tbl)
