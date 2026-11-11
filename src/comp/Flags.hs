@@ -177,10 +177,13 @@ data Flags = Flags {
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)
 
--- What a source compile produces: everything (the default), or only the
--- package's interface, a .bi file written after context reduction from
--- the imported packages' .bi files (-signature-only).
-data FrontEndMode = FullCompile | SignatureOnly
+-- What a source compile produces: everything (the default); only the
+-- package's interface, a .bi file written after context reduction
+-- (-signature-only); or only the typecheck result, a .chk file
+-- (-check-only).  The front-end-only modes read imported packages from
+-- .bi files.  CheckWithSignature, for an import that -u -check-only
+-- recompiles, writes both the .chk and the .bi.
+data FrontEndMode = FullCompile | SignatureOnly | CheckOnly | CheckWithSignature
     deriving (Eq, Show)
 
 data Verbosity = Quiet | Normal | Verbose | ExtraVerbose

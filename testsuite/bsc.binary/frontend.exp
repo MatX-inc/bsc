@@ -23,6 +23,23 @@ proc front_end_fail { source mode {options ""} {nodeps 0} } {
     }
 }
 
+# Copy a full compile's output, with the final -u message worded as
+# -check-only words it
+proc copy_as_checked { file1 file2 } {
+    global srcdir
+    global subdir
+    set dir [file join [absolute $srcdir] $subdir]
+    set in [open [file join $dir $file1] r]
+    set text [read $in]
+    close $in
+    set out [open [file join $dir $file2] w]
+    puts -nonewline $out [string map \
+        {"All packages compiled (some with errors)." \
+         "All packages checked (some with errors)." \
+         "All packages are up to date." "All packages checked."} $text]
+    close $out
+}
+
 # -signature-only writes the signature that the full compile stores
 compile_pass FrontEndA.bs
 front_end_pass FrontEndA.bs -signature-only "-check-bin-roundtrip"
@@ -37,3 +54,88 @@ if { [do_internal_checks] } {
 compile_pass FrontEndLib.bs
 front_end_fail FrontEndUsesLib.bs -signature-only "" 1
 find_regexp [make_bsc_output_name FrontEndUsesLib.bs] {S0004}
+
+# -check-only typechecks against the .bi files
+front_end_pass FrontEndB.bs -check-only "-check-bin-roundtrip"
+if { [do_internal_checks] } {
+    dumpbo FrontEndB.chk
+    find_regexp [make_dumpbo_output_name FrontEndB.chk] {^Status: ok$}
+}
+
+# with the messages and status of a full compile
+compile_fail FrontEndBad.bs
+copy [make_bsc_output_name FrontEndBad.bs] FrontEndBad.bs.full-out
+front_end_fail FrontEndBad.bs -check-only
+compare_file [make_bsc_output_name FrontEndBad.bs] FrontEndBad.bs.full-out
+
+# and, continuing after the error, a .chk with the poisoned definition
+# (the final -u message says that the packages were checked)
+compile_fail FrontEndBad.bs "-continue-after-errors"
+copy_as_checked [make_bsc_output_name FrontEndBad.bs] FrontEndBad.bs.full-out
+front_end_fail FrontEndBad.bs -check-only "-continue-after-errors"
+compare_file [make_bsc_output_name FrontEndBad.bs] FrontEndBad.bs.full-out
+if { [do_internal_checks] } {
+    dumpbo FrontEndBad.chk
+    find_regexp [make_dumpbo_output_name FrontEndBad.chk] {^Status: failed$}
+    find_regexp [make_dumpbo_output_name FrontEndBad.chk] {primPoisonedDef}
+}
+
+front_end_fail FrontEndUsesLib.bs -check-only "" 1
+find_regexp [make_bsc_output_name FrontEndUsesLib.bs] {S0004}
+
+# and the errors that a full compile reports after typecheck: a foreign
+# function imported twice (T0091), a local mutual recursion that cannot
+# be converted (S0066), and an ambiguous constructor in the default of an
+# unexported class, found when the .bo signatures are written (S0015)
+foreach {source tag} {FrontEndForeign.bsv T0091 FrontEndLetrec.bs S0066 \
+                      FrontEndDefault.bs S0015} {
+    compile_fail_error $source $tag
+    copy [make_bsc_output_name $source] $source.full-out
+    front_end_fail $source -check-only
+    compare_file [make_bsc_output_name $source] $source.full-out
+}
+
+# -u -check-only checks the imports it recompiles, as -u compiles them
+compile_fail_error FrontEndUsesBodyErr.bs T0080
+copy [make_bsc_output_name FrontEndUsesBodyErr.bs] FrontEndUsesBodyErr.bs.full-out
+erase FrontEndBodyErr.bi
+erase FrontEndBodyErr.chk
+front_end_fail FrontEndUsesBodyErr.bs -check-only
+compare_file [make_bsc_output_name FrontEndUsesBodyErr.bs] FrontEndUsesBodyErr.bs.full-out
+
+# and, continuing after errors, warn about an import whose check failed as
+# -u warns about a .bo with poisoned definitions (G0088)
+erase FrontEndBodyErr.bi
+erase FrontEndBodyErr.chk
+front_end_fail FrontEndUsesBodyErr.bs -check-only "-continue-after-errors"
+find_regexp [make_bsc_output_name FrontEndUsesBodyErr.bs] \
+    {G0088\)\n  File FrontEndBodyErr.chk contains definitions}
+find_n_strings [make_bsc_output_name FrontEndUsesBodyErr.bs] \
+    "All packages checked (some with errors)." 1
+
+# -u -check-only says that it checked, and does not check again an import
+# whose .bi and .chk are current (a foreign import writes no .ba here)
+erase FrontEndBdpi.bi
+erase FrontEndBdpi.chk
+front_end_pass FrontEndUsesBdpi.bs -check-only
+find_n_strings [make_bsc_output_name FrontEndUsesBdpi.bs] "compiling ./FrontEndBdpi.bsv" 1
+find_n_strings [make_bsc_output_name FrontEndUsesBdpi.bs] "All packages checked." 1
+string_does_not_occur [make_bsc_output_name FrontEndUsesBdpi.bs] "up to date"
+front_end_pass FrontEndUsesBdpi.bs -check-only
+string_does_not_occur [make_bsc_output_name FrontEndUsesBdpi.bs] "FrontEndBdpi.bsv"
+
+# The .chk does not depend on where the imported .bi files were found:
+# two copies of the import closure, at different paths
+nukedir frontend_paths
+foreach d {frontend_paths/a frontend_paths/b/c frontend_paths/out_a frontend_paths/out_b} {
+    mkdir $d
+}
+foreach d {frontend_paths/a frontend_paths/b/c} {
+    foreach p {Prelude PreludeBSV Vector List Array} {
+        copy [file join [get_bsdir] Libraries $p.bi] $d/$p.bi
+    }
+    copy FrontEndA.bi $d/FrontEndA.bi
+}
+front_end_pass FrontEndB.bs -check-only "-p frontend_paths/a -bdir frontend_paths/out_a" 1
+front_end_pass FrontEndB.bs -check-only "-p frontend_paths/b/c -bdir frontend_paths/out_b" 1
+compare_file frontend_paths/out_a/FrontEndB.chk frontend_paths/out_b/FrontEndB.chk

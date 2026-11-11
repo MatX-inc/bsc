@@ -44,7 +44,7 @@ import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, remap
                     mkAName, mkVName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
-                    bscSrcSuffix, binSuffix, biSuffix,
+                    bscSrcSuffix, binSuffix, biSuffix, chkSuffix,
                     hSuffix, cSuffix, cxxSuffix, cppSuffix, ccSuffix,
                     objSuffix, useSuffix,
                     genFileName, createEncodedFullFilePath,
@@ -81,7 +81,7 @@ import FlagsDecode(
 import Error(internalError, ErrMsg(..),
              ErrorHandle, initErrorHandle, setErrorHandleFlags,
              bsError, bsErrorNoExit, bsWarning, bsMessage,
-             exitFail, exitOK, exitFailWith)
+             exitFail, exitOK, exitFailWith, takeDiagnostics)
 import Position(noPosition, cmdPosition, remapPositionFile)
 import CVPrint
 import Id
@@ -92,7 +92,8 @@ import Deriving(derive)
 import SymTab
 import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
                   getPackagesUsedInTypes)
-import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
+import TypeCheck(cCtxReduceIO, cTypeCheck, CATFCache, mergeCATFCaches)
+import Eval(rnf)
 import CType(enableCanonIds, disableCanonIds, cTypeStats)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
@@ -102,17 +103,20 @@ import ISyntax(IPackage(..), IModule(..), IATFCache, mergeIATFCaches,
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
+import IConvLet(mayHaveComplicatedLetrecCycle)
 import LiftDicts(liftDictsPkg)
 import ISimpDicts(iSimpDicts)
 import FixupDefs(fixupDefs, updDef, mkDictBuckets, mkDictRedirects)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, readImportsBi, replaceImportedSignatures)
-import GenBin(genBinFile, CPackageBin(..), stripImpSigs, checkRoundTrip, sortSched)
+import GenBin(genBinFile, forceSignatures, CPackageBin(..), stripImpSigs, checkRoundTrip,
+              sortSched)
 import GenBi(BiFile(..), genBiFile)
+import GenChk(ChkFile(..), genChkFile)
 import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap)
-import GenForeign(genForeign)
+import GenForeign(genForeign, checkForeign)
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
 import ITransform(iTransform)
@@ -310,13 +314,21 @@ compile_with_deps :: ErrorHandle -> Flags -> String -> IO (Bool)
 compile_with_deps errh flags name = do
     let
         verb = showUpds flags && not (quiet flags)
+        checking = frontEndMode flags == CheckOnly
         -- the flags when re-compiling depended modules
+        -- (-check-only checks each import and writes the .bi it reads)
         flags_depend = flags { updCheck = False,
                                genName = [],
-                               showCodeGen = verb }
+                               showCodeGen = verb,
+                               frontEndMode = if checking
+                                              then CheckWithSignature
+                                              else frontEndMode flags }
         -- the flags when re-compiling this module
-        flags_this = flags_depend { genName = genName flags }
-        comp (success, binmap0, hashmap0) (fn, pkg, parse_warns) = do
+        flags_this = flags_depend { genName = genName flags,
+                                    frontEndMode = frontEndMode flags }
+        comp biSeen (success, binmap0, hashmap0) (fn, pkg, parse_warns) = do
+            -- the .chk records only this package's diagnostics
+            when checking $ takeDiagnostics errh >> return ()
             when (verb) $ putStrLnF ("compiling " ++ fn)
             -- Show warnings for this file
             when (not $ null parse_warns) $ bsWarning errh parse_warns
@@ -325,7 +337,7 @@ compile_with_deps errh flags name = do
                      else flags_depend
             t <- getNow
             (cur_success, binmap, hashmap)
-                <- compilePackage errh fl t binmap0 hashmap0 fn pkg
+                <- compilePackage errh fl t binmap0 hashmap0 biSeen fn pkg
             return (cur_success && success, binmap, hashmap)
     when (verb) $ putStrLnF "checking package dependencies"
 
@@ -334,16 +346,24 @@ compile_with_deps errh flags name = do
 
     -- get the list of depended files which need recompiling (with parsed packages and warnings)
     start flags DFdepend
-    pkgs <- chkDeps errh flags name
+    pkgs0 <- chkDeps errh flags name
+    -- -check-only checks the named package even when its .chk is current
+    pkgs <- if checking && not (any ((== name) . fst3) pkgs0)
+            then do (pkg, _, warns) <- parseFile errh flags False name
+                    return (pkgs0 ++ [(name, pkg, warns)])
+            else return pkgs0
     _ <- dump errh flags t DFdepend dumpnames (map fst3 pkgs)
 
     -- compile them
-    (ok, _, _) <- foldM comp (True, M.empty, M.empty) pkgs
+    biSeen <- newIORef S.empty
+    (ok, _, _) <- foldM (comp (Just biSeen)) (True, M.empty, M.empty) pkgs
 
     when (verb) $
-      if ok then
-          putStrLnF "All packages are up to date."
-      else putStrLnF "All packages compiled (some with errors)."
+      putStrLnF $ case (checking, ok) of
+                    (False, True) -> "All packages are up to date."
+                    (False, False) -> "All packages compiled (some with errors)."
+                    (True, True) -> "All packages checked."
+                    (True, False) -> "All packages checked (some with errors)."
 
     return ok
 
@@ -354,7 +374,7 @@ compile_no_deps errh flags name = do
     -- Show warnings for this file
     when (not $ null parse_warns) $ bsWarning errh parse_warns
 
-    (ok, _, _) <- compilePackage errh flags t M.empty M.empty name pkg
+    (ok, _, _) <- compilePackage errh flags t M.empty M.empty Nothing name pkg
     return ok
 
 -------------------------------------------------------------------------
@@ -365,6 +385,7 @@ compilePackage ::
     TimeInfo ->
     BinMap HeapData ->
     HashMap ->
+    Maybe (IORef (S.Set String)) ->
     String ->
     CPackage ->
     IO (Bool, BinMap HeapData, HashMap)
@@ -374,6 +395,7 @@ compilePackage
     tStart
     binmap0
     hashmap0
+    biSeen   -- -u: the packages whose .bi earlier compiles read (readImportsBi)
     name_orig -- String --
     min@(CPackage pkgId _ _ _ _ _ _) =
   -- a front-end-only compile ends by throwing FrontEndDone
@@ -416,7 +438,9 @@ compilePackage
         <- if frontEndMode flags == FullCompile
            then do (p, bm, hm) <- readImports errh flags binmap0 hashmap0 min
                    return (p, bm, hm, [])
-           else do (p, hm, cl) <- readImportsBi errh flags hashmap0 min
+           else do seen0 <- mapM readIORef biSeen
+                   (p, hm, seen, cl) <- readImportsBi errh flags hashmap0 seen0 min
+                   sequence_ (writeIORef <$> biSeen <*> seen)
                    return (p, binmap0, hm, cl)
     when (hasDump flags DFimports) $
       let impsigs' = [ppReadable s |  (CImpSign _ _ s) <- impsigs]
@@ -511,6 +535,13 @@ compilePackage
     when checkBinRoundTrip $
         checkRoundTrip "typechecked package" CPackageBin
                        (\(CPackageBin p) -> sortSched p) (sortSched (stripImpSigs mod))
+
+    when (frontEndMode flags `elem` [CheckOnly, CheckWithSignature]) $
+        writeCheck errh flags t dumpnames name pwd biClosure symt
+                   (mergeCATFCaches ctypeATFCache atfCacheFromCtxReduce)
+                   mctx mod tcErrors
+                   [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode]
+            >>= CE.throwIO . FrontEndDone
 
     --when (early flags) $ return ()
     let prefix = dirName name ++ "/"
@@ -764,13 +795,9 @@ compilePackage
         checkRoundTrip "user signature" id id bi_sig
         checkRoundTrip "full signature" id id bo_sig
 
-    -- Check for unused imports by combining packages from all three sources
-    let (CPackage _ _ imports _ _ _ _) = mctx
-        allUsedPkgs = S.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
-        importedPkgs = [i | (CImpId _ i) <- imports]
-        unusedPkgs = filter (\pkg -> not (S.member pkg allUsedPkgs)) importedPkgs
-        unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg)) | pkg <- unusedPkgs]
-    when (not (null unusedWarns)) $ bsWarning errh unusedWarns
+    -- Check for unused imports by combining packages from all four sources
+    warnUnusedImports errh mctx
+        [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
 
     -- Generate binary version of the internal tree .bo file
     let bin_filename = putInDir (bdir flags) name binSuffix
@@ -791,6 +818,15 @@ compilePackage
 
     return (success && not tcErrors, binmap, hashmap)
 
+
+-- Warn about the imports that no stage of the compile used
+warnUnusedImports :: ErrorHandle -> CPackage -> [S.Set Id] -> IO ()
+warnUnusedImports errh (CPackage _ _ imports _ _ _ _) usedSets = do
+    let allUsedPkgs = S.unions usedSets
+        importedPkgs = [i | (CImpId _ i) <- imports]
+        unusedPkgs = filter (\pkg -> not (S.member pkg allUsedPkgs)) importedPkgs
+        unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg)) | pkg <- unusedPkgs]
+    when (not (null unusedWarns)) $ bsWarning errh unusedWarns
 
 -- A front-end-only compile (Flags.frontEndMode) ends early, with whether
 -- it succeeded, by throwing this to compilePackage.
@@ -826,6 +862,60 @@ writeSignature errh flags t dumpnames name pwd closure symt
     when (verbose flags) $
          putStrLnF ("Interface file created: " ++ getRelativeFilePath bi_filename)
     _ <- dumpStr errh flags t DFwriteBin dumpnames bi_filename
+    return ok
+
+-- -check-only: write the package's .chk after typecheck.  First report
+-- what the full compile, which has no backend in this mode, reports after
+-- typecheck: a foreign function imported twice (genForeign), a local
+-- mutual recursion that iConvPackage cannot convert, genUserSign's
+-- messages, unused imports, and what writing the .bo's signatures
+-- raises.  The other messages of later stages are not produced.  For an
+-- import that -u -check-only recompiles (CheckWithSignature), also write
+-- the package's .bi.
+writeCheck :: ErrorHandle -> Flags -> TimeInfo -> DumpNames -> String ->
+              FilePath -> [(Id, String)] -> SymTab -> CATFCache -> CPackage ->
+              CPackage -> Bool -> [S.Set Id] -> IO Bool
+writeCheck errh flags t dumpnames name pwd closure symt atfCache
+           mctx@(CPackage pkgId _ _ _ _ _ _) tcmod tcErrors usedSets = do
+    _ <- checkForeign errh tcmod
+    -- iConvPackage reports EMutualRecursionComplicatedClause where its
+    -- result is forced; convert the package, as the full compile does,
+    -- only when that can happen
+    let simp = simplify flags tcmod
+    when (mayHaveComplicatedLetrecCycle simp) $ do
+        let (lifted, lifted_defs) =
+                if liftDicts flags then liftDictsPkg errh flags symt simp
+                else (simp, [])
+        imod <- iConvPackage errh flags symt atfCache lifted_defs lifted
+        _ <- CE.evaluate (rnf lifted)
+        _ <- CE.evaluate (rnf (imod :: IPackage HeapData))
+        return ()
+    start flags DFwriteBin
+    (bi_sig, pkgsUsedInExports) <- genUserSign errh symt mctx
+    bo_sig <- genEverythingSign errh symt mctx
+    when checkBinRoundTrip $ do
+        checkRoundTrip "user signature" id id bi_sig
+        checkRoundTrip "full signature" id id bo_sig
+    warnUnusedImports errh mctx (usedSets ++ [pkgsUsedInExports])
+    forceSignatures bi_sig bo_sig
+    diags <- takeDiagnostics errh
+    let ok = not tcErrors
+        chkOf (p, ds) = ChkFile pkgId closure ok ds (CPackageBin p)
+        unChk c = let CPackageBin p = chk_package c in (sortSched p, chk_diagnostics c)
+        contents = (stripImpSigs tcmod, diags)
+    when checkBinRoundTrip $
+        checkRoundTrip "check file" chkOf unChk (sortSched (fst contents), diags)
+    let chk_filename = putInDir (bdir flags) name chkSuffix
+        remapP = remapPositionFile pwd (remapPathPrefix flags)
+    genChkFile errh remapP chk_filename (chkOf contents)
+    when (verbose flags) $
+         putStrLnF ("Check file created: " ++ getRelativeFilePath chk_filename)
+    when (frontEndMode flags == CheckWithSignature) $ do
+        let bi_filename = putInDir (bdir flags) name biSuffix
+        genBiFile errh remapP bi_filename (BiFile pkgId closure bi_sig)
+        when (verbose flags) $
+             putStrLnF ("Interface file created: " ++ getRelativeFilePath bi_filename)
+    _ <- dumpStr errh flags t DFwriteBin dumpnames chk_filename
     return ok
 
 genModule ::

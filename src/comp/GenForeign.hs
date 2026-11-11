@@ -1,4 +1,4 @@
-module GenForeign (genForeign) where
+module GenForeign (genForeign, checkForeign) where
 
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import Util(headOrErr, findSame)
@@ -22,17 +22,8 @@ import System.Directory(getCurrentDirectory)
 -- the foreign src IDs, and their corresponding ForeignFunctions
 genForeign :: ErrorHandle -> Flags -> String -> CPackage ->
               IO [(Id, ForeignFunction)]
-genForeign errh flags prefix (CPackage pkg_id _ _ _ _ defs _) =
+genForeign errh flags prefix pkg =
     let
-        isPPforeignImport (PPforeignImport {}) = True
-        isPPforeignImport _ = False
-
-        foreignIds = [ i | (CPragma (Pproperties i pps)) <- defs,
-                           any isPPforeignImport pps ]
-        foreignDefs = [ d | d@(CValueSign (CDefT i _ _ _)) <- defs,
-                            i `elem` foreignIds ]
-        foreignInfos = map extractForeignFuncInfo foreignDefs
-
         genABin info@(src_id, foreign_func) =
             let ffinfo = ABinForeignFuncInfo src_id foreign_func
                 abin = ABinForeignFunc ffinfo (bscVersionStr True)
@@ -51,6 +42,22 @@ genForeign errh flags prefix (CPackage pkg_id _ _ _ _ defs _) =
                    unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
                    -- return the info, for dumping
                    return info
+    in
+        checkForeign errh pkg >>= mapM genABin
+
+-- The package's foreign function imports, after reporting an error if
+-- any function is imported more than once
+checkForeign :: ErrorHandle -> CPackage -> IO [(Id, ForeignFunction)]
+checkForeign errh (CPackage _ _ _ _ _ defs _) =
+    let
+        isPPforeignImport (PPforeignImport {}) = True
+        isPPforeignImport _ = False
+
+        foreignIds = [ i | (CPragma (Pproperties i pps)) <- defs,
+                           any isPPforeignImport pps ]
+        foreignDefs = [ d | d@(CValueSign (CDefT i _ _ _)) <- defs,
+                            i `elem` foreignIds ]
+        foreignInfos = map extractForeignFuncInfo foreignDefs
 
         -- check for duplicate imports and report an error
         link_ids = map (ff_name . snd) foreignInfos
@@ -66,7 +73,7 @@ genForeign errh flags prefix (CPackage pkg_id _ _ _ _ defs _) =
     in
         if (not (null duplicates))
         then bsError errh (map mkDupErr duplicates)
-        else mapM genABin foreignInfos
+        else return foreignInfos
 
 
 -- After typechecking, the import should contain a CForeignFuncCT expression
