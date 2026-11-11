@@ -127,7 +127,9 @@ data RecEv
     | EvSub Summary          -- ^ a nested solve's record (its window's
                              --   events, summarised when it closed), or
                              --   a nested pool hit's
-    | EvLookfor              -- ^ a goal met by a given or a stack entry
+    | EvLookfor              -- ^ a goal met by a given or a stack entry,
+                             --   or one a given unifies with (sat's
+                             --   Commitment check)
     | EvRoot (Maybe Id)      -- ^ a full solve's own records follow
     | EvJoin !Int !Int [Int] -- ^ a join of the goals whose dictionaries
                              --   have the first two numbers, among the
