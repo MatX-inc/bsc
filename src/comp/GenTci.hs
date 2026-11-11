@@ -208,7 +208,7 @@ genTciFile errh fn ti = do
     let onlyDropped x = IS.member (fstringId x) cands && not (generatedShape x)
         handoff = [ x | x <- ti_handoff_strings ti, not (onlyDropped x) ]
         strs = IM.elems (foldl' addNew kept handoff)
-    (bsT, _) <- encodeV2Strip Nothing strs
+    bsT <- encodeV2Strings strs
     let lenLE b = BB.toLazyByteString (BB.word64LE (fromIntegral (BL.length b)))
         body = [lenLE bsT, bsT, lenLE bsL, bsL, bsS]
         hash = showHash (foldl' (BL.foldl' nextHashByte) hashInit body)
