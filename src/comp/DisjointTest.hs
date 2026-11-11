@@ -11,7 +11,7 @@ module DisjointTest(
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Control.Monad(foldM {- , when -})
-import Data.List (genericIndex)
+import Data.List (genericIndex, foldl')
 
 import Util(ordPair)
 
@@ -33,7 +33,8 @@ import qualified AExpr2STP as STP
           checkDisjointRulePair, checkDisjointExpr)
 import qualified AExpr2Yices as Yices
          (YState, initYState, addADefToYState,
-          checkDisjointRulePair, checkDisjointExpr)
+          checkDisjointRulePair, convertRulePair, decideRulePairs, YTerm,
+          checkDisjointExpr)
 
 -- -------------------------
 
@@ -114,25 +115,53 @@ checkDisjointExprWithCtx dts ctx1 ctx2 e1 e2 = do
 -- same steps, except that a pair which reaches the solver is converted
 -- but not checked (see checkDisjointRulePair), so it is absent from the
 -- result (not proven disjoint).
+-- With Yices, the read pairs that reach the solver are also only
+-- converted in the sweep, and are then decided together (see
+-- AExpr2Yices.decideRulePairs), with the same verdicts.
 genDisjointSet :: DisjointTestState -> [((ARuleId, ARuleId), Bool)] ->
                   [ASchedulePragma] ->
                   IO (S.Set (ARuleId, ARuleId), DisjointTestState)
 genDisjointSet dt_state rulePairs pragmas = do
   let me_state = makeMETest pragmas
+      batch = case dt_state of
+                DTS_Yices {} -> True
+                _ -> False
 
       addResult :: S.Set (ARuleId, ARuleId) -> (ARuleId, ARuleId) -> Maybe Bool -> S.Set (ARuleId, ARuleId)
       addResult rset (r1,r2) (Just True) = S.insert (r1,r2) (S.insert (r2,r1) rset)
       addResult rset _ _                 = rset
 
-      foldFn (rset, st) (p, needed) =
+      -- (the set is kept evaluated: forcing a sweep's worth of insertions
+      -- at once can exhaust the stack)
+      -- Whether a pair is read is forced only where checking it inline
+      -- would force it: forcing it computes the read-pair partners, which
+      -- intern names.
+      foldFn (rset, pend, st) (p, needed) =
           case (checkMERulePair me_state p) of
             res@(Just _) -> let rset' = addResult rset p res
-                            in  return (rset', st)
-            _            -> do (res, st') <- checkDisjointRulePairTop st p needed
-                               let rset' = addResult rset p res
-                               return (rset', st')
+                            in  rset' `seq` return (rset', pend, st)
+            _ | batch -> do
+                  (res, st') <- convertRulePairTop st p needed
+                  case res of
+                    Left r -> let rset' = addResult rset p r
+                              in  rset' `seq` return (rset', pend, st')
+                    Right ts -> return (rset, (p, ts):pend, st')
+              | otherwise -> do
+                  (res, st') <- checkDisjointRulePairTop st p needed
+                  let rset' = addResult rset p res
+                  rset' `seq` return (rset', pend, st')
 
-  (res, dt_state') <- foldM foldFn (S.empty, dt_state) rulePairs
+  (res0, pending, dt_state1) <- foldM foldFn (S.empty, [], dt_state) rulePairs
+
+  (res, dt_state') <-
+      case dt_state1 of
+        DTS_Yices m ys | not (null pending) -> do
+            let ps = reverse pending
+            (vs, ys') <- Yices.decideRulePairs ys (map snd ps)
+            return (foldl' (\ rset ((p, _), v) -> addResult rset p v) res0
+                           (zip ps vs),
+                    DTS_Yices m ys')
+        _ -> return (res0, dt_state1)
 
   return (res, dt_state')
 
@@ -158,6 +187,19 @@ checkDisjointRulePairTop s p needed = do
   --   fail "bad disjoint map"
   -- return (res, s')
 
+
+-- checkDisjointRulePairTop with Yices, except that a read pair that reaches
+-- the solver gives its converted conditions (for Yices.decideRulePairs)
+convertRulePairTop :: DisjointTestState -> (ARuleId, ARuleId) -> Bool ->
+                      IO (Either (Maybe Bool) (Yices.YTerm, Yices.YTerm),
+                          DisjointTestState)
+convertRulePairTop s@(DTS_Yices m yices_state) p needed
+  | supportIntersects m p = return (Left (Just False), s)
+  | otherwise = do (res, yices_state') <-
+                       Yices.convertRulePair yices_state p needed
+                   return (res, DTS_Yices m yices_state')
+convertRulePairTop s p needed = do (res, s') <- checkDisjointRulePairTop s p needed
+                                   return (Left res, s')
 
 checkDisjointRulePair :: DisjointTestState -> (ARuleId, ARuleId) -> Bool ->
                          IO (Maybe Bool, DisjointTestState)
