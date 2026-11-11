@@ -92,13 +92,14 @@ import Pragma
 import VModInfo(VPathInfo, VPort)
 import Deriving(derive)
 import SymTab
-import MakeSymTab(mkSymTab, mkSymTabWithWarnings, mkSymTabBase, mkSymTabExtend, cConvInst,
+import MakeSymTab(mkSymTab, mkSymTabWithWarnings, mkSymTabBase, mkSymTabExtend,
+                  mkSymTabExtendRewording, cConvInst,
                   getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck, CATFCache, mergeCATFCaches)
 import Eval(rnf)
 import RedundantProvisos(warnRedundantProvisos, checkRedundantProvisos)
 import PatMatchCheck(patternMatchWarnings)
-import CType(enableCanonIds, disableCanonIds, cTypeStats)
+import CType(enableCanonIds, disableCanonIds, canonIdsOpen, cTypeStats)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
@@ -224,6 +225,11 @@ dumpInternTable = when ("-trace-intern-table" `elem` progArgs) $ do
 -- typechecked package through the format 2 encoding (GenBin.checkRoundTrip).
 checkBinRoundTrip :: Bool
 checkBinRoundTrip = "-check-bin-roundtrip" `elem` progArgs
+
+-- Hidden: the table after CtxReduce reuses the imported layer without
+-- rebuilding its types for words (MakeSymTab.mkSymTabExtendRewording).
+noSymTabReword :: Bool
+noSymTabReword = "-no-symtab-reword" `elem` progArgs
 
 {-# NOINLINE internDumpFile #-}
 internDumpFile :: IORef (Maybe FilePath)
@@ -462,9 +468,9 @@ compilePackage
     -- to the symbol table.  We can't delay the building of the table
     -- until after all symbols are known, because these next stages need
     -- a table of the current symbols.  So this is the first of several
-    -- tables: the ones after GenWrap and Deriving extend this one's base
-    -- (its imported layer), and the one after CtxReduce is built fresh.
-    -- -rebuild-symtab builds every table fresh, for comparison.
+    -- tables: the ones after GenWrap, Deriving and CtxReduce extend this
+    -- one's base (its imported layer).  -rebuild-symtab builds every
+    -- table fresh, for comparison.
     --
     start flags DFsyminitial
     (symt00, symBase) <-
@@ -525,10 +531,17 @@ compilePackage
         cCtxReduceIO errh flags symt11 warnRedundantProvisos mder
     t <- dump errh flags t DFctxreduce dumpnames mctx
 
-    -- Rebuild the symbol table because CtxReduce has possibly changed
-    -- the types of top-level definitions
+    -- Extend the symbol table because CtxReduce has possibly changed
+    -- the types of top-level definitions and the heads and contexts of
+    -- local instances.
+    -- The gate is open now, so the reused layer's types get the words a
+    -- fresh build would give them (-no-symtab-reword: only those they have).
     start flags DFsympostctxreduce
-    symt <- mkSymTab errh mctx
+    gateOpen <- canonIdsOpen
+    symt <- case symBase of
+              Just b | gateOpen && not noSymTabReword ->
+                         mkSymTabExtendRewording errh b mctx
+              _ -> mkSymTabNext mctx
     t <- dump errh flags t DFsympostctxreduce dumpnames symt
 
     when (frontEndMode flags == SignatureOnly) $

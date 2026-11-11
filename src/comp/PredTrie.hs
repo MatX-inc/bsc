@@ -3,6 +3,7 @@ module PredTrie(
     QueryElem(..),
     PredTrie,
     buildPredTrie,
+    mapPredTrie,
     lookupPredTrie,
     lookupCandidates,
     allItems,
@@ -15,6 +16,7 @@ import Prelude hiding ((<>))
 #endif
 
 import qualified Data.Map.Strict as M
+import qualified Data.Map.Lazy as ML
 import qualified Data.Set as S
 
 import Error(internalError)
@@ -91,6 +93,14 @@ trieShape (Node _)  = "Node"
 sortTrieLeaves :: ([a] -> [a]) -> PredTrie a -> PredTrie a
 sortTrieLeaves f (Leaf xs) = Leaf (f xs)
 sortTrieLeaves f (Node m)  = Node (M.map (sortTrieLeaves f) m)
+
+-- | The trie with f applied to every item; the keys and each leaf's order
+-- are unchanged, so every lookup returns the images of the items it
+-- returned before, in the same order and with the same marks.  Lazy: a
+-- branch is mapped when a lookup first reaches it.
+mapPredTrie :: (a -> b) -> PredTrie a -> PredTrie b
+mapPredTrie f (Leaf xs) = Leaf (map f xs)
+mapPredTrie f (Node m) = Node (ML.map (mapPredTrie f) m)
 
 -- ---------------------------------------------------------------------------
 -- Querying the trie

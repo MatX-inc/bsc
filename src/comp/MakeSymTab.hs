@@ -2,7 +2,7 @@
 {-# LANGUAGE PatternGuards #-}
 module MakeSymTab(
                   mkSymTab, mkSymTabWithWarnings,
-                  SymTabBase, mkSymTabBase, mkSymTabExtend,
+                  SymTabBase, mkSymTabBase, mkSymTabExtend, mkSymTabExtendRewording,
                   getPackagesUsedInTypes,
                   cConvInst,
                   convCQType, convCQTypeWithAssumps,
@@ -18,6 +18,7 @@ import Control.Monad(when)
 import Control.Monad.Except(throwError)
 import qualified Data.Set as S
 import qualified Data.Map as M
+import qualified Data.IntMap as IM
 
 import Data.Either(partitionEithers)
 import PredTrie
@@ -77,14 +78,70 @@ mkSymTabWithWarnings errh p = fmap fst (mkSymTab' True Nothing errh p)
 mkSymTabBase :: ErrorHandle -> CPackage -> IO (SymTab, SymTabBase)
 mkSymTabBase = mkSymTab' True Nothing
 
--- mkSymTab of a package that GenWrap, addFuncWrap or Deriving made from
--- the base's package (the same imports; definitions added, changed or
--- removed), reusing the base's imported layer.  The table, its errors
--- and their order are mkSymTab's: the local layer is built the same way,
--- and only the imported classes with a local instance in either package
--- get their instance index rebuilt (see extendImpSyms).
+-- mkSymTab of a package that GenWrap, addFuncWrap, Deriving or CtxReduce
+-- made from the base's package (the same imports; definitions added,
+-- changed or removed), reusing the base's imported layer.  The table, its
+-- errors and their order are mkSymTab's: the local layer is built the
+-- same way, and only the imported classes with a local instance in either
+-- package get their instance index rebuilt (see extendImpSyms).
+--
+-- The base is built before CType's canonical-word gate opens, so the
+-- reused layer's type nodes that were evaluated by then carry no word
+-- (a fresh build after the gate gives them one); words only shortcut
+-- answers the structural paths also give.
 mkSymTabExtend :: ErrorHandle -> SymTabBase -> CPackage -> IO SymTab
 mkSymTabExtend errh b p = fmap fst (mkSymTab' False (Just b) errh p)
+
+-- mkSymTabExtend for a table built after the canonical-word gate opened
+-- (CType.canonIdsOpen): the reused layer's types are rebuilt where the
+-- gate now gives a node a word, as a fresh build would give it one.  The
+-- vars, cons, types and fields maps are mapped lazily, so an entry is
+-- rebuilt when it is first read; the imported instances of a class whose
+-- index is rebuilt anyway are rebuilt before it; and every other class
+-- keeps its index with each instance rebuilt when a lookup first returns
+-- it (classInstIndex's remap: no reordering, no overlap check).  Class
+-- records' superclass predicates stay unworded, as Preds' embedded
+-- records are in any table.
+mkSymTabExtendRewording :: ErrorHandle -> SymTabBase -> CPackage -> IO SymTab
+mkSymTabExtendRewording errh b p =
+    fmap fst (mkSymTab' False (Just (rewordBase b)) errh p)
+
+rewordBase :: SymTabBase -> SymTabBase
+rewordBase b = b { sb_simp = rewordSymTab (sb_simp b),
+                   sb_impInsts = M.map (map rewordQInst) (sb_impInsts b),
+                   sb_reword = True }
+  where
+    rewordSymTab (S vs cs ts fs cls) =
+        S (M.map rwVar vs) (M.map (map rwCon) cs) (M.map rwTI ts)
+          (M.map (map rwField) fs) cls
+    rwVar vi = vi { vi_assump = rwAssump (vi_assump vi) }
+    rwCon ci = ci { ci_assump = rwAssump (ci_assump ci) }
+    rwField fi = fi { fi_assump = rwAssump (fi_assump fi),
+                      fi_orig_type = fmap rewordType (fi_orig_type fi) }
+    rwTI ti = ti { ti_sort = rwSort (ti_sort ti) }
+    rwSort (TItype n t) = TItype n (rewordType t)
+    rwSort s = s
+    -- (lazy in the scheme: a fresh entry's Assump does not force it)
+    rwAssump (i :>: sc) = i :>: (let Forall ks qt = sc in Forall ks (rewordQual qt))
+    rewordQInst (QInst i qt) = QInst i (rewordQual qt)
+
+rewordQual :: Qual Type -> Qual Type
+rewordQual (ps :=> t) = map rewordPWP ps :=> rewordType t
+
+rewordPWP :: PredWithPositions -> PredWithPositions
+rewordPWP (PredWithPositions (IsIn c ts) poss anc) =
+    PredWithPositions (IsIn c (map rewordType ts)) poss anc
+
+-- An instance of class c with its types rebuilt for words and its head
+-- embedding c (as doInst makes it).  Lazy in the instance's predicates.
+rewordInst :: Class -> Inst -> Inst
+rewordInst c (Inst e vs q pkg) =
+    Inst e vs (let ps :=> IsIn _ ts = q in map rewordPWP ps :=> IsIn c (map rewordType ts)) pkg
+
+-- Hidden -no-symtab-reword-insts: leave the instances of the classes
+-- whose index is not rebuilt as they are (only the maps are reworded).
+rewordInstsOn :: Bool
+rewordInstsOn = not ("-no-symtab-reword-insts" `elem` progArgs)
 
 -- The imported layer of a compile's first table and what extending it
 -- needs.  Built lazily with that table, sharing its objects, so what
@@ -92,17 +149,22 @@ mkSymTabExtend errh b p = fmap fst (mkSymTab' False (Just b) errh p)
 data SymTabBase = SymTabBase {
         -- the pre-defined and imported items (mkSymTab's simp)
         sb_simp :: SymTab,
-        -- addImpSyms' classes with their errors, per signature in fold
-        -- order, with the signature's qualifier function
-        sb_sigCls :: [(Id -> [Id], [(Class, [EMsg])])],
+        -- addImpSyms' classes with their errors and instance remaps, per
+        -- signature in fold order, with the signature's qualifier function
+        sb_sigCls :: [(Id -> [Id], [ClsBuild])],
         -- the imported instances by class, in iinstqs order
         sb_impInsts :: QInstMap,
         -- the classes with a local instance in the base's package
         sb_locCls :: S.Set Id,
         -- all the types of sb_simp
         sb_preIds :: S.Set Id,
-        sb_iinstqs :: [(Id, CQType)]
+        sb_iinstqs :: [(Id, CQType)],
+        -- rebuild the reused layer's types for words (rewordBase)
+        sb_reword :: Bool
     }
+
+-- A class as getCls builds it, with its errors and its instance remap.
+type ClsBuild = (Class, [EMsg], InstRemap)
 
 mkSymTab' :: Bool -> Maybe SymTabBase -> ErrorHandle -> CPackage ->
              IO (SymTab, SymTabBase)
@@ -176,7 +238,8 @@ mkSymTab' warn mbase errh (CPackage mi _ imps impsigs _ ds _) =
                     sb_locCls = M.keysSet (groupQInsts locQInsts),
                     -- all types available to this packaged (predefined and imported)
                     sb_preIds = S.fromList (map fst (getAllTypes simp0)),
-                    sb_iinstqs = iinstqs0
+                    sb_iinstqs = iinstqs0,
+                    sb_reword = False
                 }
 
         -- An extension's local instances are converted against its own
@@ -240,7 +303,7 @@ mkSymTab' warn mbase errh (CPackage mi _ imps impsigs _ ds _) =
 
         -- previous symbol table with types and classes added
         (symT, locCls) = mkTypeSyms errh mkQuals mmi local_pkg iks ds insts simp
-        clsErrs = concatMap snd locCls
+        clsErrs = concat [ es | (_, es, _) <- locCls ]
 
         -- Check for type functions in non-determined instance head positions.
         -- They are only permitted in positions that are soley determined by
@@ -976,7 +1039,7 @@ mustConvCQType r _ qt =
 -- class added with its errors, in insertion order.
 mkTypeSyms :: ErrorHandle
            -> (Id -> [Id]) -> Maybe Id -> Maybe Id -> M.Map Id Kind -> [CDefn] -> QInstMap
-           -> SymTab -> (SymTab, [(Class, [EMsg])])
+           -> SymTab -> (SymTab, [ClsBuild])
 mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
     let importedTypeInfos = concatMap (getTI errh maybePackageName src_pkg r iks) defs
         clsErrs =
@@ -987,7 +1050,7 @@ mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
               -- the same TIstruct SClass payload as the defining compile.
               [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds ats [] (Just ms) qts
                     | CIclass incoh ps ik vs fds ats ms _ <- defs ]
-        (cls, _) = unzip clsErrs
+        cls = [ c | (c, _, _) <- clsErrs ]
         r = addClasses mkQuals (addTypes mkQuals s importedTypeInfos) cls
     in  (r, clsErrs)
 
@@ -1192,7 +1255,7 @@ getCls :: ErrorHandle -> Maybe Id -> Maybe Id -> M.Map Id Kind -> SymTab ->
           -- sort member list override: for CIclass (fields hidden), the
           -- defining package's list threaded through the signature
           Maybe [Id] ->
-          QInstMap -> (Class, [EMsg])
+          QInstMap -> ClsBuild
 getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
     let k = getK iks ik
         i = iKName ik
@@ -1254,8 +1317,8 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
             assocTypes = atf_infos
           }
         c = mkClass gi gc ga
-        ((gi, gc, ga), errs) = classInstIndex mi qi bss c (getQInsts qi qts)
-    in  (c, errs)
+        ((gi, gc, ga), errs, remap) = classInstIndex mi qi bss c (getQInsts qi qts)
+    in  (c, errs, remap)
 
 -- The instance fields of class c over its instances (in instance-list
 -- order: local, then imported) and the overlap errors among them.  The
@@ -1264,13 +1327,22 @@ type InstFns = ([TyVar] -> Maybe [TyVar] -> Pred -> [Inst],
                 [TyVar] -> Maybe [TyVar] -> Pred -> [Candidate Inst],
                 [Inst])
 
-classInstIndex :: Maybe Id -> Id -> [[Bool]] -> Class -> QInsts -> (InstFns, [EMsg])
+-- The fields over the same index with every instance replaced by its
+-- image under a function (lazily, each image made once): no reordering,
+-- no overlap check.
+type InstRemap = (Inst -> Inst) -> InstFns
+
+classInstIndex :: Maybe Id -> Id -> [[Bool]] -> Class -> QInsts ->
+                  (InstFns, [EMsg], InstRemap)
 classInstIndex mi qi bss c cls_qinsts =
        if useLegacyInstIndex
        then let (qinsts, errs) = getQInstsLegacy qi bss cls_qinsts
                 all_insts = map (doInst mi c) qinsts
                 genAll = \ _ _ _ -> all_insts
-            in ((genAll, candidatesFromInsts genAll, all_insts), errs)
+                remap f = let all' = map f all_insts
+                              genAll' = \ _ _ _ -> all'
+                          in  (genAll', candidatesFromInsts genAll', all')
+            in ((genAll, candidatesFromInsts genAll, all_insts), errs, remap)
        else let qinsts    = cls_qinsts
                 all_insts = map (doInst mi c) qinsts
                 -- Single trie over (index, QInst, Inst) triples, shared between
@@ -1356,12 +1428,19 @@ classInstIndex mi qi bss c cls_qinsts =
                 -- ruled out, so reducePred's walk still sees them, in the
                 -- same order, without trying them.
                 instOf (_, _, inst) = inst
-            in ((\ _ _ p ->
-                     [ inst | (_, _, inst) <- lookupPredTrie (predQuery S.empty p) trie ],
-                 \ _ _ p ->
-                     map (fmap instOf) (lookupCandidates (predQuery S.empty p) trie),
-                 all_insts),
-                errs)
+                fns t insts =
+                    (\ _ _ p ->
+                         [ inst | (_, _, inst) <- lookupPredTrie (predQuery S.empty p) t ],
+                     \ _ _ p ->
+                         map (fmap instOf) (lookupCandidates (predQuery S.empty p) t),
+                     insts)
+                -- (the trie's and the flat list's images are the same objects)
+                remap f = let all' = map f all_insts
+                              img = IM.fromList (zip [0 ..] all')
+                              at i = fromJustOrErr "MakeSymTab.classInstIndex: remap"
+                                                   (IM.lookup i img)
+                          in  fns (mapPredTrie (\ (i, q, _) -> (i, q, at i)) trie) all'
+            in (fns trie all_insts, errs, remap)
 
 -- ---------------
 
@@ -1520,8 +1599,8 @@ groundT _ _ = internalError "MakeSymTab.groundT"
 -----
 
 -- Also accumulates each signature's classes (mkTypeSyms), last first.
-addImpSyms :: ErrorHandle -> QInstMap -> (SymTab, [EMsg], [(Id -> [Id], [(Class, [EMsg])])]) ->
-              CImportedSignature -> (SymTab, [EMsg], [(Id -> [Id], [(Class, [EMsg])])])
+addImpSyms :: ErrorHandle -> QInstMap -> (SymTab, [EMsg], [(Id -> [Id], [ClsBuild])]) ->
+              CImportedSignature -> (SymTab, [EMsg], [(Id -> [Id], [ClsBuild])])
 addImpSyms errh insts (s, errs0, sigCls0) (CImpSign name qf (CSignature pkgName _ _ ds)) =
 --        trace ("DEBUG: addImpSyms: " ++ name ++ "\n") $
         let mi = Nothing
@@ -1533,7 +1612,7 @@ addImpSyms errh insts (s, errs0, sigCls0) (CImpSign name qf (CSignature pkgName 
                 then [name]
                 else mkDefaultQuals name
             (s1, cls1) = mkTypeSyms errh mkQuals Nothing src_pkg M.empty ds insts s
-            errs1 = concatMap snd cls1
+            errs1 = concat [ es | (_, es, _) <- cls1 ]
             s2 = symAddFields mkQuals mi src_pkg s1 ds
             -- NOTE: methods (symAddVars) before top-level values (addVars
             -- of getTopVars below): this order is LOAD-BEARING, exactly as
@@ -1561,13 +1640,18 @@ extendImpSyms b locInsts = (simp, concat [ es | (_, ocs) <- sigCls, (_, es) <- o
         -- scratch converts the local heads first)
         rebuilt = let ks = M.keysSet locInsts
                   in  ks `seq` S.union ks (sb_locCls b)
-        patch (c0, _) = (c, errs)
+        patch (c0, _, remap0) = (c, errs)
           where ci = typeclassId (name c0)
                 c = c0 { genInsts = gi, genCandidates = gc, getInsts = ga }
                 ((gi, gc, ga), errs)
                     | ci `S.member` rebuilt =
-                        classInstIndex Nothing ci (funDeps c0) c
-                            (getQInsts ci locInsts ++ getQInsts ci (sb_impInsts b))
+                        let (fns, es, _) =
+                                classInstIndex Nothing ci (funDeps c0) c
+                                    (getQInsts ci locInsts ++ getQInsts ci (sb_impInsts b))
+                        in  (fns, es)
+                    -- the same index over the instances with their types
+                    -- rebuilt for words, each head embedding c
+                    | sb_reword b && rewordInstsOn = (remap0 (rewordInst c), [])
                     | otherwise = ((genInsts c0, genCandidates c0, getInsts c0), [])
         sigCls = [ (mkQuals, map patch ocs) | (mkQuals, ocs) <- sb_sigCls b ]
         simp = foldl (\s (mkQuals, ocs) -> addClasses mkQuals s (map fst ocs))
