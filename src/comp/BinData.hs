@@ -2152,13 +2152,6 @@ apKey2 na nb
       internalError "BinData.apKey2: index out of range"
   | otherwise = (na `shiftL` 32) .|. nb
 
--- The Bin Integer encoding of an index, in Int arithmetic
-intBytes :: Int -> [Byte]
-intBytes n0 | n0 < 0 = internalError ("BinData.intBytes: " ++ show n0)
-            | otherwise = go n0 [endPos]
-  where go 0 acc = acc
-        go n acc = go (n `quot` 254) (fromIntegral (n `rem` 254) : acc)
-
 -- A table: its entries, their start offsets (u32, so far), and the
 -- next index
 data Table2 = Table2 { t2Entries :: !WBuf, t2Offsets :: !WBuf, t2Next :: !(IORef Int) }
@@ -2169,10 +2162,14 @@ newTable2 = do e <- wbNew 4096; o <- wbNew 4096; n <- newIORef 0
 
 -- Append an entry: its index
 addEntry2 :: Table2 -> BS.ByteString -> IO Int
-addEntry2 t bytes = do
+addEntry2 t bytes = addEntryWith2 t (`wbBS` bytes)
+
+-- Append the entry that f writes: its index
+addEntryWith2 :: Table2 -> (WBuf -> IO ()) -> IO Int
+addEntryWith2 t f = do
   off <- wbLen (t2Entries t)
   wbU32 (t2Offsets t) off
-  wbBS (t2Entries t) bytes
+  f (t2Entries t)
   n <- readIORef (t2Next t)
   writeIORef (t2Next t) $! n + 1
   return n
@@ -2206,8 +2203,10 @@ data W2 = W2
   , w2ITKeys   :: !(IORef (M.Map ITypeKey Int))
     -- values already resolved, most recent first, found by a content
     -- key and confirmed by exact comparison (see type2): ground types
-    -- by canonical word, TCon nodes and sorts by tycon name
+    -- by canonical word, type variables by name, TCon nodes and sorts by
+    -- tycon name
   , w2WordMemo  :: !(IORef (IM.IntMap [(Type, Int)]))
+  , w2VarMemo   :: !(IORef (IM.IntMap [(Type, Int)]))
   , w2TyConMemo :: !(IORef (M.Map (Int, Int) [(TyCon, Int)]))
   , w2SortMemo  :: !(IORef (M.Map (Int, Int) [(TISort, Int)]))
   , w2LeafKeys  :: !(IORef (M.Map LeafKey Int))  -- TyNum and TyStr nodes
@@ -2228,7 +2227,7 @@ newW2With :: Maybe (Position -> Bool) -> IO W2
 newW2With sel =
   W2 <$> newIORef IM.empty <*> newIORef M.empty <*> newIORef IM.empty
      <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty
-     <*> newIORef IM.empty <*> newIORef M.empty <*> newIORef M.empty
+     <*> newIORef IM.empty <*> newIORef IM.empty <*> newIORef M.empty <*> newIORef M.empty
      <*> newIORef M.empty <*> pure sel <*> newIORef False
      <*> newTable2 <*> newTable2 <*> newTable2 <*> newTable2 <*> newTable2
 
@@ -2261,13 +2260,13 @@ id2 w st i = do
     Just n -> return n
     Nothing -> do
       -- the payload of writeBytes: position, qualifier, base, properties
-      b <- if null props
+      n <- if null props
            then do np <- pos2 w st pos
                    nq <- stringIdx w (getIdQual i)
                    nb <- stringIdx w (getIdBase i)
-                   return (BS.pack (intBytes np ++ intBytes nq ++ intBytes nb ++ [0]))
-           else payload2 w (writeBytes i)
-      n <- addEntry2 (w2Ids st) b
+                   addEntryWith2 (w2Ids st) $ \e -> do
+                     wbIdx e np; wbIdx e nq; wbIdx e nb; wbByte e 0
+           else payload2 w (writeBytes i) >>= addEntry2 (w2Ids st)
       modifyIORef' (w2IdKeys st) (IM.insertWith M.union kb (M.singleton kr n))
       return n
 
@@ -2306,22 +2305,27 @@ itype2 w st t = do
 -- the value again would find and adds no entries.  A ground subtree is
 -- found by its canonical word (typeCanonWordNode: equal words mean
 -- Eq-equal types), so a repeated occurrence costs one comparison walk
--- instead of a lookup per node; a TCon node and a sort by their tycon's
--- name; and a TyNum or TyStr node, which carries no word when the parser
--- built it, by all the fields its payload holds.
+-- instead of a lookup per node; a type variable by its name; a TCon
+-- node and a sort by their tycon's name; and a TyNum or TyStr node, which
+-- carries no word when the parser built it, by all the fields its payload
+-- holds.
 type2 :: W -> W2 -> Type -> IO Int
 type2 w st t = do
   on <- memoOn2 st
   let wd = typeCanonWordNode t
-  if wd < 0 || not on then type2' w st t
-     else do
-       memoM <- readIORef (w2WordMemo st)
-       let memo = IM.findWithDefault [] wd memoM
-       case [ n | (t', n) <- memo, sameType t t' ] of
-         (n : _) -> return n
-         [] -> do n <- type2' w st t
-                  modifyIORef' (w2WordMemo st) (IM.insert wd (take 4 ((t, n) : memo)))
-                  return n
+  case t of
+    _ | not on -> type2' w st t
+      | wd >= 0 -> memo (w2WordMemo st) wd
+    TVar (TyVar i _ _) -> memo (w2VarMemo st) (fstringId (getIdBase i))
+    _ -> type2' w st t
+  where memo ref k = do
+          memoM <- readIORef ref
+          let cands = IM.findWithDefault [] k memoM
+          case [ n | (t', n) <- cands, sameType t t' ] of
+            (n : _) -> return n
+            [] -> do n <- type2' w st t
+                     modifyIORef' ref (IM.insert k (take 4 ((t, n) : cands)))
+                     return n
 
 type2' :: W -> W2 -> Type -> IO Int
 type2' w st t =
@@ -2334,7 +2338,7 @@ type2' w st t =
       case IM.lookup k m of
         Just n -> return n
         Nothing -> do
-          n <- addEntry2 (w2Types st) (BS.pack (2 : intBytes na ++ intBytes nb))
+          n <- addEntryWith2 (w2Types st) $ \e -> do wbByte e 2; wbIdx e na; wbIdx e nb
           modifyIORef' (w2ApKeys st) (IM.insert k n)
           return n
     TCon tc@(TyCon i mk s) -> do
@@ -2347,9 +2351,11 @@ type2' w st t =
         [] -> do
           ni <- id2 w st i
           ns <- sort2 w st i s
-          mkb <- payload2 w (writeBytes mk)
-          n <- typeEntry2 st (BS.concat [ BS.pack ([1, 0] ++ intBytes ni), mkb
-                                         , BS.pack (intBytes ns) ])
+          n <- entry2 w (w2Types st) (w2TyKeys st) $ Out $ \w' -> do
+                 b <- curBuf w'
+                 wbByte b 1; wbByte b 0; wbIdx b ni
+                 runOut (writeBytes mk) w'
+                 wbIdx b ns
           when on $
             modifyIORef' (w2TyConMemo st) (M.insert name (take 4 ((tc, n) : memo)))
           return n
@@ -2357,7 +2363,7 @@ type2' w st t =
     TCon (TyStr x p) -> leaf (leafKey 2 p (toInteger (fstringId x)))
     TDefMonad _ -> internalError "BinData.type2: TDefMonad"
     _ -> payload t
-  where payload u = payload2 w (writeBytes u) >>= typeEntry2 st
+  where payload u = entry2 w (w2Types st) (w2TyKeys st) (writeBytes u)
         leaf k = do
           on <- memoOn2 st
           m <- readIORef (w2LeafKeys st)
@@ -2377,16 +2383,20 @@ data LeafKey = LeafKey {-# UNPACK #-} !Int {-# UNPACK #-} !Int {-# UNPACK #-} !I
 leafKey :: Int -> Position -> Integer -> LeafKey
 leafKey tag (Position f l c lib) v = LeafKey tag l c (fstringId f) lib v
 
--- The index of a Type entry with this payload (other than a TAp)
-typeEntry2 :: W2 -> BS.ByteString -> IO Int
-typeEntry2 st b = do
-  let k = SBS.toShort b
-  m <- readIORef (w2TyKeys st)
+-- The index of the entry of table t whose payload is what out writes,
+-- found by that payload in ks: an entry with the same payload, or a new
+-- one
+entry2 :: W -> Table2 -> IORef (M.Map SBS.ShortByteString Int) -> Out () -> IO Int
+entry2 w t ks out = inBuffer w out $ \b -> do
+  len <- wbLen b
+  src <- wbPtr b
+  k <- SBS.packCStringLen (castPtr src, len)
+  m <- readIORef ks
   case M.lookup k m of
     Just n -> return n
     Nothing -> do
-      n <- addEntry2 (w2Types st) b
-      modifyIORef' (w2TyKeys st) (M.insert k n)
+      n <- addEntryWith2 t (\e -> wbCopy e src len)
+      writeIORef ks $! M.insert k n m
       return n
 
 sort2 :: W -> W2 -> Id -> TISort -> IO Int
@@ -2398,15 +2408,7 @@ sort2 w st i s = do
   case [ n | (s', n) <- memo, sameSort s s' ] of
     (n : _) -> return n
     [] -> do
-      b <- payload2 w (writeBytes s)
-      let k = SBS.toShort b
-      m <- readIORef (w2SortKeys st)
-      n <- case M.lookup k m of
-             Just n -> return n
-             Nothing -> do
-               n <- addEntry2 (w2Sorts st) b
-               modifyIORef' (w2SortKeys st) (M.insert k n)
-               return n
+      n <- entry2 w (w2Sorts st) (w2SortKeys st) (writeBytes s)
       when on $
         modifyIORef' (w2SortMemo st) (M.insert name (take 4 ((s, n) : memo)))
       return n
