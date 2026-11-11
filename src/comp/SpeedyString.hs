@@ -82,10 +82,17 @@ fromEnumName str n =
       _ -> fromString ('_' : str Prelude.++ show n)
 
 (++) :: SString -> SString -> SString
-s ++ s' = fromString $ (toString s) Prelude.++ (toString s')
+s ++ s' = concat [s, s']
 
+-- fromString . concatMap toString, on the packed spellings (see Byte
+-- operations)
 concat :: [SString] -> SString
-concat = fromString . concatMap toString
+concat ss = unsafePerformIO $
+            do ps <- partBytes ss
+               let !p = SBS.concat ps
+               case genKeyBytes p of
+                 Just k  -> internGen k
+                 Nothing -> internBytes (hashBytes p) p
 
 filter :: (Char -> Bool) -> SString -> SString
 filter pred s = fromString $ Prelude.filter pred (toString s)
@@ -309,8 +316,11 @@ packs p = go 0
     n = SBS.length p
     go i [] = i == n
     go i (c : cs) = i < n && codeAt p i == ord c &&
-                    go (i + width (byteAt p i)) cs
-    width b | b < 0x80 = 1
+                    go (i + leadWidth (byteAt p i)) cs
+
+-- the length of the code point whose first byte is b
+leadWidth :: Int -> Int
+leadWidth b | b < 0x80 = 1
             | b < 0xE0 = 2
             | b < 0xF0 = 3
             | otherwise = 4
@@ -333,6 +343,82 @@ byteAt p i = fromIntegral (SBS.unsafeIndex p i)
 -- shared, so that decoding an ASCII Char allocates no box
 asciiChars :: Array Int Char
 asciiChars = listArray (0, 0x7F) ['\0' .. '\x7F']
+
+
+-- Byte operations
+--
+-- concat (and so ++) joins the parts' packed spellings and interns the
+-- result from its bytes, building no String.  Packing is per code point,
+-- so the joined bytes pack the joined String, hashBytes gives its hashStr
+-- and genKeyBytes its genKey: the result gets the id, slot and stored
+-- bytes that fromString of the joined String gives it.
+--
+-- Order: fromString (concatMap toString ss) forces, inside its hash, each
+-- spine cell of ss and then that element (either may intern), and reads
+-- the element's spelling before the next cell; only then does it read the
+-- table and intern the result.  partBytes forces the cells and elements in
+-- that order and reads each spelling right after its element, before the
+-- result's lookup.  Reading a spelling interns nothing: toString and
+-- partBytes both find the entry with indexOf, and neither materializes a
+-- reserved id (an SString holds one only after internGen materialized it).
+
+-- Each part's bytes, in order.  Constant stack, as hashStr forced them.
+partBytes :: [SString] -> IO [SBS.ShortByteString]
+partBytes = go []
+  where go acc l0 =
+          do l <- evaluate l0
+             case l of
+               [] -> return (reverse acc)
+               s : ss -> do SString d <- evaluate s
+                            t <- readIORef table
+                            i <- indexOf d
+                            p <- if i < 0 || i >= tNext t then err
+                                                           else bytesOf t i
+                            go (p : acc) ss
+
+bytesOf :: Table -> Int -> IO SBS.ShortByteString
+bytesOf t i = do k <- unsafeRead (tKey t) i
+                 if k == 0 then unsafeRead (tStr t) i
+                           else return (packSpelling (genSpelling k))
+
+-- hashStr of the String p packs
+hashBytes :: SBS.ShortByteString -> Int
+hashBytes p = go 0 0
+  where n = SBS.length p
+        go i !r | i >= n = r
+                | otherwise = go (i + leadWidth (byteAt p i))
+                                 (r*16+r+codeAt p i)
+
+-- genKey of the String p packs.  A generated spelling is ASCII, and no
+-- other code point packs to an ASCII byte.
+genKeyBytes :: SBS.ShortByteString -> Maybe Int
+genKeyBytes p
+    | n < 8 || byteAt p 0 /= ord '_' || byteAt p 1 /= ord 't' ||
+      byteAt p 2 /= ord 'c' = Nothing
+    | prefix "tyvar" = num 1 8
+    | prefix "dict"  = num 2 7
+    | prefix "temp"  = num 3 7
+    | otherwise      = Nothing
+  where n = SBS.length p
+        prefix w = and (zipWith (\j c -> byteAt p j == ord c) [3 ..] w)
+        num tag o
+          | n - o == 1 && byteAt p o == ord '0' = Just (packGen tag 0)
+          | n > o && n - o <= 15 && byteAt p o /= ord '0' && all isD ds =
+              Just (packGen tag (foldl' (\a j -> a * 10 + digit j) 0 ds))
+          | otherwise = Nothing
+          where ds = [o .. n - 1]
+        digit j = byteAt p j - ord '0'
+        isD j = digit j >= 0 && digit j <= 9
+
+internBytes :: Int -> SBS.ShortByteString -> IO SString
+internBytes h p =
+    do t <- readIORef table
+       r <- probe t h (\i -> do k <- unsafeRead (tKey t) i
+                                if k /= 0 then return False else
+                                  fmap (== p) (unsafeRead (tStr t) i))
+       case r of
+         Right i -> return (SString (idOf i))
+         Left j -> fmap (SString . idOf) (insert t j h 0 p)
 
 
 -- Reserved ids
