@@ -352,6 +352,9 @@ defnBinders d = map getIdBase $ case d of
 -- except in default bodies (see pruneSigs).  Type variables and the sorts
 -- carried by TyCons are left out: a tyvar binds nothing, and a TyCon's
 -- sort comes from the entry that binds its name, which its name keeps.
+-- Inlined so that f is known at each use: otherwise every name is passed
+-- as a thunk and every step reboxes the accumulator.
+{-# INLINE foldDefnNames #-}
 foldDefnNames :: (a -> FString -> a) -> a -> CDefn -> a
 foldDefnNames f z0 d = defn (foldl' f z0 (defnBinders d))
   where
