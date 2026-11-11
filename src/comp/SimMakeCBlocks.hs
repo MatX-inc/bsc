@@ -108,7 +108,10 @@ simMakeCBlocks flags sim_system =
       top_block_id = sb_id top_block
 
       -- build the rest
-      other_blocks  = [ onePackageToBlock flags name_map full_mmap sim_system pkg
+      prune = simPruneSubtree flags
+      other_blocks  = [ if prune
+                        then stubPackageToBlock name_map pkg
+                        else onePackageToBlock flags name_map full_mmap sim_system pkg
                       | pkg <- pkgs
                       , pkg /= top_pkg
                       ]
@@ -186,8 +189,9 @@ simMakeCBlocks flags sim_system =
       -- make the SimCCClockGroups from the schedules
       clock_groups = map mkClockGroup scheds
 
-      -- make the clk gate info
-      gate_info = mkGateInfo pkg_map top_gates inst_map scheds
+      -- make the clk gate info (read only by the schedule files, which -c
+      -- does not write)
+      gate_info = if prune then [] else mkGateInfo pkg_map top_gates inst_map scheds
 
   in ((top_block:other_blocks), schedules, clock_groups, gate_info, top_block_id)
 
@@ -429,6 +433,21 @@ onePackageToBlock flags name_map full_meth_map ss pkg =
                               input_clks
                               gate_map
   in sim_block
+
+-- A block with only the name and instances of a SimPackage (see
+-- simPruneSubtree): enough to declare and construct it as a submodule and
+-- to find which subtrees have state.
+stubPackageToBlock :: NameMap -> SimPackage -> SimCCBlock
+stubPackageToBlock name_map pkg =
+  let class_name = getModuleName pkg
+      cmpFn a b = fst a `cmpIdByName` fst b
+      raw_avis = map snd $ sortBy cmpFn $ M.toList (sp_state_instances pkg)
+      state = map (mkState name_map) raw_avis ++
+              map (mkNoInlineState name_map) (sp_noinline_instances pkg)
+  in  SimCCBlock (M.findWithDefault 0 class_name name_map)
+                 class_name
+                 (\ args -> (class_name, args))
+                 [] state [] [] [] [] [] [] [] [] [] [] [] [] [] []
 
 -- Get the name of the SimPackage's module as a String
 getModuleName :: SimPackage -> String
@@ -746,7 +765,10 @@ mkScheduleStmts flags top_ifc top_vmeth_set top_ameth_set top_gates
                 internalError ("mkScheduleStmts: as = " ++ ppReadable as)
       gate_substs = mkGateSubstMap top_gates $
                         concatMap (di_clock_substs . snd) domain_infos
-      mkStmt0 = mkSchedStmts top_ifc top_vmeth_set top_ameth_set
+      -- see simPruneSubtree: only the root's own rule statements, which
+      -- are all that the root's files read
+      prune = simPruneSubtree flags
+      mkStmt0 = mkSchedStmts prune top_ifc top_vmeth_set top_ameth_set
                              inst_map full_def_map non_prim_calls
                              gate_substs sched_conflicts sched_ME_inhibits
       -- In -c mode the root is a reusable block, not a runnable top,
@@ -795,7 +817,7 @@ mkScheduleStmts flags top_ifc top_vmeth_set top_ameth_set top_gates
                init_port = (keepFires flags) || (any isUsedId ((maybeToList en) ++ wfs))
            if init_port then return (en,wfs) else Nothing
 
-      schedule_enables = mapMaybe getEnWFPort schedule_methods
+      schedule_enables = if prune then [] else mapMaybe getEnWFPort schedule_methods
 
       (pos_enable_stmts, neg_enable_stmts) =
           if (ss_posedge sim_sched)
@@ -804,8 +826,8 @@ mkScheduleStmts flags top_ifc top_vmeth_set top_ameth_set top_gates
 
       -- build the tick statements
       prims = concatMap (di_prims . snd) domain_infos
-      pos_tick_stmts = buildTickStmts True inst_map prims
-      neg_tick_stmts = buildTickStmts False inst_map prims
+      pos_tick_stmts = if prune then [] else buildTickStmts True inst_map prims
+      neg_tick_stmts = if prune then [] else buildTickStmts False inst_map prims
 
       -- build the conditional reset tick stmts
       inst_clk_map = M.fromList [((i,c), ac) | (i,(c,ac)) <- prims]
@@ -828,7 +850,8 @@ mkScheduleStmts flags top_ifc top_vmeth_set top_ameth_set top_gates
       -- combine the statements for each edge direction
       pos_stmt_group =
           SchedFns { sched_stmts = pos_enable_stmts ++ pos_rule_stmts
-                   , sched_ticks = pos_tick_stmts ++ [reset_tick_stmt]
+                   , sched_ticks = pos_tick_stmts ++
+                                   (if prune then [] else [reset_tick_stmt])
                    , sched_after = after_posedge_stmts
                    }
       neg_stmt_group =
@@ -1014,10 +1037,10 @@ addScope scope (SFSOutputReset rstId val) =
 
 
 -- Create the SimCCFnStmts that correspond to a schedule node
-mkSchedStmts :: [AIFace] -> S.Set AId -> S.Set AId -> InstModMap -> ModDefMap ->
+mkSchedStmts :: Bool -> [AIFace] -> S.Set AId -> S.Set AId -> InstModMap -> ModDefMap ->
                 M.Map ARuleId [AId] -> GateSubstMap ->
                 [(AId, [AId])] -> M.Map AId [AId] -> SchedNode -> [SimCCFnStmt]
-mkSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
+mkSchedStmts prune top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
              calls_by_rule gate_substs sched_conflicts sched_me_inhibits
              (Sched qual_rid) =
   let method_calls = fromMaybe [] (M.lookup qual_rid calls_by_rule)
@@ -1031,10 +1054,10 @@ mkSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
                                         inst_map full_dmap method_calls
                                         gate_substs sched_conflicts
                                         sched_me_inhibits qual_rid
-          else mkRuleSchedStmts inst_map full_dmap method_calls
+          else mkRuleSchedStmts prune inst_map full_dmap method_calls
                                 gate_substs sched_conflicts sched_me_inhibits
                                 qual_rid
-mkSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
+mkSchedStmts prune top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
              calls_by_rule gate_substs sched_conflicts sched_me_inhibits
              (Exec rid) =
   if (rid `S.member` top_vmeth_set)
@@ -1047,7 +1070,7 @@ mkSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
                                     inst_map
                                     full_dmap gate_substs sched_conflicts
                                     sched_me_inhibits rid
-       else mkRuleExecStmts top_ifc top_vmeth_set top_ameth_set
+       else mkRuleExecStmts prune top_ifc top_vmeth_set top_ameth_set
                             inst_map full_dmap
                             gate_substs sched_conflicts sched_me_inhibits
                             rid
@@ -1116,10 +1139,10 @@ mkActionMethodSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map
   in map (addScope top_blk_name) stmts
 
 -- Make statements for determining if a rule should fire
-mkRuleSchedStmts :: InstModMap -> ModDefMap -> [AId] ->
+mkRuleSchedStmts :: Bool -> InstModMap -> ModDefMap -> [AId] ->
                     GateSubstMap -> [(AId, [AId])] -> M.Map AId [AId] ->
                     AId -> [SimCCFnStmt]
-mkRuleSchedStmts inst_map full_dmap method_calls
+mkRuleSchedStmts prune inst_map full_dmap method_calls
                  gate_substs sched_conflicts sched_me_inhibits
                  qual_rid =
   let bit_type  = ATBit 1
@@ -1151,7 +1174,8 @@ mkRuleSchedStmts inst_map full_dmap method_calls
       -- replace any gate references with the substitute value
       -- (the substs have the full scope, so this step requires that the
       -- defs have had the scope added, as was just done above)
-      qual_stmts1 = substGateReferences gate_substs qual_stmts0
+      qual_stmts1 = if prune then qual_stmts0
+                    else substGateReferences gate_substs qual_stmts0
 
       -- ----------
       -- Mutual exclusion inhibitors to be added to the CF
@@ -1199,12 +1223,15 @@ mkRuleSchedStmts inst_map full_dmap method_calls
       rl_rdys = [ (setIdBase m fsEmpty, unQualId (mkRdyId m))
                 | m <- method_calls
                 ]
-      rdy_calls = [ addScope inst (SFSMethodCall obj rdy [])
+      -- (these read and write nothing, so a pruned root does without them)
+      rdy_calls = if prune then [] else
+                  [ addScope inst (SFSMethodCall obj rdy [])
                   | (obj,rdy) <- (nub rl_rdys) \\ wf_rdys
                   ]
   in  -- in addition to the submodule instance hierarchy,
       -- we add the top module instance to all identifiers
-      map (addScope top_blk_name) (rdy_calls ++ qual_stmts2)
+      -- (a pruned root's statements stay unscoped: see topScope)
+      map (topScope prune) (rdy_calls ++ qual_stmts2)
 
 -- Make statements for computing value method outputs
 mkValueMethodExecStmts :: [AIFace] -> S.Set AId -> S.Set AId ->
@@ -1234,15 +1261,23 @@ mkActionMethodExecStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
   in [cond_stmt]
 
 -- Make statements for executing a rule
-mkRuleExecStmts :: [AIFace] -> S.Set AId -> S.Set AId ->
+mkRuleExecStmts :: Bool -> [AIFace] -> S.Set AId -> S.Set AId ->
                    InstModMap -> ModDefMap -> GateSubstMap ->
                    [(AId, [AId])] -> M.Map AId [AId] ->
                    AId -> [SimCCFnStmt]
-mkRuleExecStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
+mkRuleExecStmts prune top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
                 gate_substs sched_conflicts sched_me_inhibits rid =
   let wf = mkIdWillFire rid
       cond_stmt = SFSCond (ASDef (ATBit 1) wf) [SFSRuleExec rid] []
-  in map (addScope top_blk_name) [cond_stmt]
+  in map (topScope prune) [cond_stmt]
+
+-- Add the top instance scope, except for a pruned root (see
+-- simPruneSubtree), whose schedule holds only the root's own statements:
+-- the "top" qualifiers would be interned in an order that depends on the
+-- pruned descendants' statements, so its Ids stay unqualified.
+topScope :: Bool -> SimCCFnStmt -> SimCCFnStmt
+topScope True  = id
+topScope False = addScope top_blk_name
 
 -- Create the SimCCFnStmt that corresponds to a group of tick calls
 -- for a clock.

@@ -530,6 +530,7 @@ traceflags = [
           "trace-inst-tree",
           "trace-instance-overlap",
           "trace-intern-table",
+          "trace-sim-full-subtree",
           "legacy-inst-index",
           "legacy-defer-instances",
           "trace-kind-inference",

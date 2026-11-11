@@ -34,7 +34,8 @@ import AScheduleInfo
 import AUses(MethodId(..))
 import Params(isConstAExpr)
 import SimPackage
-import SimPrimitiveModules(getPrimDomainInfo, checkBluesimPrimitives)
+import SimPrimitiveModules(getPrimDomainInfo, primDomainNames, checkBluesimPrimitives)
+import qualified SpeedyString as SS
 import SimCCBlock(SimCCBlock(..), primBlocks)
 import SchedInfo (methodConflictInfo, sSB)
 import ABin (ABin(..), ABinModInfo(..))
@@ -135,7 +136,19 @@ simExpand errh flags topname fabis = do
                      guard (not (null x))
                      return x
 
-    simscheds <- simExpandSched modinfos_used_by_name hiermap instmap topname
+    -- see simPruneSubtree: merge only the root and its primitive instances.
+    -- Merging the clock domains below the root interns names the root may
+    -- intern later, so they are still merged over the whole hierarchy
+    -- unless all of those names are interned already.
+    m_graph <- if not (simPruneSubtree flags) then return Nothing else do
+        let isPrim (_, m) = m `elem` prim_names
+            graph_hiermap =
+                M.adjust (\(is, nis) -> (filter isPrim is, nis)) topname hiermap
+        interned <- mapM SS.isInterned $
+                      subtreeDomainNames prim_names hiermap
+                                         modinfos_used_by_name topname
+        return (Just (graph_hiermap, not (and interned)))
+    simscheds <- simExpandSched' m_graph modinfos_used_by_name hiermap instmap topname
 
     return $ SimSystem { ssys_packages    = pkg_map
                        , ssys_schedules   = simscheds
@@ -281,11 +294,50 @@ simExpandABin errh flags (abi,ver) = do
     return simpkg
 
 
+-- The names that merging the clock domains of the instances below a -c root
+-- can intern (see simExpand): the domain names of primitives, the ports of
+-- connected input clocks, and the wires of output clocks.
+subtreeDomainNames :: [String] -> HierMap -> [(String, (ABinModInfo,String))] ->
+                      String -> [String]
+subtreeDomainNames prim_names hiermap abis topmod =
+    let children m = [ c | (_, c) <- maybe [] fst (M.lookup m hiermap)
+                         , c `notElem` prim_names ]
+        reach seen [] = seen
+        reach seen (m:ms)
+            | m `S.member` seen = reach seen ms
+            | otherwise = reach (S.insert m seen) (children m ++ ms)
+        avis m = maybe [] (apkg_state_instances . abmi_apkg . fst) (lookup m abis)
+        modName avi = getVNameString (vName (avi_vmi avi))
+        isPrimAvi avi = modName avi `elem` prim_names
+        units = filter (not . isPrimAvi) (avis topmod) ++
+                concat [ avis m | m <- S.toList (reach S.empty [topmod]), m /= topmod ]
+        unitNames avi =
+            let vmi = avi_vmi avi
+                inst = getIdBaseString (avi_vname avi)
+                prim = if isPrimAvi avi then primDomainNames (modName avi) else []
+                ins = [ n | (ClockArg cid, _) <- getInstArgs avi
+                          , Just (Just (osc, g)) <- [lookup cid (input_clocks (vClk vmi))]
+                          , n <- getVNameString osc : either (const []) (\v -> [getVNameString v]) g ]
+                wire w = [w, inst ++ "$" ++ w]
+                outs = concat [ "$" : wire (getVNameString o) ++
+                                maybe [] (wire . getVNameString) mg
+                              | Clock cid <- vFields vmi
+                              , let (o, mg) = lookupOutputClockWires cid vmi ]
+            in  prim ++ ins ++ outs
+    in  nub (concatMap unitNames units)
+
 -- ===============
 
 simExpandSched :: [(String, (ABinModInfo,String))] -> HierMap -> InstModMap ->
                   String -> IO [SimSchedule]
-simExpandSched abis0 hiermap instmap topmod = do
+simExpandSched = simExpandSched' Nothing
+
+-- With a second hierarchy, the schedule is merged over it instead (and
+-- the domain info too, unless the flag asks for the first's).
+simExpandSched' :: Maybe (HierMap, Bool) ->
+                   [(String, (ABinModInfo,String))] -> HierMap -> InstModMap ->
+                   String -> IO [SimSchedule]
+simExpandSched' m_graph_hiermap abis0 hiermap instmap topmod = do
 
     let abis = [ (n,mi) | (n,(mi,_)) <- abis0 ]
 
@@ -293,7 +345,7 @@ simExpandSched abis0 hiermap instmap topmod = do
     -- merge the schedules
 
     combscheds_by_domain -- :: [(AClock, CombSchedInfo)]
-        <- mergeSchedules abis hiermap instmap topmod
+        <- mergeSchedules m_graph_hiermap abis hiermap instmap topmod
 
     -- ----------
     -- create the SimSchedule
@@ -755,9 +807,10 @@ substOutputClockInDomainInfo parent_clk child_clk parent_dom_info =
 
 -- ----------
 
-mergeSchedules :: [(String, ABinModInfo)] -> HierMap -> InstModMap ->
+mergeSchedules :: Maybe (HierMap, Bool) ->
+                  [(String, ABinModInfo)] -> HierMap -> InstModMap ->
                   String -> IO [(AClock, CombSchedInfo)]
-mergeSchedules abis hiermap instmap topmod = do
+mergeSchedules m_graph_hiermap abis hiermap instmap topmod = do
     -- ----------
     -- trace
 
@@ -771,10 +824,18 @@ mergeSchedules abis hiermap instmap topmod = do
     -- ----------
 
     let pu_map = mkParentUseModMap abis
-        smap = combineSchedInfos abis hiermap instmap pu_map topmod M.empty
-        combschedinfo = case (M.lookup topmod smap) of
-                            Just x -> x
-                            Nothing -> internalError "combschedinfo"
+        topCSI hm =
+            case (M.lookup topmod (combineSchedInfos abis hm instmap pu_map
+                                                     topmod M.empty)) of
+              Just x -> x
+              Nothing -> internalError "combschedinfo"
+        full_csi = topCSI hiermap
+        combschedinfo =
+            case m_graph_hiermap of
+              Nothing -> full_csi
+              Just (ghm, False) -> topCSI ghm
+              Just (ghm, True) -> (topCSI ghm) { csi_domain_info_map =
+                                                     csi_domain_info_map full_csi }
 
     -- ----------
     -- trace of the result

@@ -25,7 +25,9 @@ module SimPackage(
                   getSimPackageInputs,
                   getPortInfo,
 
-                  exclRulesDBToDisjRulesDB
+                  exclRulesDBToDisjRulesDB,
+
+                  simPruneSubtree
                  ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
@@ -34,6 +36,8 @@ import Prelude hiding ((<>))
 
 import Eval
 import ErrorUtil(internalError)
+import Flags(Flags(..))
+import IOUtil(progArgs)
 import PPrint
 import Id
 import IdPrint
@@ -53,6 +57,16 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 
 -- import Debug.Trace
+
+-- Under -c only the root's files are written, and they need nothing from
+-- the instances below the root beyond each block's name and instance list:
+-- the schedule is built for the root's own rules only and descendant blocks
+-- are stubs.  The root's schedule reads decide member-vs-stack-local, so
+-- this relies on -keep-fires (CF/WF defs never move).
+simPruneSubtree :: Flags -> Bool
+simPruneSubtree flags =
+    blockCodegen flags && keepFires flags && not (genSysC flags) &&
+    ("-trace-sim-full-subtree" `notElem` progArgs)
 
 -- This is a map from AId to the ADef which defines the value for that AId
 type DefMap = M.Map AId ADef

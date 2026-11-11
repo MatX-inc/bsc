@@ -2,7 +2,8 @@
 {-# LANGUAGE BangPatterns #-}
 module SpeedyString(SString, toString, fromString, (++), concat, filter,
                     InternSnapshot(..), snapshotInternState, validSnapshot,
-                    renderInternTable, internCount, internedSince) where
+                    renderInternTable, internCount, internedSince,
+                    isInterned) where
 
 import Prelude hiding((++), concat, filter)
 import qualified Prelude((++), filter)
@@ -110,6 +111,12 @@ freshInt :: IO Int
 freshInt = do fresh <- readVar nextInt
               writeVar nextInt (fresh + 1)
               return fresh
+
+-- Whether s has been interned so far (interning nothing).
+isInterned :: String -> IO Bool
+isInterned s = do h <- evaluate (hashStr s)
+                  m <- readVar sstrings
+                  return $ maybe False (any ((== s) . fst)) (M.lookup h m)
 
 -- The number of strings interned so far.
 internCount :: IO Int
