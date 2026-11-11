@@ -212,7 +212,7 @@ satisfyXStream dvs es ps = do
 
 -- break up preds into those affected by a substitution and those not
 -- in order to loop more efficiently in satisfy'
-split_rs :: Subst -> [VPred] -> ([VPred], [VPred])
+split_rs :: Types t => Subst -> [t] -> ([t], [t])
 split_rs s' rs  = partition affected_pred rs
           -- should only be a few since classes are small
           -- and the substitution comes from a single reducePred
@@ -401,28 +401,64 @@ joinCtxs bound_tyvars vps = fmap (\ (rs, s, sb, _) -> (rs, s, sb)) (joinCtxsN bo
 joinCtxsN :: [TyVar] -> [VPred] -> Maybe ([VPred], Subst, SolvedBind, (Int, Int))
 joinCtxsN bound_tyvars vps = fmap fst (joinCtxsNG bound_tyvars vps)
 
+-- A goal of the join rounds.  Its blobs are, per fundep row of its class,
+-- the row's sort key (the class, the row, the types at the row's
+-- undetermined positions) beside the goal.
+class JoinGoal g where
+    goalPred :: g -> VPred
+    goalBlobs :: g -> [((Class, Int, [Type]), VPred)]
+    toGoal :: VPred -> g
+
+instance JoinGoal VPred where
+    goalPred = id
+    goalBlobs = predBlobs
+    toGoal = id
+
+-- A goal with its blobs, built lazily and once: the rounds after a join
+-- carry over the goals it left unchanged, which keep their blobs instead
+-- of being keyed again by every round.  A key holds the goal's own class
+-- and type objects and building it forces no type, so the sort compares
+-- the same objects in the same order as with keys built afresh.
+data JGoal = JGoal VPred [((Class, Int, [Type]), VPred)]
+
+instance JoinGoal JGoal where
+    goalPred (JGoal vp _) = vp
+    goalBlobs (JGoal _ bs) = bs
+    toGoal vp = JGoal vp (predBlobs vp)
+
+instance Types JGoal where
+    apSub s (JGoal vp _) = toGoal (apSub s vp)
+    tv (JGoal vp _) = tv vp
+
+{-# INLINE predBlobs #-}
+predBlobs :: VPred -> [((Class, Int, [Type]), VPred)]
+predBlobs vp@(VPred _ (PredWithPositions (IsIn c ts) _ _)) =
+    [ ((c, n, boolCompress (map not bs) ts), vp) | (n, bs) <- zip [0..] (funDeps c) ]
+
 -- joinCtxsN, with the joined group: its fundep row and its members, in
 -- the order the group lists them (the order of "vps", the sort being stable)
-joinCtxsNG :: [TyVar] -> [VPred] ->
-              Maybe (([VPred], Subst, SolvedBind, (Int, Int)), (Int, [VPred], VPred, VPred))
+{-# SPECIALIZE joinCtxsNG :: [TyVar] -> [VPred] ->
+      Maybe (([VPred], Subst, SolvedBind, (Int, Int)), (Int, [VPred], VPred, VPred)) #-}
+{-# SPECIALIZE joinCtxsNG :: [TyVar] -> [JGoal] ->
+      Maybe (([JGoal], Subst, SolvedBind, (Int, Int)), (Int, [VPred], VPred, VPred)) #-}
+joinCtxsNG :: JoinGoal g => [TyVar] -> [g] ->
+              Maybe (([g], Subst, SolvedBind, (Int, Int)), (Int, [VPred], VPred, VPred))
 joinCtxsNG bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
-  where blob_list = [((c, n, boolCompress (map not bs) ts), vp) |
-                     vp@(VPred _ (PredWithPositions (IsIn c ts) _ _)) <- vps,
-                     (n, bs) <- zip [0..] (funDeps c)]
+  where blob_list = [ b | g <- vps, b <- goalBlobs g ]
         joined_blob_list = joinByFst blob_list
         matchBlobs ((_,n,_), gvs) =
             fmap (\ (r, (v1, v2)) -> (r, (n, gvs, v1, v2))) (joinInGroup bound_tyvars vps n gvs)
 
 -- uniquePairs because we need to try every possible pair of matching VPreds
-joinInGroup :: [TyVar] -> [VPred] -> Int -> [VPred] ->
-               Maybe (([VPred], Subst, SolvedBind, (Int, Int)), (VPred, VPred))
+joinInGroup :: JoinGoal g => [TyVar] -> [g] -> Int -> [VPred] ->
+               Maybe (([g], Subst, SolvedBind, (Int, Int)), (VPred, VPred))
 joinInGroup bound_tyvars vps n gvs =
     listToMaybe $ mapMaybe (\ (v1, v2) -> fmap (\ r -> (r, (v1, v2)))
                                                 (joinPair bound_tyvars vps n v1 v2)) $
         uniquePairs gvs
 
-joinPair :: [TyVar] -> [VPred] -> Int -> VPred -> VPred ->
-            Maybe ([VPred], Subst, SolvedBind, (Int, Int))
+joinPair :: JoinGoal g => [TyVar] -> [g] -> Int -> VPred -> VPred ->
+            Maybe ([g], Subst, SolvedBind, (Int, Int))
 joinPair bound_tyvars vps n v1@(VPred i pp@(PredWithPositions (IsIn c ts) pos anc))
                             v2@(VPred i' pp'@(PredWithPositions (IsIn _ ts') pos' anc')) = do
           let bs = funDeps c !! n
@@ -433,7 +469,8 @@ joinPair bound_tyvars vps n v1@(VPred i pp@(PredWithPositions (IsIn c ts) pos an
           let p'' = vpWith v2 (PredWithPositions (IsIn c ts') (pos' ++ pos) (anc' ++ anc))
               -- (these comparisons intern the names; a pool hit makes
               -- them again, in this order: joinForce)
-              rs  = p'':[ vp | vp@(VPred j _) <- vps, j /= i && j /= i']
+              rs  = toGoal p'':[ g | g <- vps, residual (goalPred g) ]
+              residual (VPred j _) = j /= i && j /= i'
               pr = removePredPositions pp
               b = (i, predToType (apSub s pr), CVar i')
               sb = mkSolvedBind b False -- Joining equivalent predicates, not recursive
@@ -1496,19 +1533,35 @@ joinNeededCtxs ps = do
 
 -- with the recipe of the bindings (DictPool.Recipe)
 joinNeededCtxsR :: [VPred] -> TI ([VPred], Subst, SolvedBinds, Recipe)
-joinNeededCtxsR = joinNeededCtxs' nullSubst emptySBs RcEmpty
+joinNeededCtxsR ps = do
+  bvs <- getBoundTVs
+  case (joinCtxsNG bvs ps) of
+    Nothing ->
+        return (ps, nullSubst, emptySBs, RcEmpty)
+    Just ((ps', s', sb, nn), g) -> do
+        -- most calls join nothing, so only the rounds after a join carry
+        -- their goals' blobs
+        (ps'', s, sbs, rc) <- joinNext bvs nullSubst emptySBs RcEmpty (map vpNum ps)
+                                       ((map toGoal ps', s', sb, nn), g)
+        return (map goalPred ps'', s, sbs, rc)
 
-joinNeededCtxs' :: Subst -> SolvedBinds -> Recipe -> [VPred]
-                -> TI ([VPred], Subst, SolvedBinds, Recipe)
+joinNeededCtxs' :: Subst -> SolvedBinds -> Recipe -> [JGoal]
+                -> TI ([JGoal], Subst, SolvedBinds, Recipe)
 joinNeededCtxs' s sbs rc ps = do
   bvs <- getBoundTVs
   case (joinCtxsNG bvs ps) of
     Nothing ->
         return (ps, s, sbs, rc)
-    Just ((ps', s', sb, (nb, nu)), (n, gvs, v1, v2)) -> do
+    Just j -> joinNext bvs s sbs rc (map (vpNum . goalPred) ps) j
+
+-- A round's join, of goals numbered "ns", and the rounds after it.
+joinNext :: [TyVar] -> Subst -> SolvedBinds -> Recipe -> [Int]
+         -> (([JGoal], Subst, SolvedBind, (Int, Int)), (Int, [VPred], VPred, VPred))
+         -> TI ([JGoal], Subst, SolvedBinds, Recipe)
+joinNext bvs s sbs rc ns ((ps', s', sb, (nb, nu)), (n, gvs, v1, v2)) = do
         -- the next joinCtxsN, splitting ps', runs this one's residual
         -- filter, which interns the residual names (DictPool.RJoin)
-        logJoin nb nu (map vpNum ps)
+        logJoin nb nu ns
         let (changed_rs, unchanged_rs) = split_rs s' ps'
             rs' = (apSub s' changed_rs) ++ unchanged_rs
             s1 = s' @@ s
@@ -1521,7 +1574,7 @@ joinNeededCtxs' s sbs rc ps = do
         -- went), so reading s' below forces nothing new.
         rs' `seq`
           if any (not . null . tv) ps' && isNullSubst s'
-            then joinBatch bvs s sbs1 rc1 rs' n (groupAfter v1 v2 (head ps') gvs)
+            then joinBatch bvs s sbs1 rc1 rs' n (groupAfter v1 v2 (goalPred (head ps')) gvs)
             else joinNeededCtxs' s1 sbs1 rc1 rs'
 
 -- The rounds after one whose substitution was null.  Such a round
@@ -1535,20 +1588,20 @@ joinNeededCtxs' s sbs rc ps = do
 -- comparisons already made on the same objects, so try G directly.
 -- "cur" is the goal list the next round would get, "gm" G's members in
 -- its order (p'' first, as the stable sort puts it).
-joinBatch :: [TyVar] -> Subst -> SolvedBinds -> Recipe -> [VPred] -> Int -> [VPred]
-          -> TI ([VPred], Subst, SolvedBinds, Recipe)
+joinBatch :: [TyVar] -> Subst -> SolvedBinds -> Recipe -> [JGoal] -> Int -> [VPred]
+          -> TI ([JGoal], Subst, SolvedBinds, Recipe)
 joinBatch bvs s sbs rc cur n gm =
   case joinInGroup bvs cur n gm of
     Nothing -> joinNeededCtxs' s sbs rc cur
     Just ((ps', s', sb, (nb, nu)), (v1, v2)) -> do
-        logJoin nb nu (map vpNum cur)
+        logJoin nb nu (map (vpNum . goalPred) cur)
         let sbs1 = fromSB sb <++ sbs
             rc1 = RcMerge (RcJoin nb nu sb) rc
         -- every goal's "tv" was computed by an earlier round's scan; the
         -- next round's scan would force s' at the first goal with a type
         -- variable, with nothing effectful before it
         if any (not . null . tv) ps' && isNullSubst s'
-          then joinBatch bvs s sbs1 rc1 ps' n (groupAfter v1 v2 (head ps') gm)
+          then joinBatch bvs s sbs1 rc1 ps' n (groupAfter v1 v2 (goalPred (head ps')) gm)
           else let (changed_rs, unchanged_rs) = split_rs s' ps'
                    rs' = (apSub s' changed_rs) ++ unchanged_rs
                in  joinNeededCtxs' (s' @@ s) sbs1 rc1 rs'
