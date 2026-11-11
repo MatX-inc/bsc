@@ -1,9 +1,11 @@
 -- Package of utility functions used by iConvLet in IConv
 module IConvLet(
-                docycles, reorderDs, unpoly
+                docycles, reorderDs, unpoly,
+                mayHaveComplicatedLetrecCycle
             ) where
 
 import qualified Data.List as List
+import qualified Data.Set as S
 
 import Util(mapSnd)
 import FStringCompat(concatFString)
@@ -13,11 +15,122 @@ import Error(internalError, ErrMsg(..), ErrorHandle, bsErrorUnsafe)
 import Position
 import CSyntax
 import CSyntaxUtil(mkPairType)
+import CFreeVars(getFVDl)
+import SCC(scc)
 import Id
 import PreStrings(fsDollar)
 import PreIds(idPrimFst, idPrimSnd, idPrimPair)
 -- import Debug.Trace
 
+
+-- Whether converting the package may report
+-- EMutualRecursionComplicatedClause (see many_cycle): some letrec group
+-- has a cycle through a binding whose clauses take arguments, patterns
+-- or qualifiers.  The graph is the one iConvLet builds, and iConvPackage
+-- converts only the CValueSign (CDefT) definitions.  -check-only, which
+-- does not convert the package, converts it when this holds.
+mayHaveComplicatedLetrecCycle :: CPackage -> Bool
+mayHaveComplicatedLetrecCycle (CPackage _ _ _ _ _ ds _) =
+    or [ lrc d | CValueSign d@(CDefT {}) <- ds ]
+
+complicatedCycle :: [CDefl] -> Bool
+complicatedCycle ds =
+    let complicated = [ i | CLValueSign (CDefT i _ _ cs) _ <- ds, not (simple cs) ]
+        simple [CClause [] [] _] = True
+        simple _ = False
+        is = S.fromList [ i | CLValueSign (CDefT i _ _ _) _ <- ds ]
+        graph = [ (i, filter (/= i) (S.toList (snd (getFVDl d) `S.intersection` is)))
+                | d@(CLValueSign (CDefT i _ _ _) _) <- ds ]
+        cyclic = S.fromList (concat [ c | c@(_:_:_) <- scc graph ])
+    in  not (null complicated) && any (`S.member` cyclic) complicated
+
+-- Whether any letrec group in it has a complicated cycle
+class LetrecCycles a where
+    lrc :: a -> Bool
+
+instance (LetrecCycles a) => LetrecCycles [a] where
+    lrc = any lrc
+
+instance (LetrecCycles a) => LetrecCycles (Maybe a) where
+    lrc = maybe False lrc
+
+instance LetrecCycles CDef where
+    lrc (CDefT _ _ _ cs) = lrc cs
+    lrc (CDef _ _ cs) = lrc cs
+
+instance LetrecCycles CClause where
+    lrc (CClause _ qs e) = lrc qs || lrc e
+
+instance LetrecCycles CQual where
+    lrc (CQGen _ _ e) = lrc e
+    lrc (CQFilter e) = lrc e
+
+instance LetrecCycles CDefl where
+    lrc (CLValueSign d qs) = lrc d || lrc qs
+    lrc (CLValue _ cs qs) = lrc cs || lrc qs
+    lrc (CLMatch _ e) = lrc e
+
+instance LetrecCycles CCaseArm where
+    lrc (CCaseArm _ qs e) = lrc qs || lrc e
+
+instance LetrecCycles CStmt where
+    lrc (CSBindT _ me _ _ e) = lrc me || lrc e
+    lrc (CSBind _ me _ e) = lrc me || lrc e
+    lrc (CSletseq ds) = lrc ds
+    lrc (CSletrec ds) = complicatedCycle ds || lrc ds
+    lrc (CSExpr me e) = lrc me || lrc e
+
+instance LetrecCycles CMStmt where
+    lrc (CMStmt s) = lrc s
+    lrc (CMrules e) = lrc e
+    lrc (CMinterface e) = lrc e
+    lrc (CMTupleInterface _ es) = lrc es
+
+instance LetrecCycles CRule where
+    lrc (CRule _ me qs e) = lrc me || lrc qs || lrc e
+    lrc (CRuleNest _ me qs rs) = lrc me || lrc qs || lrc rs
+
+instance LetrecCycles COp where
+    lrc (CRand e) = lrc e
+    lrc (CRator _ _) = False
+
+instance LetrecCycles CExpr where
+    lrc e =
+      case e of
+        Cletrec ds b -> complicatedCycle ds || lrc ds || lrc b
+        Cletseq ds b -> lrc ds || lrc b
+        CLam _ b -> lrc b
+        CLamT _ _ b -> lrc b
+        CSelect b _ -> lrc b
+        CCon _ es -> lrc es
+        Ccase _ b arms -> lrc b || lrc arms
+        CStruct _ _ fs -> lrc (map snd fs)
+        CStructUpd b fs -> lrc b || lrc (map snd fs)
+        Cwrite _ a b -> lrc a || lrc b
+        CApply f es -> lrc f || lrc es
+        CTaskApply f es -> lrc f || lrc es
+        CTaskApplyT f _ es -> lrc f || lrc es
+        CBinOp a _ b -> lrc a || lrc b
+        CHasType b _ -> lrc b
+        Cif _ a b c -> lrc a || lrc b || lrc c
+        CSub _ a b -> lrc a || lrc b
+        CSub2 a b c -> lrc a || lrc b || lrc c
+        CSubUpdate _ a (h, l) b -> lrc a || lrc h || lrc l || lrc b
+        Cmodule _ ss -> lrc ss
+        Cinterface _ _ ds -> lrc ds
+        CmoduleVerilog m _ _ _ as _ _ _ -> lrc m || lrc (map snd as)
+        Cdo _ ss -> lrc ss
+        Caction _ ss -> lrc ss
+        Crules _ rs -> lrc rs
+        COper ops -> lrc ops
+        CCon1 _ _ b -> lrc b
+        CSelectTT _ b _ -> lrc b
+        CConT _ _ es -> lrc es
+        CStructT _ fs -> lrc (map snd fs)
+        CmoduleVerilogT _ m _ _ _ as _ _ _ -> lrc m || lrc (map snd as)
+        CTApply f _ -> lrc f
+        -- the rest hold no expressions
+        _ -> False
 
 docycles :: ErrorHandle -> [CDefl] -> [[Id]] -> [CDefl]
 docycles errh ds cycles =

@@ -1,0 +1,12 @@
+package FrontEndLetrec where
+
+-- A local mutual recursion through a definition with an argument, which
+-- the full compile cannot convert after typecheck (see frontend.exp)
+
+import List
+
+seven :: Bool
+seven = let evens :: Bool -> List Bool
+            evens x = cons x odds
+            odds :: List Bool = evens True
+        in odds !! 3

@@ -1205,6 +1205,11 @@ externalFlags = [
          (Arg "module" (\f s -> Left (f {codegenNames = codegenNames f ++ [s]})) (Just (FRTListString codegenNames)),
           "generate code for `module' from its elaborated .ba file", Visible)),
 
+        ("check-only",
+         (Toggle (\f x -> f {frontEndMode = if x then CheckOnly else FullCompile})
+                 (showIfTrue ((== CheckOnly) . frontEndMode)),
+          "typecheck against imported .bi files and write the result (.chk)", Hidden)),
+
         ("check-assert",
          (Toggle (\f x -> f {testAssert=x}) (showIfTrue testAssert),
           "test assertions with the Assert library", Visible)),

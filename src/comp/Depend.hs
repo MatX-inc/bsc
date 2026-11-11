@@ -28,7 +28,7 @@ import FStringCompat
 import Lex
 import Parse
 import FileNameUtil(hasDotSuf, dropSuf, baseName, dirName,
-                    bscSrcSuffix, bsvSrcSuffix, binSuffix, biSuffix,
+                    bscSrcSuffix, bsvSrcSuffix, binSuffix, biSuffix, chkSuffix,
                     mkAName, mkVName, mkVPIHName, mkVPICName,
                     createEncodedFullFilePath)
 import FileIOUtil(readFilesPath, readBinFilePath, readFileCatch, writeFileCatch,
@@ -176,11 +176,17 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
     let mkdname dir suf = dir ++ "/" ++ baseName (dropSuf fname) ++ "." ++ suf
 
     -- find the mod time of the bo file (either in same dir or in the bdir)
-    tbo_samedir <- getModTime (dropSuf fname ++ "." ++ ifcSuffix flags)
-    tbo_bdir <- case (bdir flags) of
-                    Nothing -> return Nothing
-                    Just dir -> getModTime (mkdname dir (ifcSuffix flags))
-    let tbo = if (isJust tbo_bdir) then tbo_bdir else tbo_samedir
+    let getIfcTime suf = do
+            t_samedir <- getModTime (dropSuf fname ++ "." ++ suf)
+            t_bdir <- case (bdir flags) of
+                          Nothing -> return Nothing
+                          Just dir -> getModTime (mkdname dir suf)
+            return (if (isJust t_bdir) then t_bdir else t_samedir)
+    -- in -check-only, a package is checked when both its .bi and its .chk
+    -- are current (missing is older than any date)
+    tbo <- if frontEndMode flags `elem` [CheckOnly, CheckWithSignature]
+           then min <$> getIfcTime biSuffix <*> getIfcTime chkSuffix
+           else getIfcTime (ifcSuffix flags)
 
     -- include the prelude to avoid failures when predule was updated.
     let prelude
@@ -227,6 +233,10 @@ transClose errh flags (errs,done) (n:ns) = do
 -- this file after codegen.
 -- XXX This needs to be kept in sync with what the backend actually does!
 getGenFs :: Flags -> PkgInfo -> [String]
+getGenFs flags _
+    -- the front-end-only modes write no generated files (checkForeign
+    -- writes no foreign .ba)
+    | frontEndMode flags /= FullCompile = []
 getGenFs flags pi =
     let prefix = dirName (fileName pi) ++ "/"
         getName = getIdString . unQualId

@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module GenBin(genBinFile, readBinFile, readBinFileStrict, readBinPackage,
+module GenBin(genBinFile, forceSignatures, readBinFile, readBinFileStrict, readBinPackage,
               CPackageBin(..), stripImpSigs, checkRoundTrip, sortSched) where
 
 import Control.Monad(when)
@@ -48,6 +48,12 @@ genBinFile errh remapF fn bi_sig bo_sig ipkg = do
     let poisoned = any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]
     bytes <- encodeWithIO remapF (bi_sig, bo_sig, BoPackage poisoned ipkg)
     writeBinaryFileCatch errh fn (BL.append (BL.fromStrict headerBS) bytes)
+
+-- Force the two signatures as genBinFile encodes them, for the errors
+-- that raises (such as an ambiguous constructor in a class default), in
+-- a compile that writes no .bo
+forceSignatures :: CSignature -> CSignature -> IO ()
+forceSignatures bi_sig bo_sig = () <$ encodeWithIO (const id) (bi_sig, bo_sig)
 
 -- The authenticating hash is a fold over every byte after the tag,
 -- computed here (eagerly) from the raw bytes: it does not depend on
