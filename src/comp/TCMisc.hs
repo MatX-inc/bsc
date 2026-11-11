@@ -419,16 +419,20 @@ instance JoinGoal VPred where
 -- of being keyed again by every round.  A key holds the goal's own class
 -- and type objects and building it forces no type, so the sort compares
 -- the same objects in the same order as with keys built afresh.
-data JGoal = JGoal VPred [((Class, Int, [Type]), VPred)]
+-- Its "tv" is kept the same way, for every round's split_rs: a scan
+-- reading further than earlier rounds did makes the comparisons a fresh
+-- list would make there, and the cells before only repeat comparisons
+-- already made on the same type variables.
+data JGoal = JGoal VPred [((Class, Int, [Type]), VPred)] [TyVar]
 
 instance JoinGoal JGoal where
-    goalPred (JGoal vp _) = vp
-    goalBlobs (JGoal _ bs) = bs
-    toGoal vp = JGoal vp (predBlobs vp)
+    goalPred (JGoal vp _ _) = vp
+    goalBlobs (JGoal _ bs _) = bs
+    toGoal vp = JGoal vp (predBlobs vp) (tv vp)
 
 instance Types JGoal where
-    apSub s (JGoal vp _) = toGoal (apSub s vp)
-    tv (JGoal vp _) = tv vp
+    apSub s (JGoal vp _ _) = toGoal (apSub s vp)
+    tv (JGoal _ _ vs) = vs
 
 {-# INLINE predBlobs #-}
 predBlobs :: VPred -> [((Class, Int, [Type]), VPred)]
