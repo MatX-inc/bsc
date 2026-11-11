@@ -85,20 +85,40 @@ instance HasPosition Position where
 -- #############################################################################
 
 
+-- The first useful position, else the first non-empty one, else noPosition.
 firstPos :: [Position] -> Position
-firstPos ps = case filter (/= noPosition) ps of
-              []  -> noPosition
-              [p] -> p
-              psf -> firstPos2 psf
+firstPos [] = noPosition
+firstPos (p:ps) = firstPosWith id p ps
 
-firstPos2 :: [Position] -> Position
-firstPos2 [] = noPosition
-firstPos2 ps = case filter isUsefulPosition ps of
-              []  -> -- trace("none " ++ (show (length ps)) ++ "\n") $
-                     head ps
-              [p] -> p
-              filtered -> -- trace("first " ++ (show (length filtered)) ++ "\n") $
-                          head filtered
+-- firstPosWith f p xs == firstPos (p : map f xs), building no lists.
+-- Forces left to right up to the second useful non-empty position, else all:
+-- callers rely on exactly this demand, since forcing order affects interning.
+{-# INLINE firstPosWith #-}
+firstPosWith :: (a -> Position) -> Position -> [a] -> Position
+firstPosWith f p0 xs0 = start p0 xs0
+  where
+    start !p xs | isNoPosition p = none xs
+                | isUsefulPosition p = useful p xs
+                | otherwise = notUseful p xs
+    none [] = noPosition
+    none (x:xs) = start (f x) xs
+    -- q: the first non-empty position, not useful
+    notUseful q [] = q
+    notUseful q (x:xs) = case f x of
+                           !p | usefulNonEmpty p -> useful p xs
+                              | otherwise -> notUseful q xs
+    -- q: the first useful non-empty position
+    useful q [] = q
+    useful q (x:xs) = case f x of
+                        !p | usefulNonEmpty p -> q
+                           | otherwise -> useful q xs
+    usefulNonEmpty p = not (isNoPosition p) && isUsefulPosition p
+
+-- p == noPosition, out of line: inlined, its case on the fsEmpty CAF lets
+-- liberate-case copy an inlining caller's recursive group, allocating per call.
+{-# NOINLINE isNoPosition #-}
+isNoPosition :: Position -> Bool
+isNoPosition p = p == noPosition
 
 -- #############################################################################
 -- #
