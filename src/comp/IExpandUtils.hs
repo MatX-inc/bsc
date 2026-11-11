@@ -96,6 +96,7 @@ import CSyntax(CExpr)
 import CType(TISort(..), StructSubType(..))
 import VModInfo
 import ISyntax
+import IType(iTypeAtfFree)
 import ISyntaxUtil
 import Prim
 import Wires
@@ -2584,6 +2585,12 @@ updHeap tag (p, HeapData ref) e = do
 -- Type normalization function used in evaluation.
 -- Fully traverse and reduce all type function applications where possible.
 fullTypeNormalizer :: Flags -> SymTab -> IATFCache -> IType -> Changed IType
+-- An interior node with no type function anywhere below normalizes to
+-- itself.  Its bit is a strict field computed from its children at
+-- construction, so they are already evaluated: the walk this skips
+-- would force nothing new.
+fullTypeNormalizer _ _ _ t@(ITAp _ _) | iTypeAtfFree t = Unchanged
+fullTypeNormalizer _ _ _ t@(ITForAll _ _ _) | iTypeAtfFree t = Unchanged
 fullTypeNormalizer _ _ _ (ITCon _ _ _) = Unchanged
 fullTypeNormalizer _ _ _ (ITNum _)     = Unchanged
 fullTypeNormalizer _ _ _ (ITStr _)     = Unchanged
