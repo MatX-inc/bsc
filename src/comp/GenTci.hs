@@ -278,8 +278,9 @@ pruneSigs seeds exportAll lsigs = do
                      return (e, strs)
                 | (e, (_, d)) <- zip [0 ..] entries, let defs = defaultBodies d, not (null defs) ]
     let entryArr = listArray (0, nEntries - 1) (map snd entries) :: Array Int CDefn
-        byName = IM.fromListWith (++)
-                   [ (fstringId b, [e]) | (e, (_, d)) <- zip [0 ..] entries, b <- defnBinders d ]
+        byName = foldl' (\m (e, (_, d)) ->
+                           foldDefnBinders (\m' b -> IM.insertWith (++) (fstringId (getIdBase b)) [e] m') m d)
+                        IM.empty (zip [0 ..] entries)
         -- add a name to N, queueing the entries that bind it
         add k@(Keep ns q) x =
             let i = fstringId x
@@ -287,7 +288,7 @@ pruneSigs seeds exportAll lsigs = do
                 else Keep (IS.insert i ns) (IM.findWithDefault [] i byName ++ q)
         isRdy b = takeFString 4 b == "RDY_"
         k0 = [ e | (e, (whole, d)) <- zip [0 ..] entries
-                 , isInstance d || whole || any isRdy (defnBinders d) ]
+                 , isInstance d || whole || foldDefnBinders (\r b -> r || isRdy (getIdBase b)) False d ]
         -- keep the queued entries, then everything their names reach
         go kept (Keep ns []) = (ns, kept)
         go kept (Keep ns (e : q))
@@ -331,22 +332,27 @@ defaultBodies (Cstruct _ _ _ _ fs _) = concatMap cf_default fs
 defaultBodies (Cclass _ _ _ _ _ _ fs) = concatMap cf_default fs
 defaultBodies _ = []
 
--- The base names an entry binds (as F1 of the keep rule matches them)
-defnBinders :: CDefn -> [FString]
-defnBinders d = map getIdBase $ case d of
-    Ctype ik _ _ -> [iKName ik]
-    CItype ik _ _ -> [iKName ik]
-    CprimType ik -> [iKName ik]
+-- A strict left fold over the Ids an entry binds, in order (F1 of the keep
+-- rule matches them by base name)
+{-# INLINE foldDefnBinders #-}
+foldDefnBinders :: (a -> Id -> a) -> a -> CDefn -> a
+foldDefnBinders f z d = case d of
+    Ctype ik _ _ -> f z (iKName ik)
+    CItype ik _ _ -> f z (iKName ik)
+    CprimType ik -> f z (iKName ik)
     Cdata { cd_name = ik, cd_original_summands = ocs, cd_internal_summands = ics } ->
-        iKName ik : concatMap cos_names ocs ++ concat [ fs | Just fs <- map cos_field_names ocs ]
-                  ++ concatMap cis_names ics
-    Cstruct _ _ ik _ fs _ -> iKName ik : map cf_name fs
-    Cclass _ _ ik _ _ ats fs -> iKName ik : map ca_name ats ++ map cf_name fs
-    CIclass _ _ ik _ _ ats ms _ -> iKName ik : map ca_name ats ++ ms
-    CIValueSign i _ -> [i]
-    Cforeign { cforg_name = i } -> [i]
-    Cprimitive i _ -> [i]
-    _ -> []
+        let z1 = foldl' (\a c -> fs a (cos_names c)) (f z (iKName ik)) ocs
+            z2 = foldl' (\a c -> maybe a (fs a) (cos_field_names c)) z1 ocs
+        in  foldl' (\a c -> fs a (cis_names c)) z2 ics
+    Cstruct _ _ ik _ flds _ -> foldl' (\a fl -> f a (cf_name fl)) (f z (iKName ik)) flds
+    Cclass _ _ ik _ _ ats flds ->
+        foldl' (\a fl -> f a (cf_name fl)) (foldl' (\a at -> f a (ca_name at)) (f z (iKName ik)) ats) flds
+    CIclass _ _ ik _ _ ats ms _ -> fs (foldl' (\a at -> f a (ca_name at)) (f z (iKName ik)) ats) ms
+    CIValueSign i _ -> f z i
+    Cforeign { cforg_name = i } -> f z i
+    Cprimitive i _ -> f z i
+    _ -> z
+  where fs = foldl' f
 
 -- A strict left fold over the base names an entry binds or mentions,
 -- except in default bodies (see pruneSigs).  Type variables and the sorts
@@ -356,7 +362,7 @@ defnBinders d = map getIdBase $ case d of
 -- as a thunk and every step reboxes the accumulator.
 {-# INLINE foldDefnNames #-}
 foldDefnNames :: (a -> FString -> a) -> a -> CDefn -> a
-foldDefnNames f z0 d = defn (foldl' f z0 (defnBinders d))
+foldDefnNames f z0 d = defn (foldDefnBinders (\z i -> f z (getIdBase i)) z0 d)
   where
     defn z = case d of
       Ctype _ _ t -> ty z t
