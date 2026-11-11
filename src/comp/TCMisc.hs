@@ -384,13 +384,32 @@ joinCtxs bound_tyvars vps = fmap (\ (rs, s, sb, _) -> (rs, s, sb)) (joinCtxsN bo
 -- joinCtxs, with the numbers the bound and the used dictionary names
 -- were drawn with (vpNum)
 joinCtxsN :: [TyVar] -> [VPred] -> Maybe ([VPred], Subst, SolvedBind, (Int, Int))
-joinCtxsN bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
+joinCtxsN bound_tyvars vps = fmap fst (joinCtxsNG bound_tyvars vps)
+
+-- joinCtxsN, with the joined group: its fundep row and its members, in
+-- the order the group lists them (the order of "vps", the sort being stable)
+joinCtxsNG :: [TyVar] -> [VPred] ->
+              Maybe (([VPred], Subst, SolvedBind, (Int, Int)), (Int, [VPred], VPred, VPred))
+joinCtxsNG bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
   where blob_list = [((c, n, boolCompress (map not bs) ts), vp) |
                      vp@(VPred _ (PredWithPositions (IsIn c ts) _ _)) <- vps,
                      (n, bs) <- zip [0..] (funDeps c)]
         joined_blob_list = joinByFst blob_list
-        matchPreds n v1@(VPred i pp@(PredWithPositions (IsIn c ts) pos anc))
-                     v2@(VPred i' pp'@(PredWithPositions (IsIn _ ts') pos' anc')) = do
+        matchBlobs ((_,n,_), gvs) =
+            fmap (\ (r, (v1, v2)) -> (r, (n, gvs, v1, v2))) (joinInGroup bound_tyvars vps n gvs)
+
+-- uniquePairs because we need to try every possible pair of matching VPreds
+joinInGroup :: [TyVar] -> [VPred] -> Int -> [VPred] ->
+               Maybe (([VPred], Subst, SolvedBind, (Int, Int)), (VPred, VPred))
+joinInGroup bound_tyvars vps n gvs =
+    listToMaybe $ mapMaybe (\ (v1, v2) -> fmap (\ r -> (r, (v1, v2)))
+                                                (joinPair bound_tyvars vps n v1 v2)) $
+        uniquePairs gvs
+
+joinPair :: [TyVar] -> [VPred] -> Int -> VPred -> VPred ->
+            Maybe ([VPred], Subst, SolvedBind, (Int, Int))
+joinPair bound_tyvars vps n v1@(VPred i pp@(PredWithPositions (IsIn c ts) pos anc))
+                            v2@(VPred i' pp'@(PredWithPositions (IsIn _ ts') pos' anc')) = do
           let bs = funDeps c !! n
           -- we could try to capture and use numeric equalities here
           -- but that would require being on the TI monad,
@@ -404,8 +423,6 @@ joinCtxsN bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
               b = (i, predToType (apSub s pr), CVar i')
               sb = mkSolvedBind b False -- Joining equivalent predicates, not recursive
           return (rs, s, sb, (vpNum v1, vpNum v2))
-        -- uniquePairs because we need to try every possible pair of matching VPreds
-        matchBlobs ((_,n,_), vps) = listToMaybe $ mapMaybe (uncurry (matchPreds n)) $ uniquePairs vps
 
 -- This function is successful if the list of VPred is empty, indicating
 -- that the pred was fully satisfied.  In which case, the bindings and subst
@@ -1458,16 +1475,61 @@ joinNeededCtxs' :: Subst -> SolvedBinds -> Recipe -> [VPred]
                 -> TI ([VPred], Subst, SolvedBinds, Recipe)
 joinNeededCtxs' s sbs rc ps = do
   bvs <- getBoundTVs
-  case (joinCtxsN bvs ps) of
+  case (joinCtxsNG bvs ps) of
     Nothing ->
         return (ps, s, sbs, rc)
-    Just (ps', s', sb, (nb, nu)) -> do
+    Just ((ps', s', sb, (nb, nu)), (n, gvs, v1, v2)) -> do
         -- the next joinCtxsN, splitting ps', runs this one's residual
         -- filter, which interns the residual names (DictPool.RJoin)
         logJoin nb nu (map vpNum ps)
         let (changed_rs, unchanged_rs) = split_rs s' ps'
             rs' = (apSub s' changed_rs) ++ unchanged_rs
-        joinNeededCtxs' (s' @@ s) (fromSB sb <++ sbs) (RcMerge (RcJoin nb nu sb) rc) rs'
+            s1 = s' @@ s
+            sbs1 = fromSB sb <++ sbs
+            rc1 = RcMerge (RcJoin nb nu sb) rc
+        -- The next round's first act is to force rs' (split_rs's scan:
+        -- the residual filter and "tv" of each goal, in order); do it
+        -- here.  The scan has then forced s' if any goal it reached has a
+        -- type variable (the first such goal is no further than the scan
+        -- went), so reading s' below forces nothing new.
+        rs' `seq`
+          if any (not . null . tv) ps' && isNullSubst s'
+            then joinBatch bvs s sbs1 rc1 rs' n (groupAfter v1 v2 (head ps') gvs)
+            else joinNeededCtxs' s1 sbs1 rc1 rs'
+
+-- The rounds after one whose substitution was null.  Such a round
+-- changed nothing but the joined group G: the goals in the groups sorted
+-- before G are the same goals, or a joined goal p'' with the types of the
+-- goal it replaced, so no pair of them joins (every such pair was tried
+-- and failed in the round the batch started from), and the next round's
+-- join is G's first joining pair, if G has one.  The round's sort, its
+-- scan of the groups before G and its split_rs (on goals whose "tv" an
+-- earlier round computed, with a null substitution) only repeat
+-- comparisons already made on the same objects, so try G directly.
+-- "cur" is the goal list the next round would get, "gm" G's members in
+-- its order (p'' first, as the stable sort puts it).
+joinBatch :: [TyVar] -> Subst -> SolvedBinds -> Recipe -> [VPred] -> Int -> [VPred]
+          -> TI ([VPred], Subst, SolvedBinds, Recipe)
+joinBatch bvs s sbs rc cur n gm =
+  case joinInGroup bvs cur n gm of
+    Nothing -> joinNeededCtxs' s sbs rc cur
+    Just ((ps', s', sb, (nb, nu)), (v1, v2)) -> do
+        logJoin nb nu (map vpNum cur)
+        let sbs1 = fromSB sb <++ sbs
+            rc1 = RcMerge (RcJoin nb nu sb) rc
+        -- every goal's "tv" was computed by an earlier round's scan; the
+        -- next round's scan would force s' at the first goal with a type
+        -- variable, with nothing effectful before it
+        if any (not . null . tv) ps' && isNullSubst s'
+          then joinBatch bvs s sbs1 rc1 ps' n (groupAfter v1 v2 (head ps') gm)
+          else let (changed_rs, unchanged_rs) = split_rs s' ps'
+                   rs' = (apSub s' changed_rs) ++ unchanged_rs
+               in  joinNeededCtxs' (s' @@ s) sbs1 rc1 rs'
+
+-- The joined group after joining v1 and v2 into p'': p'' first, then the
+-- members the residual filter keeps (joinPair's), in order.
+groupAfter :: VPred -> VPred -> VPred -> [VPred] -> [VPred]
+groupAfter (VPred i _) (VPred i' _) p'' gm = p'' : [ vp | vp@(VPred j _) <- gm, j /= i && j /= i' ]
 
 -- A join, for the recording windows: the numbers of the joined pair's
 -- dictionaries and of the residual goals'.  (joinCtxsN has evaluated
