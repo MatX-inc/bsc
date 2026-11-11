@@ -6,6 +6,7 @@ module BExpr(BExpr, bNothing, bAdd, bImplies, bImpliesB,
 import Prelude hiding ((<>))
 #endif
 
+import Data.List(sortBy)
 import Util(isOrdSubset, mergeOrdNoDup)
 import PPrint
 import ISyntax
@@ -97,9 +98,15 @@ bImpliesB b (A es) = all (bImplies b) es
 
 bTerms = getAnds . norm
 
+-- The sorted, duplicate-free conjuncts.  A stable sort of the leaves,
+-- keeping the leftmost of each run of equal terms, gives the list the
+-- pairwise merges did, in O(n log n) instead of O(n^2) for a chain.
 getAnds :: IExpr a -> [IExpr a]
-getAnds (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = mergeOrdNoDup (getAnds e1) (getAnds e2)
-getAnds e = [e]
+getAnds e = dedupFirst (sortBy compare (leaves e []))
+  where leaves (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) acc = leaves e1 (leaves e2 acc)
+        leaves x acc = x : acc
+        dedupFirst (x:xs) = x : dedupFirst (dropWhile (\y -> compare x y == EQ) xs)
+        dedupFirst [] = []
 
 norm :: IExpr a -> IExpr a
 norm (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]) = invert e
