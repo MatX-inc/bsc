@@ -190,6 +190,7 @@ library
     GenBi
     GenBin
     GenChk
+    GenTci
     GenForeign
     GenFuncWrap
     GenSign

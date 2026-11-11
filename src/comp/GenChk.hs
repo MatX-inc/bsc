@@ -29,8 +29,9 @@ headerBS = B.pack header
 
 data ChkFile = ChkFile
     { chk_name        :: Id
-      -- the .bi files the check read: the import closure with each
-      -- package's .bi hash (as in a .bi file)
+      -- the files the check read: the import closure with each
+      -- package's .bi hash (as in a .bi file), or, for a check of a .tci,
+      -- the package with the hash of its .tci
     , chk_imports     :: [(Id, String)]
       -- whether the check passed: False when typecheck reported errors
       -- and continued (-continue-after-errors)

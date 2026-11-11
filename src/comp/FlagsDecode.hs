@@ -14,6 +14,7 @@ module FlagsDecode(
 
              showFlags, showFlagsRaw,
              showFlagsLst, showFlagsAllLst,
+             traceflags,
              getFlagValueString,
         ) where
 
@@ -33,7 +34,7 @@ import Data.List.Split(splitWhen)
 import Version(bluespec)
 import Backend
 import FileNameUtil(hasDotSuf, takeSuf,
-                    bscSrcSuffix, bsvSrcSuffix,
+                    bscSrcSuffix, bsvSrcSuffix, tciSuffix,
                     cSuffix, cxxSuffix, cppSuffix, ccSuffix,
                     objSuffix, arSuffix,
                     verSuffix, verSuffix2, verSuffix3, verSuffix4, verSuffix5,
@@ -184,6 +185,13 @@ decodeArgs prog args cdir =
                                        else (warnings, DUsage)
                       else case (partition isBlueSrcFile anames) of
                              ([name], []) -> (warnings, checkBSrcFlags flags name)
+                             -- the typecheck input that -signature-only wrote
+                             ([], [name]) | hasDotSuf tciSuffix name ->
+                                 if (frontEndMode flags /= CheckOnly) || updCheck flags
+                                 then (warnings, DError [(cmdPosition, EGeneric
+                                          ("A .tci file is checked with -check-only " ++
+                                           "and without -u: " ++ name))])
+                                 else (warnings, checkBSrcFlags flags name)
                              ([name], names) ->
                                  -- This is the case of a Bluespec source name accompanied
                                  -- by more things which are not Bluespec source names.
@@ -543,6 +551,9 @@ traceflags = [
           "trace-inst-tree",
           "trace-instance-overlap",
           "trace-intern-table",
+          "trace-tci",
+          "tci-full-imports",
+          "tci-keep-positions",
           "trace-sim-full-subtree",
           "legacy-inst-index",
           "legacy-defer-instances",
@@ -832,7 +843,9 @@ decodeFlags (('-':s):ss) (sets,warnings, bad, flags) =
           case flagtype of
             Toggle doflag _ -> decodeFlags ss (s:sets, perhaps_warn, bad, doflag flags True)
             NoArg dofunc _ ->
-              if (null ss) || (isFlag (head ss)) || (isSrcFile (head ss)) then
+              -- a .tci is the input of -check-only, not an argument
+              if (null ss) || (isFlag (head ss)) || (isSrcFile (head ss)) ||
+                 (hasDotSuf tciSuffix (head ss)) then
                 case (dofunc flags) of
                   Left flags' -> decodeFlags ss (s:sets, perhaps_warn, bad, flags')
                   Right emsg -> decodeFlags ss (sets, perhaps_warn, emsg:bad, flags)

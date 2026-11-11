@@ -12,6 +12,7 @@ module BinData ( Byte
                , section
                , Lazy(..), toBinLazy, fromBinLazy
                , encodeWithIO, encodeV2, encodeV2With
+               , encodeV2Strip, keepPositions
                , decode, decodeStrict, decodeWithHash
                ) where
 
@@ -2072,6 +2073,46 @@ encodeV2With remapF x = do
   runOut (toBin x) w
   finishW2 w st
 
+-- Format 2 with no remap, where every position the selector picks is
+-- stored with its line and column dropped (its file kept), except under
+-- keepPositions.  Also returns every string written, in first-occurrence
+-- order.  The output is a pure function of the stored (stripped) content:
+-- keys are taken after stripping, and the memos of type2, which compare
+-- unstripped values, are bypassed under keepPositions.
+encodeV2Strip :: (Bin a) => Maybe (Position -> Bool) -> a ->
+                 IO (B.ByteString, [FString])
+encodeV2Strip sel x = do
+  st <- newW2With sel
+  w <- newWWith (const id) (Just st)
+  runOut (toBin x) w
+  strs <- readIORef (wStrs w)
+  bs <- finishW2 w st
+  return (bs, reverse strs)
+
+-- Write with every position kept, under encodeV2Strip
+keepPositions :: Out () -> Out ()
+keepPositions out = Out $ \w ->
+  case wV2 w of
+    Nothing -> runOut out w
+    Just st -> do
+      old <- readIORef (w2Keep st)
+      writeIORef (w2Keep st) True
+      runOut out w
+      writeIORef (w2Keep st) old
+
+-- A position as encodeV2Strip stores it
+stripPos2 :: W2 -> Position -> IO Position
+stripPos2 st p =
+  case w2Strip st of
+    Just sel | sel p -> do
+      keep <- readIORef (w2Keep st)
+      return (if keep then p else p { pos_line = -1, pos_column = -1 })
+    _ -> return p
+
+-- Whether type2's memos may be used (see encodeV2Strip)
+memoOn2 :: W2 -> IO Bool
+memoOn2 st = not <$> readIORef (w2Keep st)
+
 apKey2 :: Int -> Int -> Int
 apKey2 na nb
   | na < 0 || nb < 0 || na > 0x7fffffff || nb > 0x7fffffff =
@@ -2137,6 +2178,9 @@ data W2 = W2
   , w2TyConMemo :: !(IORef (M.Map (Int, Int) [(TyCon, Int)]))
   , w2SortMemo  :: !(IORef (M.Map (Int, Int) [(TISort, Int)]))
   , w2LeafKeys  :: !(IORef (M.Map LeafKey Int))  -- TyNum and TyStr nodes
+    -- encodeV2Strip's selector, and whether keepPositions is in force
+  , w2Strip    :: !(Maybe (Position -> Bool))
+  , w2Keep     :: !(IORef Bool)
   , w2Ids      :: !Table2
   , w2Pos      :: !Table2
   , w2Types    :: !Table2
@@ -2145,11 +2189,14 @@ data W2 = W2
   }
 
 newW2 :: IO W2
-newW2 =
+newW2 = newW2With Nothing
+
+newW2With :: Maybe (Position -> Bool) -> IO W2
+newW2With sel =
   W2 <$> newIORef IM.empty <*> newIORef M.empty <*> newIORef IM.empty
      <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty
      <*> newIORef IM.empty <*> newIORef M.empty <*> newIORef M.empty
-     <*> newIORef M.empty
+     <*> newIORef M.empty <*> pure sel <*> newIORef False
      <*> newTable2 <*> newTable2 <*> newTable2 <*> newTable2 <*> newTable2
 
 -- The bodies region is complete: add the five tables, the string table,
@@ -2172,8 +2219,8 @@ payload2 w payload = inBuffer w payload $ \b -> do
 
 id2 :: W -> W2 -> Id -> IO Int
 id2 w st i = do
-  let Position f l c _ = getIdPosition i
-      props = getIdProps i
+  pos@(Position f l c _) <- stripPos2 st (getIdPosition i)
+  let props = getIdProps i
       kb = fstringId (getIdBase i)
       kr = IdRest (fstringId (getIdQual i)) (fstringId f) l c props
   m <- readIORef (w2IdKeys st)
@@ -2182,7 +2229,7 @@ id2 w st i = do
     Nothing -> do
       -- the payload of writeBytes: position, qualifier, base, properties
       b <- if null props
-           then do np <- pos2 w st (getIdPosition i)
+           then do np <- pos2 w st pos
                    nq <- stringIdx w (getIdQual i)
                    nb <- stringIdx w (getIdBase i)
                    return (BS.pack (intBytes np ++ intBytes nq ++ intBytes nb ++ [0]))
@@ -2192,9 +2239,10 @@ id2 w st i = do
       return n
 
 -- The file name is remapped as in format 1; the key is the stored
--- (remapped) position.
+-- (stripped and remapped) position.
 pos2 :: W -> W2 -> Position -> IO Int
-pos2 w st p@(Position f l c lib) = do
+pos2 w st p0 = do
+  p@(Position f l c lib) <- stripPos2 st p0
   f' <- remapFile w lib f
   let k = PosKey2 (fstringId f') l c lib
       p' = if f' == f then p else Position f' l c lib
@@ -2229,9 +2277,10 @@ itype2 w st t = do
 -- name; and a TyNum or TyStr node, which carries no word when the parser
 -- built it, by all the fields its payload holds.
 type2 :: W -> W2 -> Type -> IO Int
-type2 w st t =
+type2 w st t = do
+  on <- memoOn2 st
   let wd = typeCanonWordNode t
-  in if wd < 0 then type2' w st t
+  if wd < 0 || not on then type2' w st t
      else do
        memoM <- readIORef (w2WordMemo st)
        let memo = IM.findWithDefault [] wd memoM
@@ -2257,8 +2306,9 @@ type2' w st t =
           return n
     TCon tc@(TyCon i mk s) -> do
       let name = (fstringId (getIdBase i), fstringId (getIdQual i))
+      on <- memoOn2 st
       memoM <- readIORef (w2TyConMemo st)
-      let memo = M.findWithDefault [] name memoM
+      let memo = if on then M.findWithDefault [] name memoM else []
       case [ n | (tc', n) <- memo, sameTyCon tc tc' ] of
         (n : _) -> return n
         [] -> do
@@ -2267,7 +2317,8 @@ type2' w st t =
           mkb <- payload2 w (writeBytes mk)
           n <- typeEntry2 st (BS.concat [ BS.pack ([1, 0] ++ intBytes ni), mkb
                                          , BS.pack (intBytes ns) ])
-          modifyIORef' (w2TyConMemo st) (M.insert name (take 4 ((tc, n) : memo)))
+          when on $
+            modifyIORef' (w2TyConMemo st) (M.insert name (take 4 ((tc, n) : memo)))
           return n
     TCon (TyNum v p) -> leaf (leafKey 1 p v)
     TCon (TyStr x p) -> leaf (leafKey 2 p (toInteger (fstringId x)))
@@ -2275,12 +2326,13 @@ type2' w st t =
     _ -> payload t
   where payload u = payload2 w (writeBytes u) >>= typeEntry2 st
         leaf k = do
+          on <- memoOn2 st
           m <- readIORef (w2LeafKeys st)
-          case M.lookup k m of
+          case (if on then M.lookup k m else Nothing) of
             Just n -> return n
             Nothing -> do
               n <- payload t
-              modifyIORef' (w2LeafKeys st) (M.insert k n)
+              when on $ modifyIORef' (w2LeafKeys st) (M.insert k n)
               return n
 
 -- A TyNum or TyStr node: its TyCon tag, its position (line, column, file
@@ -2307,8 +2359,9 @@ typeEntry2 st b = do
 sort2 :: W -> W2 -> Id -> TISort -> IO Int
 sort2 w st i s = do
   let name = (fstringId (getIdBase i), fstringId (getIdQual i))
+  on <- memoOn2 st
   memoM <- readIORef (w2SortMemo st)
-  let memo = M.findWithDefault [] name memoM
+  let memo = if on then M.findWithDefault [] name memoM else []
   case [ n | (s', n) <- memo, sameSort s s' ] of
     (n : _) -> return n
     [] -> do
@@ -2321,7 +2374,8 @@ sort2 w st i s = do
                n <- addEntry2 (w2Sorts st) b
                modifyIORef' (w2SortKeys st) (M.insert k n)
                return n
-      modifyIORef' (w2SortMemo st) (M.insert name (take 4 ((s, n) : memo)))
+      when on $
+        modifyIORef' (w2SortMemo st) (M.insert name (take 4 ((s, n) : memo)))
       return n
 
 -- Equality in every field that the writer stores (positions with
