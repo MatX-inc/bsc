@@ -3,6 +3,7 @@
 -- no references to recursive bindings from non-recursive bindings and keep non-recursive
 -- bindings in topologically sorted order.
 module SolvedBinds(SolvedBind, mkSolvedBind, SolvedBinds, Bind,
+                   sbBind, sbIsRecursive,
                    markIncoherent, isIncoherent, solvedClass,
                    DirectIncoherence(..), addDirectIncoherence,
                    addBindDeps,
@@ -64,6 +65,12 @@ mkSolvedBind :: Bind -> Bool -> SolvedBind
 mkSolvedBind b@(_,_,e) isRec =
   SolvedBind { bind = b, freeVars = snd (getFVE e), isRecursive = isRec,
                isIncoherent = False, solvedClass = Nothing }
+
+sbBind :: SolvedBind -> Bind
+sbBind = bind
+
+sbIsRecursive :: SolvedBind -> Bool
+sbIsRecursive = isRecursive
 
 markIncoherent :: SolvedBind -> SolvedBind
 markIncoherent sb = sb { bind = mark (bind sb), isIncoherent = True }

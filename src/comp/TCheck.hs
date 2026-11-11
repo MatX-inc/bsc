@@ -507,9 +507,12 @@ tiExpr as td (CHasType (CAny {}) qt@(CQType [_] nt)) | nt == noType = do
     case qual_type of
       [PredWithPositions p poss _] :=> _ -> do
           -- poss is probably a list of only one position
-          VPred i pwp <- mkVPredFromPred poss p
-          let pwp' = addPredPositions pwp poss
-          return ([VPred i pwp'], CVar i)
+          -- a case, not a VPred bind: GHC < 9.12 wants MonadFail for that
+          vp <- mkVPredFromPred poss p
+          case vp of
+            VPred i pwp -> do
+              let pwp' = addPredPositions pwp poss
+              return ([VPred i pwp'], CVar i)
       _ -> internalError ("tiExpr: unexpected mkQualType result")
 
 {- fast special case

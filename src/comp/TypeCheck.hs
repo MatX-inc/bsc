@@ -8,8 +8,11 @@ module TypeCheck(cTypeCheck,
 import Data.List
 import Data.Maybe(catMaybes)
 import Control.Monad(when)
+import System.IO(hPutStrLn, stderr)
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
+import DictPool(DictPool(..), KeyState(..), initDictPool, traceDictPool, allCnts, cntName, noRecByBase)
 
 import PFPrint
 import Id
@@ -32,11 +35,14 @@ import CSubst(cSubstN)
 import CType(isGroundNode, ctypeStat, CTypeStat(..))
 import CFreeVars(getFVC, getFTCC)
 import Util(separate, apFst, quote)
+import IOUtil(progArgs)
 
-cTypeCheck :: ErrorHandle -> Flags -> SymTab -> CPackage ->
+-- With "pool", dictionary solves are pooled across the package's
+-- definitions (TCMisc.sat), which are then checked in order.
+cTypeCheck :: ErrorHandle -> Flags -> SymTab -> Bool -> CPackage ->
              IO (CPackage, Bool, S.Set Id, CATFCache)
-cTypeCheck errh flags symtab (CPackage name exports imports impsigs fixs defns includes) = do
-    (typecheckedDefns, typeWarns, usedPkgs, haveErrors, atfCache) <- tiDefns errh symtab flags defns
+cTypeCheck errh flags symtab pool (CPackage name exports imports impsigs fixs defns includes) = do
+    (typecheckedDefns, typeWarns, usedPkgs, haveErrors, atfCache) <- tiDefns errh symtab flags pool defns
 
     -- Issue type warnings
     when (not (null typeWarns)) $ bsWarning errh typeWarns
@@ -47,18 +53,29 @@ cTypeCheck errh flags symtab (CPackage name exports imports impsigs fixs defns i
             atfCache)
 
 
--- type check top-level definitions in parallel (since they are independent)
-tiDefns :: ErrorHandle -> SymTab -> Flags -> [CDefn] ->
+-- type check top-level definitions independently, or, with the
+-- dictionary pool, in order with the pool threaded through them
+tiDefns :: ErrorHandle -> SymTab -> Flags -> Bool -> [CDefn] ->
            IO ([CDefn], [WMsg], S.Set Id, Bool, CATFCache)
-tiDefns errh s flags ds = do
+tiDefns errh s flags pool ds = do
   let ai = allowIncoherentMatches flags
-  let checkDef d = (defErr, warns, usedPkgs, atfCache)
-        where ti_res = runTI flags ai s $ tiOneDef d
-              (warns, usedPkgs, atfCache) = (tiWarnings ti_res, tiUsedPackages ti_res, tiATFCache ti_res)
+  let result ti_res = ((defErr, warns, usedPkgs, atfCache), tiCounts ti_res)
+        where (warns, usedPkgs, atfCache) = (tiWarnings ti_res, tiUsedPackages ti_res, tiATFCache ti_res)
               defErr = case tiResult ti_res of
                           (Left emsgs)  -> Left emsgs
                           (Right cdefn) -> rmFreeTypeVars cdefn
-  let (checks, wss, pkgss, atfCaches) = unzip4 (map checkDef ds)
+      checkDef d = fst (result (runTI flags ai s $ tiOneDef d))
+      (results, mdpF)
+        | pool =
+            let go dp [] = ([], dp)
+                go dp (d:rest) =
+                    let (ti_res, dp') = runTIWithPool flags ai s dp (tiOneDef d)
+                        (ress, dpF) = go dp' rest
+                    in  (result ti_res : ress, dpF)
+                (rs, dpF) = go initDictPool ds
+            in  (rs, Just dpF)
+        | otherwise = (map (result . runTI flags ai s . tiOneDef) ds, Nothing)
+  let (checks, wss, pkgss, atfCaches) = unzip4 (map fst results)
   let (errors, ds') = apFst concat $ separate checks
   let have_errors = not (null errors)
   let mkErrorDef (Left _)  (CValueSign (CDef i t _)) = Just (mkPoisonedCDefn i t)
@@ -76,6 +93,24 @@ tiDefns errh s flags ds = do
   when ((not (null double_error_msgs)) || (have_errors && not (enablePoisonPills flags))) $
       bsError errh (nub errors) -- the underyling error should be in errors
   when (have_errors && enablePoisonPills flags) $ bsErrorNoExit errh errors
+  when traceDictPool $ do
+    let m = IM.unionsWith (+) (map snd results)
+    hPutStrLn stderr ("tc dict pool: " ++
+                      unwords [ cntName c ++ "=" ++ show (IM.findWithDefault 0 (fromEnum c) m)
+                              | c <- allCnts ])
+    hPutStrLn stderr ("tc dict pool: skip_norec by reason: " ++
+                      unwords [ cntName c ++ "=" ++ show v
+                              | c <- allCnts,
+                                let v = IM.findWithDefault 0 (noRecByBase + fromEnum c) m, v > 0 ])
+    let ng = [ e | e@((_, as), r) <- M.toList mergedATFCache, not (null (tv as) && null (tv r)) ]
+    hPutStrLn stderr ("tc dict pool: atf cache " ++ show (M.size mergedATFCache) ++
+                      " entries, " ++ show (length ng) ++ " with type variables")
+    when ("-trace-tc-dict-pool-atf" `elem` progArgs) $
+      mapM_ (\ ((i, as), r) -> hPutStrLn stderr ("tc dict pool: atf " ++ ppReadable (i, as, r))) ng
+    case mdpF of
+      Nothing -> hPutStrLn stderr "tc dict pool: off"
+      Just dp -> hPutStrLn stderr ("tc dict pool: " ++
+                                   show (length [ () | KEntry _ <- M.elems (dpKeys dp) ]) ++ " entries")
   return (ds' ++ error_defs', concat wss, allUsedPkgs, have_errors, mergedATFCache)
 
 nullAssump :: [Assump]
