@@ -1318,10 +1318,13 @@ mkSubmodGroups ::
     ([(AId, [VId])], [VMItem], [VMItem], [VId])
 mkSubmodGroups flags sos sztm submod_comments decls_so_far submod_infos =
     let
+        -- the first binding of an Id wins, as with lookup
+        sos_map = M.fromListWith (\_ first -> first) sos
+
         (submod_decl_groups, submod_def_groups) =
             apFst catMaybes $ apSnd catMaybes $
             unzip $
-            map (mkInstGroup flags sos sztm submod_comments) submod_infos
+            map (mkInstGroup flags sos_map sztm submod_comments) submod_infos
 
         submod_inputs =
             let getInputs (i, _, (_,_,_,ins,_)) = (i, map snd ins)
@@ -1406,15 +1409,15 @@ fixupSubmodGroups sos sztm submod_infos decls_so_far submod_groups =
 
 
 -- create a group of Verilog statements for a submodule instantiation
-mkInstGroup :: Flags -> [AStateOut] -> SizeAndTypeMap -> [(Id,[String])] ->
+mkInstGroup :: Flags -> M.Map AId AType -> SizeAndTypeMap -> [(Id,[String])] ->
                (AId, VMItem, InstInfo) -> (Maybe VMItem, Maybe VMItem)
-mkInstGroup flags sos sztm comments_map (instname, vmi, info) =
+mkInstGroup flags sos_map sztm comments_map (instname, vmi, info) =
     let (_, _, special, ins, outs) = info
         -- nub on the output values because there can be permissible overlap between
         -- "special" clock/reset outputs and method outputs
         wire_decls =
             map (mkInstInputDecl sztm instname . snd) ins ++
-            map (mkInstOutputDecl sos instname VDWire . snd) (nub (special ++ outs))
+            map (mkInstOutputDecl sos_map instname VDWire . snd) (nub (special ++ outs))
         user_comment = case (lookup instname comments_map) of
                            Nothing -> []
                            Just cs -> concatMap lines cs
@@ -1528,11 +1531,11 @@ addInstPortDecls sztm decls (gs, new_decls) (i, inst_g, ps) =
 -- for a submodule output, lookup the size and create a Verilog decl
 -- of the appropriate size (with the given type)
 -- (the type is specified, because inlined Reg outputs are of type VDReg)
-mkInstOutputDecl :: [AStateOut] -> AId -> VDType -> VId -> VMItem
-mkInstOutputDecl sos inst_id decl_type out_port_id =
+mkInstOutputDecl :: M.Map AId AType -> AId -> VDType -> VId -> VMItem
+mkInstOutputDecl sos_map inst_id decl_type out_port_id =
     let mkDecl i sz = VMDecl (VVDecl decl_type sz [VVar i])
         out_port_aid = vidToId out_port_id
-    in  case (lookup out_port_aid sos) of
+    in  case (M.lookup out_port_aid sos_map) of
             Just asz -> mkDecl out_port_id (vSize asz)
             Nothing -> internalError ("mkInstOutputDecl: instance `" ++
                                       getIdString inst_id ++
