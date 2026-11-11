@@ -70,7 +70,7 @@ import Pragma
 import DefProp
 import Changed(changedOrId)
 import ISyntax
-import ISyntaxSubst(eSubst, eSubstBatch, eSubstClosed, eSubstClosedT,
+import ISyntaxSubst(eSubst, eSubstBatch, eSubstClosed, eScanClosed, eSubstClosedT,
                     tSubstClosedT, forceTypeCtx, tSubstScan, tyEffectFree,
                     tSubstBatch)
 import IConv(iConvT, iConvExpr)
@@ -228,6 +228,14 @@ letBatchOn = not (elem "-hack-no-let-batch" progArgs)
 typedLetBatchOn :: Bool
 typedLetBatchOn = letBatchOn && ftvCacheEnabled &&
                   not (elem "-hack-no-typed-let-batch" progArgs)
+
+-- -hack-no-const-cond-batch
+--   At a conditional head under an empty type context, always flush the
+--   whole conditional, instead of continuing the batch into the arm that a
+--   constant condition selects.  For A/B comparison and debugging.
+{-# NOINLINE constCondBatchOn #-}
+constCondBatchOn :: Bool
+constCondBatchOn = not (elem "-hack-no-const-cond-batch" progArgs)
 
 -- We need to set the buffering of stdout and stderr
 -- if any trace is on (including a trace only used in IExpandUtils)
@@ -3331,11 +3339,14 @@ mkApUH f es = do es' <- mapM evalArgUH es
 --
 -- dfr is Just when typeCtx was kept past a typed redex (see the typed
 -- redex clause); it then holds the expression binders bound since.
-evalApAccum :: String -> M.Map Id HExpr -> M.Map Id HExpr -> M.Map Id IType
-            -> Maybe (S.Set Id) -> HExpr -> [Arg] -> G PExpr
+--
+-- fz is True when the head lies in an arm that the conditional clause
+-- scanned to the end, so no walk of it under exprCtx can force anything.
+evalApAccum :: String -> Bool -> M.Map Id HExpr -> M.Map Id HExpr
+            -> M.Map Id IType -> Maybe (S.Set Id) -> HExpr -> [Arg] -> G PExpr
 
 -- Continue accumulating for ILam with expression argument
-evalApAccum tag exprCtx pend typeCtx dfr (ILam i t body) (E a : as) = do
+evalApAccum tag fz exprCtx pend typeCtx dfr (ILam i t body) (E a : as) = do
   -- Apply accumulated type variable substitutions to t before allocating the heap cell.
   -- typeCtx may bind type vars that appear in t (e.g. for polymorphic functions like
   -- displayHex :: forall a sa. (Bits a sa) => a -> Action, where t = ITVar a until
@@ -3348,20 +3359,20 @@ evalApAccum tag exprCtx pend typeCtx dfr (ILam i t body) (E a : as) = do
   -- WHNF only: no thunk when dfr is Nothing, and the insert, which forces
   -- i, waits until the set is needed
   let !dfr' = S.insert i <$> dfr
-  evalApAccum "ILam-accum" (M.insert i a' exprCtx) (M.insert i a' pend)
+  evalApAccum "ILam-accum" fz (M.insert i a' exprCtx) (M.insert i a' pend)
               typeCtx dfr' body as
 
 -- A type binding after a kept type context: substitute what the typed
 -- redex's flush would have substituted (no type it changes has an effect,
 -- so this may happen here), then continue from the state that flush leaves.
-evalApAccum tag exprCtx pend typeCtx (Just since) e@(ILAM _ _ _) as@(T _ : _) = do
+evalApAccum tag _ exprCtx pend typeCtx (Just since) e@(ILAM _ _ _) as@(T _ : _) = do
   norm <- getTypeNormalizerC
   let e' = eSubstClosedT norm (M.withoutKeys exprCtx since) typeCtx e
-  evalApAccum tag (M.restrictKeys exprCtx since) pend M.empty Nothing e' as
+  evalApAccum tag False (M.restrictKeys exprCtx since) pend M.empty Nothing e' as
 
 -- Continue accumulating for ILAM with type argument
-evalApAccum tag exprCtx pend typeCtx dfr e@(ILAM i k body) (T t : as) =
-  evalApAccum "ILAM-accum" exprCtx pend (M.insert i t typeCtx) dfr body as
+evalApAccum tag _ exprCtx pend typeCtx dfr e@(ILAM i k body) (T t : as) =
+  evalApAccum "ILAM-accum" False exprCtx pend (M.insert i t typeCtx) dfr body as
 
 -- A head-position redex, such as a let (typechecker dictionary bindings form
 -- long chains): bind its arguments and keep accumulating, rather than flush
@@ -3375,7 +3386,7 @@ evalApAccum tag exprCtx pend typeCtx dfr e@(ILAM i k body) (T t : as) =
 -- force eSubstBatch's free-variable union over pend, in key order.  Its walk
 -- of the body forces nothing else (an earlier payload is already forced),
 -- and the final flush forces the rest of exprCtx in the same order.
-evalApAccum tag exprCtx pend typeCtx Nothing (IAps f [] es) args
+evalApAccum tag fz exprCtx pend typeCtx Nothing (IAps f [] es) args
   | letBatchOn, M.null typeCtx,
     (ILam i t body, e1 : erest) <- peelRedex f es = do
   _ <- liftIO $ evaluate (S.unions (M.elems (M.map fVars pend)))
@@ -3384,7 +3395,7 @@ evalApAccum tag exprCtx pend typeCtx Nothing (IAps f [] es) args
   when (doDebugFreeVars && not (S.null (fVars a'))) $
        internalError ("evalApAccum let-batch: fv " ++ ppReadable a')
   when doDebug $ traceM ("let-batch apply arg=" ++ ppReadable (a', e1))
-  evalApAccum "ILam" (M.insert i a' exprCtx) (M.singleton i a') M.empty Nothing
+  evalApAccum "ILam" fz (M.insert i a' exprCtx) (M.singleton i a') M.empty Nothing
               body (map (E . sub) erest ++ args)
 
 -- A head-position redex with a non-empty type context, typically the first
@@ -3399,7 +3410,7 @@ evalApAccum tag exprCtx pend typeCtx Nothing (IAps f [] es) args
 -- forces what the walk would force (the body, then the type payloads when
 -- the walk first consults them); every later walk of a part of this body
 -- forces nothing new.
-evalApAccum tag exprCtx pend typeCtx dfr r@(IAps f [] es) args
+evalApAccum tag _ exprCtx pend typeCtx dfr r@(IAps f [] es) args
   | typedLetBatchOn, not (M.null typeCtx),
     (ILam i t body, e1 : erest) <- peelRedex f es = do
   _ <- liftIO $ evaluate (S.unions (M.elems (M.map fVars pend)))
@@ -3424,12 +3435,70 @@ evalApAccum tag exprCtx pend typeCtx dfr r@(IAps f [] es) args
       when (doDebugFreeVars && not (S.null (fVars a'))) $
            internalError ("evalApAccum typed let-batch: fv " ++ ppReadable a')
       when doDebug $ traceM ("typed let-batch apply arg=" ++ ppReadable (a', e1))
-      evalApAccum "ILam" (M.insert i a' exprCtx) (M.singleton i a') typeCtx
+      evalApAccum "ILam" False (M.insert i a' exprCtx) (M.singleton i a') typeCtx
                   (Just (maybe (S.singleton i) (S.insert i) dfr))
                   body (map (E . sub) erest ++ args)
 
+-- An application head under an empty type context, typically a conditional
+-- that selects on a definition's arguments.  A conditional's flush walks the
+-- condition and both arms before evaluating the condition; when that gives
+-- a constant, keep accumulating into the selected arm instead, so the arm is
+-- substituted together with what it binds and the other arm is not built.
+-- The forcing is kept: the payload union as at a redex, then the flush's
+-- walk in order, building only the condition (eScanClosed forces what the
+-- walk of an arm would; nothing when fz), then the argument stack that
+-- evaluating the flushed application inspects.  The operator (an enumeration
+-- field) is inspected before the walk reaches the arguments, so that other
+-- primitives flush without the extra walks.  Accumulating into the
+-- arm composes as evaluating it substituted would (a let in it takes the
+-- redex clause), provided the scan reached every node of the arm; if a
+-- binder in it emptied the context, the arm is substituted and evaluated as
+-- after the flush.  Any other application flushes, with the union forced.
+evalApAccum tag fz exprCtx pend typeCtx Nothing e@(IAps f ts es) args
+  | constCondBatchOn, M.null typeCtx, not (M.null exprCtx) = do
+  _ <- liftIO $ evaluate (S.unions (M.elems (M.map fVars pend)))
+  let flush = do
+        when (doDebug || doTraceExpandBatchSubst) $
+          traceM ("applying batched subst: " ++
+                   show (M.size exprCtx) ++ " exprs, 0 types")
+        evalAp tag (eSubstClosed exprCtx e) args
+      scan x = fz || eScanClosed exprCtx x
+  case f of
+    ICon _ (ICPrim { primOp = PrimIf }) | [t] <- ts, c : es1 <- es -> do
+      c' <- liftIO $ evaluate (eSubstClosed exprCtx c)
+      case es1 of
+        a : es2 -> do
+          sa <- liftIO $ evaluate (scan a)
+          case es2 of
+            b : es3 -> do
+              sb <- liftIO $ evaluate (scan b)
+              case (es3, args) of
+                ([], []) -> do
+                  r@(_, P p cnd') <- evalUH c'
+                  let arm ok x = do
+                        when doTraceExpandBatchSubst $
+                          traceM ("constant condition: " ++
+                                  (if ok then "batch into arm, " else "arm flushed, ") ++
+                                  show (M.size exprCtx) ++ " exprs" ++
+                                  (if fz then " (forced)" else ""))
+                        if ok
+                          then evalApAccum "const-cond" True exprCtx M.empty
+                                           typeCtx Nothing x []
+                          else eval1 (eSubstClosed exprCtx x)
+                  case cnd' of
+                    ICon _ (ICInt { iVal = IntLit { ilValue = 0 } }) ->
+                        addPredG p $ arm sb b
+                    ICon _ (ICInt { iVal = IntLit { ilValue = 1 } }) ->
+                        addPredG p $ arm sa a
+                    _ -> doIfCond f t c' r (eSubstClosed exprCtx a)
+                                           (eSubstClosed exprCtx b)
+                _ -> flush
+            [] -> flush
+        [] -> flush
+    _ -> flush
+
 -- Hit something else: apply accumulated substitutions if any, then continue
-evalApAccum tag exprCtx _ typeCtx _ e args = do
+evalApAccum tag _ exprCtx _ typeCtx _ e args = do
   when (doDebug || doTraceExpandBatchSubst) $
     traceM ("applying batched subst: " ++
              show (M.size exprCtx) ++ " exprs, " ++
@@ -3447,7 +3516,7 @@ evalApAccum tag exprCtx _ typeCtx _ e args = do
 {-# NOINLINE evalApAccum0 #-}
 evalApAccum0 :: String -> M.Map Id HExpr -> M.Map Id HExpr -> M.Map Id IType
              -> HExpr -> [Arg] -> G PExpr
-evalApAccum0 tag exprCtx pend typeCtx = evalApAccum tag exprCtx pend typeCtx Nothing
+evalApAccum0 tag exprCtx pend typeCtx = evalApAccum tag False exprCtx pend typeCtx Nothing
 
 -- the argument stack evalAp' IAps would build, for a head that is an ILam
 peelRedex :: HExpr -> [HExpr] -> (HExpr, [HExpr])
@@ -5124,7 +5193,13 @@ doArrayUpdate f as = internalError("IExpand.doArrayUpdate : " ++ ppReadable f ++
 -- if without extra arguments
 doIf :: HExpr -> [Arg] -> G PExpr
 doIf f@(ICon _ (ICPrim _ PrimIf)) [T t, E cnd, E thn, E els] = do
-    (ecnd, P p cnd') <- evalUH cnd
+    r <- evalUH cnd
+    doIfCond f t cnd r thn els
+doIf f as = internalError("IExpand.doIf : " ++ ppReadable f ++ ppReadable as)
+
+-- doIf once the condition is evaluated
+doIfCond :: HExpr -> IType -> HExpr -> (HExpr, PExpr) -> HExpr -> HExpr -> G PExpr
+doIfCond f t cnd (ecnd, P p cnd') thn els = do
     when doDebug $ traceM ("if " ++ ppReadable (cnd, cnd'))
     --when doDebug $ traceM ("if2 " ++ show cnd')
     case cnd' of
@@ -5164,8 +5239,6 @@ doIf f@(ICon _ (ICPrim _ PrimIf)) [T t, E cnd, E thn, E els] = do
                   (True, False) -> do
                       p_if <- pIf ecnd pthn pels
                       return (P p_if e')
-
-doIf f as = internalError("IExpand.doIf : " ++ ppReadable f ++ ppReadable as)
 
 -- improve the static elaboration of the output of an if
 -- to prevent exponential growth with conditional assignments and updates

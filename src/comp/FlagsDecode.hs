@@ -582,6 +582,7 @@ traceflags = [
           "hack-eager-pack-unpack",
           "hack-gate-clock-inputs",
           "hack-gate-default-clock",
+          "hack-no-const-cond-batch",
           "hack-no-csubst-shortcut",
           "hack-no-eq-word",
           "hack-no-itype-ftv-cache",
