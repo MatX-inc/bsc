@@ -1912,7 +1912,7 @@ dropUnusedPortWires ff_blocks defs reg_uses inst_infos =
                        i `S.notMember` used ]
         inst_infos_filtered = if (null unused)
                               then inst_infos
-                              else map (dropIds unused) inst_infos
+                              else map (dropIds (S.fromList unused)) inst_infos
     in
         (unused, inst_infos_filtered)
 
@@ -1924,11 +1924,11 @@ count :: (Ord a) => [a] -> [(Int, a)]
 count = let getInfo xs = (length xs, headOrErr "count" xs)
         in  sort . map getInfo . group . sort
 
-dropIds :: [VId] -> (AId, VMItem, InstInfo) -> (AId, VMItem, InstInfo)
+dropIds :: S.Set VId -> (AId, VMItem, InstInfo) -> (AId, VMItem, InstInfo)
 dropIds is (i, vmi, info) =
     let
         -- function to drop a port connection from VMInst if it's in is
-        dropInstPort (Just (VEVar i)) | i `elem` is = Nothing
+        dropInstPort (Just (VEVar i)) | i `S.member` is = Nothing
         dropInstPort e = e
 
         -- function to drop ports from the VMInst
@@ -1945,7 +1945,7 @@ dropIds is (i, vmi, info) =
              dropFromIdList outs)
 
         -- drop from a list of pairs
-        dropFromIdList = filter (\ (a,b) -> b `notElem` is)
+        dropFromIdList = filter (\ (a,b) -> b `S.notMember` is)
     in
         (i, dropFromVMInst vmi, dropFromInstInfo info)
 
