@@ -462,8 +462,8 @@ compilePackage
     -- to the symbol table.  We can't delay the building of the table
     -- until after all symbols are known, because these next stages need
     -- a table of the current symbols.  So this is the first of several
-    -- tables: the one after GenWrap extends this one's base (its
-    -- imported layer), and the later ones are built fresh.
+    -- tables: the ones after GenWrap and Deriving extend this one's base
+    -- (its imported layer), and the one after CtxReduce is built fresh.
     -- -rebuild-symtab builds every table fresh, for comparison.
     --
     start flags DFsyminitial
@@ -505,9 +505,9 @@ compilePackage
     mder <- derive errh flags symt1 mfawrp
     t <- dump errh flags t DFderiving dumpnames mder
 
-    -- Rebuild the symbol table because Deriving added new instances
+    -- Extend the symbol table because Deriving added new instances
     start flags DFsympostderiving
-    symt11 <- mkSymTab errh mder
+    symt11 <- mkSymTabNext mder
     t <- dump errh flags t DFsympostderiving dumpnames symt11
 
     -- Extract packages used in type constructors from the parsed package
