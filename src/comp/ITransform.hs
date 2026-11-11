@@ -48,6 +48,7 @@ import ISyntax
 import ISyntaxUtil
 import IPrims(doPrimOp)
 import IInline(iSortDs, iInline)
+import MapTurns(Found(..), lookupTurns, insertTurns)
 import BExpr
 
 -- For boolean opt
@@ -1811,16 +1812,15 @@ getDoBO = do
 newExprT :: IType -> IExpr a -> T (IExpr a, Int) a
 newExprT t e = do
   ts <- get
-  cmap <- gets cse_map
-  case (M.lookup e cmap) of
-    Just (e', _, s) -> return (e', s)
-    Nothing -> do
-        n <- gets idNo
-        let i = setBadId $ mkId noPosition (mkFString ((prefix ts) ++ itos n))
+  case lookupTurns e (cse_map ts) of
+    Found (e', _, s) -> return (e', s)
+    Missing turns depth -> do
+        let n = idNo ts
+            i = setBadId $ mkId noPosition (mkFString ((prefix ts) ++ itos n))
             s = fromInteger n
             e' = ICon i (ICValue t e (IValKey (prefix ts) s))
             d = IDef i t e []  -- props get lost here, but restored in iTransRenameIdsInDef
-            cmap' = M.insert e (e', d, s) cmap
+            cmap' = insertTurns turns depth e (e', d, s) (cse_map ts)
             !n'   = n + 1
         cmap' `seq` put $ ts { idNo = n', cse_map = cmap' }
         -- traceM ("newExprT " ++ ppString e ++ " -> " ++ ppString (e',d))
