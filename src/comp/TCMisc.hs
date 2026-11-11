@@ -45,8 +45,7 @@ import SATPred
 import TIMonad
 import PreIds
 import StdPrel(isPreClass, mkNumInstBody)
-import CSyntax(CExpr(..), CPat(..), CQual(..), CLiteral(..),
-               cTApply, cVApply)
+import CSyntax(CExpr(..), CPat(..), CQual(..), CLiteral(..), cVApply)
 import Literal
 import IntLit
 import SymTab
@@ -608,7 +607,7 @@ sat dvs ps p =
                               else do
                                 stack_eps <- getExplGivens
                                 let p_pred = apSub s_final (toPred p)
-                                    -- the entries of concatMap bySuperE
+                                    -- the entries of the expansions
                                     -- (ps ++ stack_eps) of the goal's
                                     -- class (predUnify compares the
                                     -- classes first), built afresh as
@@ -902,7 +901,7 @@ hitGuards dp e ki dvs whole_stack gtrees bvs = do
                                   [] -> internalError "hitGuards: sat keys"
         (stackOK, updates) = stackClear kt (eGoals e) outNums c0 whole_stack stack_keys
         -- the entries of the givens' expansions (sat's trees) and of the
-        -- explicit preds' (as concatMap bySuperE builds them), a GRigid
+        -- explicit preds' (as flattenT . bySuperT lists them), a GRigid
         -- level's as guardEntries reads them
         givens_lab = concat [ guardEntries kt seg ets | (seg, ets) <- gtrees ]
         expl_lab = concat [ guardEntries kt seg (map bySuperT (gsList seg)) | seg <- stack_segs ]
@@ -2383,19 +2382,8 @@ mayEqMatch (IsIn c1 ts1) (IsIn c2 ts2) =
             (b || t1 == t2) && eqUndetermined row rest1 rest2
         eqUndetermined _ _ _ = True
 
-bySuperE :: EPred -> [EPred]
-bySuperE ep@(EPred e p@(IsIn c ts)) = ep : eps ++ comm
-  where s       = mkSubst (zip (csig c) ts)
-        esupers = map (\ (CTypeclass i, p) ->
-                        let p' = apSub s p
-                        in  EPred (CApply (cTApply (CSelectT (typeclassId $ name c) i) ts) [e]) p') (super c)
-        eps     = concatMap bySuperE esupers
-        comm    = if (isComm c) then {- (traces ("expr: " ++ ppReadable e) $-}
-                     [(EPred e (IsIn c (commute ts)))]
-                  else []
-
--- (ETree and bySuperT, bySuperE's expansion of a given as a tree, are in
--- TIMonad, which keeps a GRigid level's trees.)
+-- (ETree and bySuperT, a given's expansion as a tree, are in TIMonad,
+-- which keeps a GRigid level's trees.)
 
 flattenT :: ETree -> [EPred]
 flattenT (ETree ep subs comm) = ep : concatMap flattenT subs ++ comm
@@ -2418,8 +2406,8 @@ pickAt is0 xs0 = go 0 is0 xs0
                            (x:xs') -> (i, x) : go (i + 1) is xs'
                            [] -> internalError "TCMisc.pickAt"
 
--- The entries of key k of the givens' expansions (concatMap bySuperE of
--- the givens), in order, from the givens' trees (givenExp's).
+-- The entries of key k of the givens' expansions (flattenT . bySuperT of
+-- each given), in order, from the givens' trees (givenExp's).
 givenEntries :: Int -> [(GSeg, [ETree])] -> [EPred]
 givenEntries k segs =
     concat [ entriesK k (gsTrees seg ! i) et

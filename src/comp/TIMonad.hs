@@ -770,7 +770,7 @@ instance PPrint EPred where
 -- Indexes by class
 --
 -- sat looks for its goal among the goals in progress (the sat stack, newest
--- first) and in TCMisc.bySuperE's expansion of the givens (each given, its
+-- first) and in the expansion of the givens (bySuperT: each given, its
 -- superclasses' expansions in super-list order, then its commuted form);
 -- its partial-reduction check looks in the givens' expansion too, and
 -- isReduciblePred among the givens themselves.  Each scan compares an
@@ -814,7 +814,7 @@ classIdxFromList kxs =
 classIdxPush :: Int -> a -> ClassIdx a -> ClassIdx a
 classIdxPush k x (ClassIdx m) = ClassIdx (IM.alter (Just . maybe [x] (x :)) k m)
 
--- | A class and its superclass closure, as bySuperE expands a given of the
+-- | A class and its superclass closure, as bySuperT expands a given of the
 -- class: the class's key, the keys anywhere below, and the superclasses'
 -- trees in the order of the class's super list.
 data GTree = GTree { gtKey :: !Int, gtReach :: !IS.IntSet, gtSubs :: [GTree] }
@@ -884,11 +884,10 @@ mkGSeg ps = GSeg ps trees idx GFlex
         idx = classIdxFromList [ (k, i) | (i, t) <- assocs trees,
                                           k <- IS.toList (gtReach t) ]
 
--- bySuperE's expansion of a given as a tree: the given, its superclasses'
--- trees in the order of the class's super list, and its commuted form.
--- flattenT (bySuperT ep) is bySuperE ep: the same entries, built by the
--- same expressions, in the same order and with the same sharing (each
--- superclass entry is both an entry and the root of its own expansion).
+-- A given's expansion as a tree: the given, its superclasses' trees in
+-- the order of the class's super list, and its commuted form.
+-- TCMisc.flattenT lists its entries in that order (each superclass entry
+-- is both an entry and the root of its own expansion).
 data ETree = ETree EPred [ETree] [EPred]
 
 bySuperT :: EPred -> ETree

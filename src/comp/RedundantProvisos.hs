@@ -309,7 +309,7 @@ superClosure p@(IsIn c ts) =
 -- counts as a use of the parameter for that superclass, if there is one,
 -- and otherwise of every parameter that has it as a superclass, so the
 -- answer does not depend on which dictionary the typechecker selected it
--- from (TCMisc.bySuperE).  A selection bound to a variable that nothing
+-- from (TIMonad.bySuperT).  A selection bound to a variable that nothing
 -- uses is not a use.  A parameter that occurs in the body only where the
 -- walk below does not look is counted as used.
 usedDicts :: [Pred] -> CDefn -> Maybe [Bool]
