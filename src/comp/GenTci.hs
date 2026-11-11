@@ -50,7 +50,7 @@ import qualified Data.Text.Encoding as TE
 import Data.Word(Word64)
 
 import FStringCompat(FString, fstringId, mkFString, headFString, allFString,
-                     foldrFString, isSuffixOfFString, takeFString)
+                     foldrFString, isSuffixOfFString)
 import Position(Position(..), noPosition)
 import Id
 import CType
@@ -256,12 +256,12 @@ keepAllStats libs sigs =
 -- cache), with "val" (the Generic poly-wrap field), and with every name
 -- that a kept entry binds or mentions.  Kept (library signatures are
 -- referred to whole, and every name they bind or mention is in N): every
--- instance; every entry of a package re-exported whole
--- (export Q::*); every entry binding an RDY_ name; and every entry that
--- binds a name in N, in any package and namespace.  Fixities and pragmas
--- are kept when their name is in N.  Each closure package keeps its
--- signature, in order, even when nothing in it is kept.  Returns the
--- non-library signatures, pruned.
+-- instance; every entry of a package re-exported whole (export Q::*);
+-- every entry binding a ready name (an RDY_ Id, Id.isRdyId); and every
+-- entry that binds a name in N, in any package and namespace.  Fixities
+-- and pragmas are kept when their name is in N.  Each closure package
+-- keeps its signature, in order, even when nothing in it is kept.
+-- Returns the non-library signatures, pruned.
 
 pruneSigs :: [FString] -> S.Set String -> [(Bool, CImportedSignature)] ->
              IO ([CSignature], TciStats)
@@ -286,9 +286,8 @@ pruneSigs seeds exportAll lsigs = do
             let i = fstringId x
             in  if IS.member i ns then k
                 else Keep (IS.insert i ns) (IM.findWithDefault [] i byName ++ q)
-        isRdy b = takeFString 4 b == "RDY_"
         k0 = [ e | (e, (whole, d)) <- zip [0 ..] entries
-                 , isInstance d || whole || foldDefnBinders (\r b -> r || isRdy (getIdBase b)) False d ]
+                 , isInstance d || whole || foldDefnBinders (\r b -> r || isRdyId b) False d ]
         -- keep the queued entries, then everything their names reach
         go kept (Keep ns []) = (ns, kept)
         go kept (Keep ns (e : q))
