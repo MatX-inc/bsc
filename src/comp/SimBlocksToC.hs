@@ -24,7 +24,8 @@ import FStringCompat(mkFString)
 import CCSyntax
 import Wires(ClockDomain)
 import VModInfo(vName_to_id)
-import PPrint(ppReadable) -- hiding (int, char)
+import PPrint(ppReadable, ppReadableBuilder) -- hiding (int, char)
+import qualified Data.ByteString.Builder as BB
 import Util(concatMapM, mapFst, mapSnd)
 import IOUtil(progArgs)
 import SimFileUtils(codeGenOptionDescr)
@@ -42,7 +43,7 @@ simBlocksToC :: Flags -> TimeInfo -> SBId ->
                 SBMap -> ForeignFuncMap ->
                 [String] -> [SimCCBlock] -> [SimCCSched] ->
                 [SimCCClockGroup] -> SimCCGateInfo ->
-                (String -> String -> IO String) -> IO [String]
+                (String -> BB.Builder -> IO String) -> IO [String]
 simBlocksToC flags time top_block def_clk def_rst
              sb_map ff_map reused mod_blocks scheds
              clk_groups gate_info writeFileC = do
@@ -196,7 +197,7 @@ schedCallsForeignFn sched = fnCallsForeignFn (sched_fn sched)
 convertModuleBlock :: Flags -> SBMap -> ForeignFuncMap ->
                        M.Map SBId (M.Map (Bool,AId) ClockDomain) ->
                        M.Map SBId [AId] -> [String] -> SBId ->
-                       (String -> String -> IO String)-> SimCCBlock ->
+                       (String -> BB.Builder -> IO String)-> SimCCBlock ->
                        IO [String]
 convertModuleBlock flags sb_map ff_map clk_map wdef_mod_map reused top_blk writeFileC sb = do
     let name = sb_name sb
@@ -242,7 +243,7 @@ convertSchedules :: Flags -> TimeInfo -> SBId ->
                     (Maybe String) -> (Maybe String) ->
                     SBMap -> ForeignFuncMap -> M.Map String [AId] ->
                     [SimCCSched] -> [SimCCClockGroup] -> SimCCGateInfo ->
-                    (String -> String -> IO String) -> IO [String]
+                    (String -> BB.Builder -> IO String) -> IO [String]
 convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                  wdef_map scheds clk_groups gate_info writeFileC = do
     let ids      = []
@@ -672,7 +673,7 @@ mkBacking sb =
 -- referenced blocks, class declarations and method definitions.
 mkCxxAndH :: Flags -> SBMap -> String -> Bool -> Bool ->
              ([SBId],[CCFragment],[CCFragment]) ->
-             (String -> String -> IO String) -> IO [String]
+             (String -> BB.Builder -> IO String) -> IO [String]
 mkCxxAndH flags sb_map name include_foreign is_top (ids,decls,meths) writeFileC = do
   let c_file_name = mkCxxName Nothing "" name
       h_file_name = mkHName Nothing "" name
@@ -690,9 +691,9 @@ mkCxxAndH flags sb_map name include_foreign is_top (ids,decls,meths) writeFileC 
                     (map cpp_include state_files)
       c_fragments = c_includes ++ foreign_includes ++ [blankLines 1] ++ meths
       h_fragments = h_includes ++ [blankLines 1] ++ decls
-      c_file_contents = ppReadable $ program c_fragments
+      c_file_contents = ppReadableBuilder $ program c_fragments
       code_gen_option_comment = literal_comment [codeGenOptionDescr flags is_top]
-      h_file_contents = ppReadable $ program [ code_gen_option_comment
+      h_file_contents = ppReadableBuilder $ program [ code_gen_option_comment
                                              , protect_header name h_fragments
                                              ]
   h_name_rel <- writeFileC h_file_name h_file_contents

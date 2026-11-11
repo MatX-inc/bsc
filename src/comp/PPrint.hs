@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE IncoherentInstances #-}
 module PPrint(PPrint(..), PDetail(..), module Pretty,
-        ppReadable, ppReadableIndent, ppAll, ppDebug, ppString, ppStringNQ, pp80,
+        ppReadable, ppReadableBuilder, ppReadableIndent, ppAll, ppDebug, ppString, ppStringNQ, pp80,
         pparen, sepList, catList, vcatList, ppr, ppDoc,
         maxPrec, vsep, wrap, commaSep, encloseSep,
         tracePPS,
@@ -17,6 +17,7 @@ import Util(itos)
 import Debug.Trace
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.ByteString.Builder as BB
 
 -- wrap :: lines in -> lines out with long lines broken up
 wrap :: [String] -> [String]
@@ -40,6 +41,10 @@ pp80 = pretty 78 78 . pPrint PDReadable 0
 
 ppReadable :: (PPrint a) => a -> String
 ppReadable = ppr PDReadable
+
+-- ppReadable's characters as a UTF-8 Builder (for writing generated files)
+ppReadableBuilder :: (PPrint a) => a -> BB.Builder
+ppReadableBuilder = prettyBuilder lineWidth linePref . pPrint PDReadable 0
 
 ppReadableIndent :: (PPrint a) => Int -> a -> String
 ppReadableIndent i = pprIndent i PDReadable

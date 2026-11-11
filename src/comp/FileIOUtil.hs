@@ -9,6 +9,7 @@ module FileIOUtil
     ,readBinaryFileMaybe
     ,readBinaryFileCatch
     ,writeFileCatch
+    ,writeFileBuilderCatch
     ,writeBinaryFileCatch
     ,appendFileCatch
     ,removeFileCatch
@@ -53,6 +54,7 @@ import qualified Data.Text.Lazy.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as B
+import qualified Data.ByteString.Builder as BB
 
 import Util(concatMapM, mapFst)
 import FileNameUtil(dirName, getRelativeFilePath)
@@ -240,6 +242,14 @@ writeFileCatch errh fname content = do
     checkDirectory fname (fileWriteError errh emptyContext noPosition fname)
     -- try to write the file
     catchIO (writeFileCompat fname content)
+            (fileWriteError errh emptyContext noPosition fname)
+
+-- Writes UTF-8 bytes as they are built (the Builder counterpart of
+-- writeFileCatch, whose String is written UTF-8 encoded)
+writeFileBuilderCatch :: ErrorHandle -> FilePath -> BB.Builder -> IO ()
+writeFileBuilderCatch errh fname content = do
+    checkDirectory fname (fileWriteError errh emptyContext noPosition fname)
+    catchIO (withBinaryFile fname WriteMode (\hdl -> BB.hPutBuilder hdl content))
             (fileWriteError errh emptyContext noPosition fname)
 
 writeBinaryFileCatch :: ErrorHandle -> FilePath -> [Word8] -> IO ()
