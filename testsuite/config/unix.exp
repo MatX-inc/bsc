@@ -3863,6 +3863,11 @@ proc make_pass { target {make_opt "" }  { outfile "make.log" } }  {
 # ("-----" line and everything after) from a dump file so it can be re-parsed
 # as source code.
 proc strip_dump_wrapper { filename } {
+    global srcdir
+    global subdir
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+
     set f [open $filename r]
     set content [read $f]
     close $f
@@ -3876,6 +3881,8 @@ proc strip_dump_wrapper { filename } {
     set f [open $filename w]
     puts -nonewline $f [join $body "\n"]
     close $f
+
+    cd $here
 }
 
 
