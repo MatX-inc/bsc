@@ -266,6 +266,7 @@ library
     Parser.Classic
     Parser.Classic.CParser
     Parser.Classic.Warnings
+    PatMatchCheck
     PoisonUtils
     Position
     Pragma
@@ -318,6 +319,8 @@ library
     SystemVerilogTokens
     TCMisc
     TCPat
+    TCPatCheck
+    TCPatCheckTypes
     TCheck
     TIMonad
     TclParseUtils

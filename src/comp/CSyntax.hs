@@ -93,7 +93,7 @@ import CType
 import VModInfo
 import Type(tClock, tReset)
 import Pragma
-import Util(itos, log2, fromJustOrErr)
+import Util(itos, fromJustOrErr)
 import Data.Maybe(listToMaybe)
 import Data.List(genericLength)
 import FStringCompat
@@ -1519,9 +1519,8 @@ instance PPrint CPat where
     pPrint d p (CPAny _) = text "_"
     pPrint d p (CPLit l) = pPrint d p l
     pPrint d p (CPMixedLit _ base ps) =
-        let digitBits = log2 base
-            f (len, Just val) = integerFormat (len `div` digitBits) base val
-            f (len, Nothing)  = genericReplicate (len `div` digitBits) '?'
+        let f (len, Just val) = integerFormat len base val
+            f (len, Nothing)  = genericReplicate len '?'
             pref  2 = "0b"
             pref  8 = "0o"
             pref 10 = ""

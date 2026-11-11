@@ -95,6 +95,7 @@ import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
 import TypeCheck(cCtxReduceIO, cTypeCheck, CATFCache, mergeCATFCaches)
 import Eval(rnf)
 import RedundantProvisos(warnRedundantProvisos, checkRedundantProvisos)
+import PatMatchCheck(patternMatchWarnings)
 import CType(enableCanonIds, disableCanonIds, cTypeStats)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
@@ -537,6 +538,11 @@ compilePackage
     when checkBinRoundTrip $
         checkRoundTrip "typechecked package" CPackageBin
                        (\(CPackageBin p) -> sortSched p) (sortSched (stripImpSigs mod))
+
+    -- Reads only what the dumps above forced (see PatMatchCheck).
+    when (not tcErrors) $ do
+      let pm_warns = patternMatchWarnings flags symt minst mod
+      when (not (null pm_warns)) $ bsWarning errh pm_warns
 
     -- Off by default; when off, this evaluates nothing the compile would not.
     when (warnRedundantProvisos && not tcErrors) $

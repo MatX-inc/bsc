@@ -1,0 +1,24 @@
+package GuardSafety where
+
+-- A free variable and a pattern binder with the same source spelling must
+-- remain distinct guard atoms.  In the second clause, g refers to this
+-- top-level definition; in the first clause it is bound by the Just pattern.
+g :: Bool
+g = True
+
+boundVersusFree :: Maybe Bool -> Bit 2
+boundVersusFree (Just g) when g = 0
+boundVersusFree (Just _) when not g = 1
+boundVersusFree Nothing = 2
+
+data OtherwiseTag = OtherwiseA | OtherwiseB
+  deriving (Eq, Bits)
+
+-- BSC has no built-in `otherwise'.  A source definition with that spelling
+-- must not be treated as True; this local binding is deliberately False.
+otherwiseIsNotBuiltin :: OtherwiseTag -> Bit 1
+otherwiseIsNotBuiltin tag =
+  letseq otherwise = False
+  in case tag of
+       OtherwiseA when otherwise -> 0
+       OtherwiseB -> 1

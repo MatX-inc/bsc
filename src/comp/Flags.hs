@@ -103,6 +103,7 @@ data Flags = Flags {
         optSched :: Bool,
         optUndet :: Bool,
         parallelSimLink :: Integer,
+        patternCheckFuel :: Int,
         printFlags :: Bool,
         printFlagsHidden :: Bool,
         printFlagsRaw :: Bool,
@@ -168,7 +169,9 @@ data Flags = Flags {
         verilogDeclareAllFirst :: Bool,
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
+        warnIncompletePatterns :: Bool,
         warnMethodUrgency :: Bool,
+        warnOverlappingPatterns :: Bool,
         warnUndetPred :: Bool,
         -- last, and not stored in .ba files (GenABin): no .ba is
         -- written in these modes

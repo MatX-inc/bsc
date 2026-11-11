@@ -1,0 +1,17 @@
+package GuardAlpha where
+
+data WrappedGuard = WrappedGuard Bool
+  deriving (Eq, Bits)
+
+-- Alpha-renamed binders at the same typed place denote the same guard atom.
+-- These complementary guards therefore cover the whole payload domain.
+alphaComplete :: WrappedGuard -> Bit 2
+alphaComplete (WrappedGuard x) when x = 0
+alphaComplete (WrappedGuard y) when not y = 1
+
+-- The second clause repeats the first guard through an alpha-renamed binder.
+-- The final clause remains useful for a False payload.
+alphaRepeated :: WrappedGuard -> Bit 2
+alphaRepeated (WrappedGuard x) when x = 0
+alphaRepeated (WrappedGuard y) when y = 1
+alphaRepeated (WrappedGuard _) = 2
