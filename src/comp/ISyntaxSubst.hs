@@ -379,23 +379,24 @@ subPair esubFn (a, b) = changed2 (,) a b (esubFn a) (esubFn b)
 {-# SPECIALIZE eSubstWith :: BatchExpr a -> SingleType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
 {-# SPECIALIZE eSubstWith :: BatchExpr a -> BatchType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
 {-# SPECIALIZE eSubstWith :: BatchExpr a -> BatchTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-eSubstWith :: (ExprSubstCtx ectx a, TypeSubstCtx tctx)
+{-# SPECIALIZE eSubstWith :: BatchExpr a -> SingleTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+eSubstWith :: forall ectx tctx a. (ExprSubstCtx ectx a, TypeSubstCtx tctx)
            => ectx -> tctx -> S.Set Id -> IExpr a -> Changed (IExpr a)
 eSubstWith ectx tctx allIds e
     | ctxIsEmpty ectx && ctxIsEmpty tctx = Unchanged
     | otherwise = sub ectx tctx allIds e
   where
-    tSubWithNorm :: (TypeSubstCtx tctx') => tctx' -> S.Set Id -> IType -> Changed IType
+    tSubWithNorm :: tctx -> S.Set Id -> IType -> Changed IType
     tSubWithNorm tctx allIds t =
       -- Need to normalize the entire type after substitution, because even if the original type is in normal form,
       -- we may substitute into a type function application that can now be reduced.
       changed1 (changedOrId $ ctxNorm tctx) $ tSubstWith tctx allIds t
-    -- sub needs to be polymorphic because the context type can change at
-    -- ctxAdd (to batch) or ctxRemove (to single or empty) for both contexts
-    sub :: (ExprSubstCtx ectx' a, TypeSubstCtx tctx') => ectx' -> tctx' -> S.Set Id -> IExpr a -> Changed (IExpr a)
-    -- The contexts and the id set only change at a binder, so the walk
-    -- below a binder runs in one monomorphic loop; a binder that
-    -- changes a context re-enters through sub or eSubstWith.
+    -- sub is monomorphic in both contexts, so each specialisation above has
+    -- its own loop with known instances.  The contexts and the id set only
+    -- change at a binder, and a binder that changes a context's type
+    -- (ctxAdd to batch, ctxRemove to single or empty) re-enters through
+    -- eSubstWith, whose emptiness test does not force the contexts.
+    sub :: ectx -> tctx -> S.Set Id -> IExpr a -> Changed (IExpr a)
     sub ectx tctx allIds = go
       where
         tsub = tSubWithNorm tctx allIds
@@ -418,7 +419,7 @@ eSubstWith ectx tctx allIds e
                     ectx'   = ctxAdd i (IVar i') ectx
                     allIds' = S.insert i' allIds
                     !t'     = changedOr t (tSubWithNorm tctx allIds' t)
-                    !e'     = changedOr e (sub ectx' tctx allIds' e)
+                    !e'     = changedOr e (eSubstWith ectx' tctx allIds' e)
                 in Changed $ ILam i' t' e'
               else -- No conflict: continue with same contexts
                 changed2 (ILam i) t e (tsub t) (go e)
@@ -437,7 +438,7 @@ eSubstWith ectx tctx allIds e
                 let !i'     = cloneId (S.toList allIds) i
                     tctx'   = ctxAdd i (ITVar i') tctx
                     allIds' = S.insert i' allIds
-                    !e'     = changedOr e (sub ectx tctx' allIds' e)
+                    !e'     = changedOr e (eSubstWith ectx tctx' allIds' e)
                 in Changed $ ILAM i' k e'
               else -- No conflict: continue with same contexts
                 changed1 (ILAM i k) (go e)
