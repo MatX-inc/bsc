@@ -76,7 +76,7 @@ import APaths(PathUrgencyPairs, PathNode)
 import AScheduleInfo
 import RSchedule(rSchedule, RAT)
 import DisjointTest(DisjointTestState, initDisjointTestState,
-                    checkDisjointExprWithCtx,
+                    checkDisjointExprWithCtx, traceExprCounts,
                     RuleDisjointTest, genDisjointSet)
 import DOT
 import PreIds(idErrorTask)
@@ -4059,6 +4059,7 @@ mkConflictMap flags dtstate rule_meth_map cands ncset ignore_conflicts =
     in
         do (res, igns, dtstate') <-
                foldM checkRule ([], S.empty, dtstate) (M.toList rule_meth_map)
+           convIO $ traceExprCounts "mkConflictMap" dtstate dtstate'
            return (G.fromList res, igns, dtstate')
 
 -- ----------

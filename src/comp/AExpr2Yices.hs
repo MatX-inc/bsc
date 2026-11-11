@@ -8,6 +8,8 @@ module AExpr2Yices(
        convertRulePair,
        decideRulePairs,
        YTerm,
+       traceWitness,
+       traceExprCounts,
 
        checkBiImplication,
        isConstExpr,
@@ -59,6 +61,7 @@ initYState str flags doHardFail ds avis rs = do
   --
   ctx <- Y.mkContext
   return (YState { context = ctx,
+                   stateName = str,
                    exprContext = Nothing,
                    --flags = flags,
                    hardFail = doHardFail,
@@ -69,6 +72,9 @@ initYState str flags doHardFail ds avis rs = do
                                             | avi <- avis],
                    proofMap = M.empty,
                    satMap = M.empty,
+                   exprModels = [],
+                   exprChecks = 0,
+                   exprModelSats = 0,
 
                    anyId = 0,
                    unknownId = 0,
@@ -106,6 +112,8 @@ checkDisjointExpr s e1 e2 = runStateT (checkDisjointExprM True True e1 e2) s
 -- Expression queries are checked as assumptions in a context of their own
 -- (exprContext), which has no assertions, so the result is the pair's; its
 -- terms stay internalized from one query to the next until it is emptied.
+-- An expression query that a model kept from an earlier one satisfies is
+-- satisfiable without a check (see checkAssuming).
 -- Rule pairs keep the push/pop context.  An undecided assumption check is
 -- redone the push/pop way.
 -- A rule pair whose verdict is not read (check = False) is looked up and
@@ -134,10 +142,11 @@ checkDisjointExprM single check e1 e2 = withTraceTest $ do
           Just c | Just r <- M.lookup c sat_memo -> return r
           _ -> do
             res0 <- if single
-                    then do ectx <- getExprContext
-                            liftIO $ Y.ctxStatusAssuming ectx [ye1, ye2]
+                    then checkAssuming ye1 ye2
                     else return Y.Unknown
-            res <- if isDecided res0 then return res0 else checkPushPop ye1 ye2
+            res <- if isDecided res0 then return res0 else do
+                     when single $ countExprCheck
+                     checkPushPop ye1 ye2
             case mcond of
               Just c | isDecided res ->
                 modify (\s -> s { satMap = M.insert c res (satMap s) })
@@ -161,6 +170,71 @@ checkDisjointExprM single check e1 e2 = withTraceTest $ do
   return $ case (fmap cvtStatus msat_res) of
               Just (Just b) -> Just (not b)
               _ -> Nothing
+
+-- The satisfiability of an expression query's two converted conditions:
+-- Satisfiable if a kept model (exprModels) makes both true, else the
+-- check of them as assumptions in the expression context, whose model is
+-- kept when it is satisfiable.
+-- A model in which both are true is an assignment satisfying their
+-- conjunction (a variable it does not assign takes a default value, the same
+-- in both), so the check would say Satisfiable: bsc sets Yices no limits, so
+-- every check says Satisfiable or Unsatisfiable.  So the verdict is the
+-- check's, and Unsatisfiable comes only from the query's own check.  The
+-- conditions were converted before this, at the same point as without the
+-- models; evaluating them makes no terms and converts nothing.
+checkAssuming :: Y.Expr -> Y.Expr -> YM Y.Status
+checkAssuming ye1 ye2 = do
+  ms <- gets exprModels
+  found <- liftIO $ findModel [ye1, ye2] ms
+  case found of
+    Just ms' -> do
+      modify (\s -> s { exprModels = ms',
+                        exprModelSats = exprModelSats s + 1 })
+      return Y.Satisfiable
+    Nothing -> do
+      ectx <- getExprContext
+      countExprCheck
+      r <- liftIO $ Y.ctxStatusAssuming ectx [ye1, ye2]
+      when (r == Y.Satisfiable) $ do
+        mm <- liftIO $ Y.getModelMaybe ectx
+        case mm of
+          Just m -> do
+            let (keep, old) = splitAt (exprModelCount - 1) ms
+            liftIO $ mapM_ Y.freeModel old
+            modify (\s -> s { exprModels = m : keep })
+          Nothing -> return ()
+      return r
+
+-- The models with the first in which every term is true moved to the
+-- front, if there is one
+findModel :: [Y.Expr] -> [Y.Model] -> IO (Maybe [Y.Model])
+findModel ts = go []
+  where go _ [] = return Nothing
+        go seen (m:ms) = do
+          r <- Y.formulasTrueInModel m ts
+          if r == Just True
+            then return (Just (m : reverse seen ++ ms))
+            else go (m:seen) ms
+
+-- How many models are kept (the oldest is freed when a new one comes).  A
+-- miss evaluates them all, each for well under 1% of a check's cost; in
+-- TileIO's conflict map, 99% of the queries a model decides are decided by
+-- one of the latest eight.
+exprModelCount :: Int
+exprModelCount = 8
+
+countExprCheck :: YM ()
+countExprCheck = modify (\s -> s { exprChecks = exprChecks s + 1 })
+
+-- The -trace-smt-witness line for the expression queries made between two
+-- states: how many reached the solver, and how many a kept model decided.
+traceExprCounts :: String -> YState -> YState -> IO ()
+traceExprCounts site s0 s1 =
+  when traceWitness $
+    traceM (site ++ " " ++ stateName s1 ++ ": expression checks " ++
+            show (exprChecks s1 - exprChecks s0) ++
+            ", decided by a kept model " ++
+            show (exprModelSats s1 - exprModelSats s0))
 
 -- The satisfiability of two converted conditions, in the main context.
 checkPushPop :: Y.Expr -> Y.Expr -> YM Y.Status
@@ -494,6 +568,8 @@ data YState =
                -- must hold no assertions outside push/pop, or exprContext
                -- answers differ (see getExprContext)
                context       :: Y.Context,
+               -- the caller's name for the state (for traces)
+               stateName     :: String,
                -- for expression queries (checkDisjointExprM), made on first
                -- use, and the number of checks since it was last emptied
                exprContext   :: Maybe (Y.Context, Int),
@@ -506,6 +582,14 @@ data YState =
                proofMap      :: M.Map (AExpr, AExpr) ProofEntry,
                -- satisfiability of single conditions (checkDisjointExprM)
                satMap        :: M.Map AExpr Y.Status,
+               -- models of satisfiable expression queries, most recently
+               -- used first (see checkAssuming); the reset in a later
+               -- initYState frees them, so a state is not used after one
+               exprModels    :: [Y.Model],
+               -- for -trace-smt-witness: expression queries checked by the
+               -- solver, and decided by a kept model
+               exprChecks    :: !Int,
+               exprModelSats :: !Int,
 
                anyId         :: Integer,
                unknownId     :: Integer,

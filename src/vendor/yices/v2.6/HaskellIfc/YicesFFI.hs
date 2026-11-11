@@ -382,7 +382,7 @@ module YicesFFI (
     -- ...
 
     -- * Check the value of boolean formulas
-    -- ...
+    yices_formulas_true_in_model,
 
     -- * Conversion of values to constant terms
     -- ...
@@ -920,7 +920,8 @@ foreign import ccall unsafe "yices.h"
 ------------------------------------------------------------------------
 -- Check the value of boolean formulas
 
--- ...
+foreign import ccall unsafe "yices.h"
+    yices_formulas_true_in_model :: Ptr YModel -> CUInt -> Ptr YExpr -> IO Int32
 
 ------------------------------------------------------------------------
 -- Conversion of values to constant terms

@@ -295,6 +295,8 @@ void yices_print_model(FILE *f, model_t *mdl) { }
 
 int32_t yices_get_bool_value(model_t *mdl, term_t t, int32_t *val) { return 0; }
 
+int32_t yices_formulas_true_in_model(model_t *mdl, uint32_t n, const term_t f[]) { return -1; }
+
 int32_t yices_get_int32_value(model_t *mdl, term_t t, int32_t *val) { return 0; }
 int32_t yices_get_int64_value(model_t *mdl, term_t t, int64_t *val) { return 0; }
 int32_t yices_get_rational32_value(model_t *mdl, term_t t, int32_t *num, uint32_t *den) { return 0; }
