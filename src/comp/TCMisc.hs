@@ -462,6 +462,7 @@ sat dvs ps p =
     countDP CSat 1
     recLog (case toPred p of IsIn c ts -> EvGoal c ts)
     whole_stack <- getSatStack
+    stack_idx <- getSatStackIdx
     bound_tyvars <- getBoundTVs
     let IsIn p_cl p_tys = toPred p
         recordATFs s_final =
@@ -472,12 +473,14 @@ sat dvs ps p =
                                  (resolvedTys !! targetIdx)
                | (atfTC, paramIdxs, targetIdx) <- assocTypes p_cl ]
     let lookfor_result :: Maybe (Bind, (Subst, [(Type,Type)]))
-        -- I'm a little worried that matching against the whole_stack
+        -- I'm a little worried that matching against the stack
         -- will have lexical scoping issues where p will match against
         -- something very "old", that it should not be able to "see"
         -- due to shadowing or something.  We are probably OK because
         -- the TIMonad is reset for each top-level definition.
-        lookfor_result = lookfor bound_tyvars p whole_stack
+        -- (lookfor is given the stack's entries of the goal's class key,
+        -- newest first, as with the givens below)
+        lookfor_result = lookfor bound_tyvars p (classIdxLookup stack_idx (vpClassKey p))
     case lookfor_result of
       Just (b, (s, [])) -> recLog EvLookfor >>
          -- tie the recursive knot!
@@ -2248,7 +2251,7 @@ givenEntries :: Int -> [(GSeg, [ETree])] -> [EPred]
 givenEntries k segs =
     concat [ entriesK k (gsTrees seg ! i) et
            | (seg, ets) <- segs,
-             (i, et) <- pickAt (IM.findWithDefault [] k (gsIdx seg)) ets ]
+             (i, et) <- pickAt (classIdxLookup (gsIdx seg) k) ets ]
 
 -- The givens' expansion as sat reads it for a goal: the entries of the
 -- goal's class and the whole expansion (the pool's guards), from the same
@@ -2274,7 +2277,7 @@ freshGivenEntries :: VPred -> Givens -> [EPred]
 freshGivenEntries vp gv =
     concat [ entriesK k (gsTrees seg ! i) (bySuperT ep)
            | seg <- givensSegs gv,
-             (i, ep) <- pickAt (IM.findWithDefault [] k (gsIdx seg)) (gsList seg) ]
+             (i, ep) <- pickAt (classIdxLookup (gsIdx seg) k) (gsList seg) ]
   where k = vpClassKey vp
 
 -- The givens themselves (no superclass entries) whose class has c's key,
@@ -2283,7 +2286,7 @@ freshGivenEntries vp gv =
 directEntries :: Class -> Givens -> [EPred]
 directEntries c gv =
     [ ep | seg <- givensSegs gv,
-           (i, ep) <- pickAt (IM.findWithDefault [] k (gsIdx seg)) (gsList seg),
+           (i, ep) <- pickAt (classIdxLookup (gsIdx seg) k) (gsList seg),
            gtKey (gsTrees seg ! i) == k ]
   where k = classKey c
 

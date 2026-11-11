@@ -21,6 +21,7 @@ module TIMonad(
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
         GSeg(..), GTree(..), Givens, mkGivens, givensSegs, givensList, givensOnList,
         givensAppend,
+        ClassIdx, classIdxLookup,
         classKey, getExplGivens, getTopExplSeg,
         getNumProven, getNumRefuted, addNumDecided,
         errorAtId, findCons, findTyCon, findFields, findCls,
@@ -29,7 +30,8 @@ module TIMonad(
         numEqCls,
         updAssumpPos,
         recordPackageUse, recordATFResult,
-        incrementSatStack, decrementSatStack, getSatStack, mkTSSatElement, TSSatElement,
+        incrementSatStack, decrementSatStack, getSatStack, getSatStackIdx,
+              mkTSSatElement, TSSatElement,
               pushSatStackContext, popSatStackContext
         , tiRecoveringFromError
         , tiRecoveringFromErrorxx
@@ -146,6 +148,8 @@ data TStateRecover = TStateRecover {
   -- the explicit preds bound at each level, newest first, each level's
   -- with its class index (GSeg)
   tsExplPreds :: [GSeg],
+  -- the goals in progress, per context, each context's with its class
+  -- index (TSSatStack)
   tsSatStack :: TSSuperSatStack,
   -- the dictionary pool's keys of the sat stack's entries (TCMisc.hitGuards),
   -- per context and entry as tsSatStack
@@ -166,8 +170,20 @@ mkTSSatElement :: (Maybe [TyVar]) -> Givens -> VPred -> TSSatElement
 -- refer right back to this predicate.
 mkTSSatElement _ _ (VPred i (PredWithPositions p _ _)) = EPred (CVar i) p
 
-type TSSatStack = SizedStack TSSatElement
+-- | One context of the sat stack: its goals, newest first, their index by
+-- class (each goal under its own class), and the context as it was before
+-- the newest goal was pushed, which popping the goal restores.
+data TSSatStack = TSSatStack !(SizedStack TSSatElement) !(ClassIdx TSSatElement)
+                             !(Maybe TSSatStack)
 type TSSuperSatStack = SizedStack TSSatStack
+
+emptySatStack :: TSSatStack
+emptySatStack = TSSatStack (mkSizedStack []) (ClassIdx IM.empty) Nothing
+
+-- | A goal's entry is filed under its class's key (sat's scan of the stack
+-- does not expand superclasses).
+satElementKey :: TSSatElement -> Int
+satElementKey (EPred _ (IsIn c _)) = classKey c
 
 -- a stack that keeps track of its depth
 data SizedStack a = SizedStack Int [a]
@@ -233,7 +249,7 @@ initRecoverState = TStateRecover {
     tsCurSubst = nullSubst,
     tsBoundTyVarStack = [],
     tsExplPreds = [],
-    tsSatStack = mkSizedStack [mkSizedStack []],
+    tsSatStack = mkSizedStack [emptySatStack],
     tsSatKeys = [[]],
     tsNumProven = S.empty,
     tsNumRefuted = S.empty
@@ -371,7 +387,7 @@ getSatStackSizes :: TI (Int, Int)
 getSatStackSizes = do
   SizedStack super ctxs <- gets tsSatStack
   case ctxs of
-    (SizedStack sat _ : _) -> return (sat, super)
+    (TSSatStack (SizedStack sat _) _ _ : _) -> return (sat, super)
     [] -> return (0, super)
 
 runTIState :: Flags -> Bool -> SymTab -> TI a ->
@@ -738,26 +754,52 @@ instance Types EPred where
 instance PPrint EPred where
     pPrint d p (EPred e q) = pparen (p>0) (pparen True (pPrint d 0 e) <> text":" <> pPrint d 10 q)
 
--- Givens with an index by class
+-- Indexes by class
 --
--- sat and its partial-reduction check look for a given of the goal's class
--- in TCMisc.bySuperE's expansion of the givens (each given, its
--- superclasses' expansions in super-list order, then its commuted form),
--- isReduciblePred among the givens themselves.  Each compares an entry's
--- class with the goal's before anything else and passes over an entry of
--- another class, so visiting only the entries whose class has the goal's
--- base name, in the same order, makes the same comparisons on the same
--- entries.  The index is built from classes alone, and apSub keeps every
--- given's class and position, so a list's index serves every
--- substitution of it.
+-- sat looks for its goal among the goals in progress (the sat stack, newest
+-- first) and in TCMisc.bySuperE's expansion of the givens (each given, its
+-- superclasses' expansions in super-list order, then its commuted form);
+-- its partial-reduction check looks in the givens' expansion too, and
+-- isReduciblePred among the givens themselves.  Each scan compares an
+-- entry's class with the goal's before anything else and does nothing
+-- more with an entry of another class, so visiting only the entries whose
+-- class has the goal's base name (classKey), in the same order, makes the
+-- same comparisons on the same entries and stops at the same one.  Both
+-- keep that index (ClassIdx): a level of givens files each given under
+-- every key of its superclass closure (GSeg), and a context of the sat
+-- stack each goal under its own class as it is pushed (TSSatStack).  The
+-- givens' index is built from classes alone, and apSub keeps every given's
+-- class and position, so a list's index serves every substitution of it.
 --
--- What building it forces that a scan might not: each given to weak head
--- normal form, and the class, name, super list and isComm of every class
--- in its superclass closure.  No type, position or type variable.  A
--- Class is a symbol-table record whose name is a key of the table, and a
--- superclass is looked up there by name (MakeSymTab), so this interns
--- nothing (class names are interned by the parser or by the .bo reader's
--- eager string-table read).
+-- What an index forces that a scan might not have by then: building a
+-- level's index, each given to weak head normal form and the class, name,
+-- super list and isComm of every class in its superclass closure; a push,
+-- the goal's entry and Pred to weak head normal form and its class and
+-- name, which the goal's own scan of the stack forced (on an empty stack,
+-- the givens' lookup, the pool or reducePred forces them soon after).  No
+-- type, position, type variable or dictionary name.  A Class is a
+-- symbol-table record keyed by its name, and a superclass is looked up by
+-- name (MakeSymTab), so this interns nothing (class names are interned by
+-- the parser or by the .bo reader's eager string-table read).
+
+-- | Items filed by class key, each key's in the order a scan meets them.
+newtype ClassIdx a = ClassIdx (IM.IntMap [a])
+
+-- | The items filed under the key, in scan order.  An empty index does not
+-- look at the key, as a scan of nothing does not look at the goal.
+classIdxLookup :: ClassIdx a -> Int -> [a]
+classIdxLookup (ClassIdx m) k
+  | IM.null m = []
+  | otherwise = IM.findWithDefault [] k m
+
+-- | Items in scan order, each with a key it is filed under.
+classIdxFromList :: [(Int, a)] -> ClassIdx a
+classIdxFromList kxs =
+    ClassIdx (IM.map reverse (IM.fromListWith (++) [ (k, [x]) | (k, x) <- kxs ]))
+
+-- | Files the item under the key ahead of the others there.
+classIdxPush :: Int -> a -> ClassIdx a -> ClassIdx a
+classIdxPush k x (ClassIdx m) = ClassIdx (IM.alter (Just . maybe [x] (x :)) k m)
 
 -- | A class and its superclass closure, as bySuperE expands a given of the
 -- class: the class's key, the keys anywhere below, and the superclasses'
@@ -781,15 +823,14 @@ classTree c = GTree k (IS.insert k (IS.unions (map gtReach subs))) subs
 data GSeg = GSeg {
     gsList  :: [EPred],
     gsTrees :: Array Int GTree,
-    gsIdx   :: IM.IntMap [Int]
+    gsIdx   :: ClassIdx Int
   }
 
 mkGSeg :: [EPred] -> GSeg
 mkGSeg ps = GSeg ps trees idx
   where trees = listArray (0, length ps - 1) [ classTree c | EPred _ (IsIn c _) <- ps ]
-        idx = IM.map reverse $
-              IM.fromListWith (++) [ (k, [i]) | (i, t) <- assocs trees,
-                                                k <- IS.toList (gtReach t) ]
+        idx = classIdxFromList [ (k, i) | (i, t) <- assocs trees,
+                                          k <- IS.toList (gtReach t) ]
 
 -- | The givens of a solve: its levels, newest first, with no empty level.
 -- Their list (givensList) is the levels' lists concatenated.  No givens
@@ -1057,24 +1098,30 @@ updAssumpPos :: Id -> Assump -> Assump
 updAssumpPos i (i' :>: s) = setIdPosition (getIdPosition i) i' :>: s
 
 
+-- (A push makes the context strictly: it forces the goal's class key at
+-- once.)
 incrementSatStack :: TSSatElement -> TI ()
 incrementSatStack x = do
   superstack <- gets tsSatStack
-  let oldstack = sizedStackPeek superstack
+  let old@(TSSatStack oldstack idx _) = sizedStackPeek superstack
   flags <- getFlags
   case (sizedStackPush (maxTIStackDepth flags) oldstack x) of
     Nothing -> (err(noPosition,ETypeStackOverflow))
     Just newstack@(SizedStack sz _) -> do
-        modify (\ts -> ts { tsSatStack =
-                              sizedStackModify superstack (const newstack)})
+        let ctx = TSSatStack newstack (classIdxPush (satElementKey x) x idx) (Just old)
+        ctx `seq` modify (\ts -> ts { tsSatStack =
+                                        sizedStackModify superstack (const ctx)})
         modifySatKeys (onTopKeys (GKNone :))
         bumpRecMaxima sz 0
 
 decrementSatStack :: TI ()
 decrementSatStack = do
   superstack <- gets tsSatStack
-  modify (\ts -> ts { tsSatStack =
-                        sizedStackModify superstack sizedStackPop })
+  let ctx = case sizedStackPeek superstack of
+              TSSatStack _ _ (Just below) -> below
+              _ -> internalError "decrementSatStack: stack underflow"
+  ctx `seq` modify (\ts -> ts { tsSatStack =
+                                  sizedStackModify superstack (const ctx)})
   modifySatKeys (onTopKeys dropTopKey)
 
 modifySatKeys :: ([[GKeys]] -> [[GKeys]]) -> TI ()
@@ -1107,13 +1154,20 @@ getSatStack :: TI [EPred]
 getSatStack = do
   superstack <- gets tsSatStack
   case (sizedStackPeek superstack) of
-    (SizedStack _ l) -> return l
+    TSSatStack (SizedStack _ l) _ _ -> return l
+
+-- | getSatStack's entries by class (classIdxLookup).
+getSatStackIdx :: TI (ClassIdx EPred)
+getSatStackIdx = do
+  superstack <- gets tsSatStack
+  case (sizedStackPeek superstack) of
+    TSSatStack _ idx _ -> return idx
 
 pushSatStackContext :: TI ()
 pushSatStackContext = do
   superstack <- gets tsSatStack
   flags <- getFlags
-  case (sizedStackPush (maxTIStackDepth flags) superstack (mkSizedStack [])) of
+  case (sizedStackPush (maxTIStackDepth flags) superstack emptySatStack) of
     Nothing -> err (noPosition, ETypeSuperStackOverflow)
     Just newstack@(SizedStack sz _) -> do
         modify (\ts -> ts { tsSatStack = newstack })
