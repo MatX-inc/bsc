@@ -3,7 +3,9 @@ module FStringCompat(FString, getFString,
                      tmpFString, enumFString, cloneFString, concatFString,
                      mkNumFString, mkStrFString, mkFString,
                      filterFString, fstringId,
-                     fstringUtf8, mkFStringUtf8
+                     fstringUtf8, mkFStringUtf8,
+                     foldrFString, headFString, takeFString, allFString,
+                     eqFString, isSuffixOfFString, lookupFString
                     ) where
 
 -- wrapper to make SStrings look like FStrings
@@ -15,6 +17,7 @@ import qualified Data.ByteString.Short as SBS
 import PPrint(PPrint(..), text)
 import Util(itos)
 import qualified Data.Generics as Generic
+import Data.Maybe(isJust)
 
 
 newtype FString = FString S.SString deriving (Eq,Ord,Generic.Data, Generic.Typeable)
@@ -77,3 +80,46 @@ mkNumFString i = fromString (itos i)
 
 mkStrFString :: String -> FString
 mkStrFString s = fromString (show s)
+
+-- Shape tests on the packed spelling: each is the String function on
+-- getFString fs without building the String.  Mirror: each reads fs as
+-- getFString does and interns nothing (SpeedyString, Reading spellings).
+
+{-# INLINE foldrFString #-}
+foldrFString :: (Char -> b -> b) -> b -> FString -> b
+foldrFString f z (FString s) = S.foldrChars f z s
+
+-- | The first Char of getFString fs, if any.  Mirror: decodes that Char only.
+{-# INLINE headFString #-}
+headFString :: FString -> Maybe Char
+headFString = foldrFString (\c _ -> Just c) Nothing
+
+-- | take n (getFString fs).  Mirror: decodes only the first n Chars.
+{-# INLINE takeFString #-}
+takeFString :: Int -> FString -> String
+takeFString n fs
+    | n <= 0 = []
+    | otherwise = foldrFString (\c k m -> if m <= 0 then [] else c : k (m - 1))
+                               (const []) fs n
+
+-- | all p (getFString fs).  Mirror: p sees the same Chars in order and stops
+-- at the same one.
+{-# INLINE allFString #-}
+allFString :: (Char -> Bool) -> FString -> Bool
+allFString p = foldrFString (\c r -> p c && r) True
+
+-- | getFString fs == str, for a str that interns nothing when forced (a
+-- literal).  Inlined, so that a literal's table is built once.
+{-# INLINE eqFString #-}
+eqFString :: FString -> String -> Bool
+eqFString fs str = isJust (lookupFString [(str, ())] fs)
+
+-- | isSuffixOf str (getFString fs), for a str that interns nothing when
+-- forced (a literal).
+isSuffixOfFString :: String -> FString -> Bool
+isSuffixOfFString str (FString s) = S.isSuffixOfChars str s
+
+-- | lookup (getFString fs) tbl, for keys that intern nothing when forced
+-- (literals).
+lookupFString :: [(String, a)] -> FString -> Maybe a
+lookupFString tbl (FString s) = S.lookupChars tbl s

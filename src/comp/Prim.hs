@@ -12,6 +12,7 @@ import Numeric(floatToDigits)
 import Eval(NFData(..))
 import PPrint
 import Id
+import FStringCompat(lookupFString)
 import Position
 import Log2
 import IntegerUtil
@@ -338,247 +339,255 @@ stringSize :: String -> Integer
 stringSize s = toInteger (8 * length s)        -- in bytes as bits
 
 toPrim :: Id -> PrimOp
-toPrim i = tp (getIdBaseString i)                -- XXXXX
-  where tp "primAdd" = PrimAdd
-        tp "primSub" = PrimSub
-        tp "primAnd" = PrimAnd
-        tp "primOr"  = PrimOr
-        tp "primXor" = PrimXor
-        tp "primMul" = PrimMul
-        tp "primQuot" = PrimQuot
-        tp "primRem" = PrimRem
-        tp "primSL"  = PrimSL
-        tp "primSRL" = PrimSRL
-        tp "primSRA" = PrimSRA
-        tp "primInv" = PrimInv
-        tp "primNeg" = PrimNeg
-        tp "primEQ"  = PrimEQ
-        tp "primEQ3" = PrimEQ3
-        tp "primULE" = PrimULE
-        tp "primULT" = PrimULT
-        tp "primSLE" = PrimSLE
-        tp "primSLT" = PrimSLT
-        tp "primSignExt" = PrimSignExt
-        tp "primZeroExt" = PrimZeroExt
-        tp "primTrunc" = PrimTrunc
-        tp "primExtractInternal" = PrimExtract
-        tp "primConcat" = PrimConcat
-        tp "primSplit" = PrimSplit
-        tp "primBNot" = PrimBNot
-        tp "primBAnd" = PrimBAnd
-        tp "primBOr" = PrimBOr
-        tp "primInoutCast" = PrimInoutCast
-        tp "primInoutUncast" = PrimInoutUncast
-        tp "primMethod" = PrimMethod
-        tp "primNoInline" = PrimNoInline
-        tp "primIntegerToBit" = PrimIntegerToBit
-        tp "primIntegerToUIntBits" = PrimIntegerToUIntBits
-        tp "primIntegerToIntBits"  = PrimIntegerToIntBits
-        tp "primBitToInteger" = PrimBitToInteger
-        tp "primIntegerToString" = PrimIntegerToString
-        tp "primUIntBitsToInteger" = PrimUIntBitsToInteger
-        tp "primIntBitsToInteger"  = PrimIntBitsToInteger
-        tp "primIsStaticInteger" = PrimIsStaticInteger
-        tp "primAreStaticBits" = PrimAreStaticBits
-        tp "primWhen" = PrimWhen
-        tp "primValueOf" = PrimValueOf
-        tp "primStringOf" = PrimStringOf
-        tp "primOrd" = PrimOrd
-        tp "primChr" = PrimChr
-        tp "primIf" = PrimIf
-        tp "primRange" = PrimRange
-        tp "primError" = PrimError
-        tp "primPoisonedDef" = PrimPoisonedDef
-        tp "primGenerateError" = PrimGenerateError
-        tp "primMessage" = PrimMessage
-        tp "primWarning" = PrimWarning
-        tp "primDynamicError" = PrimDynamicError
+toPrim i =
+    case lookupFString primNames (getIdBase i) of                -- XXXXX
+      Just p -> p
+      Nothing -> internalError ("unknown primitive: " ++ getIdBaseString i ++ " " ++
+                                prPosition (getIdPosition i))
 
-        tp "primJoinActions" = PrimJoinActions
-        tp "primNoActions" = PrimNoActions
-        tp "primExpIf" = PrimExpIf
-        tp "primNoExpIf" = PrimNoExpIf
-        tp "primSplitDeep" = PrimSplitDeep
-        tp "primNosplitDeep" = PrimNosplitDeep
-        tp "primAddRules" = PrimAddRules
-        tp "primModuleBind" = PrimModuleBind
-        tp "primModuleReturn" = PrimModuleReturn
-        tp "primModuleFix" = PrimModuleFix
-        tp "primModuleClock" = PrimModuleClock
-        tp "primModuleReset" = PrimModuleReset
-        tp "primBuildModule" = PrimBuildModule
-        tp "primJoinRules" = PrimJoinRules
-        tp "primJoinRulesPreempt" = PrimJoinRulesPreempt
-        tp "primJoinRulesUrgency" = PrimJoinRulesUrgency
-        tp "primJoinRulesExecutionOrder" = PrimJoinRulesExecutionOrder
-        tp "primJoinRulesMutuallyExclusive" = PrimJoinRulesMutuallyExclusive
-        tp "primJoinRulesConflictFree" = PrimJoinRulesConflictFree
-        tp "primNoRules" = PrimNoRules
-        tp "primRule" = PrimRule
+-- toPrim's names, compared with the packed spelling (no String is built)
+primNames :: [(String, PrimOp)]
+primNames =
+    [ ("primAdd", PrimAdd)
+    , ("primSub", PrimSub)
+    , ("primAnd", PrimAnd)
+    , ("primOr", PrimOr)
+    , ("primXor", PrimXor)
+    , ("primMul", PrimMul)
+    , ("primQuot", PrimQuot)
+    , ("primRem", PrimRem)
+    , ("primSL", PrimSL)
+    , ("primSRL", PrimSRL)
+    , ("primSRA", PrimSRA)
+    , ("primInv", PrimInv)
+    , ("primNeg", PrimNeg)
+    , ("primEQ", PrimEQ)
+    , ("primEQ3", PrimEQ3)
+    , ("primULE", PrimULE)
+    , ("primULT", PrimULT)
+    , ("primSLE", PrimSLE)
+    , ("primSLT", PrimSLT)
+    , ("primSignExt", PrimSignExt)
+    , ("primZeroExt", PrimZeroExt)
+    , ("primTrunc", PrimTrunc)
+    , ("primExtractInternal", PrimExtract)
+    , ("primConcat", PrimConcat)
+    , ("primSplit", PrimSplit)
+    , ("primBNot", PrimBNot)
+    , ("primBAnd", PrimBAnd)
+    , ("primBOr", PrimBOr)
+    , ("primInoutCast", PrimInoutCast)
+    , ("primInoutUncast", PrimInoutUncast)
+    , ("primMethod", PrimMethod)
+    , ("primNoInline", PrimNoInline)
+    , ("primIntegerToBit", PrimIntegerToBit)
+    , ("primIntegerToUIntBits", PrimIntegerToUIntBits)
+    , ("primIntegerToIntBits", PrimIntegerToIntBits)
+    , ("primBitToInteger", PrimBitToInteger)
+    , ("primIntegerToString", PrimIntegerToString)
+    , ("primUIntBitsToInteger", PrimUIntBitsToInteger)
+    , ("primIntBitsToInteger", PrimIntBitsToInteger)
+    , ("primIsStaticInteger", PrimIsStaticInteger)
+    , ("primAreStaticBits", PrimAreStaticBits)
+    , ("primWhen", PrimWhen)
+    , ("primValueOf", PrimValueOf)
+    , ("primStringOf", PrimStringOf)
+    , ("primOrd", PrimOrd)
+    , ("primChr", PrimChr)
+    , ("primIf", PrimIf)
+    , ("primRange", PrimRange)
+    , ("primError", PrimError)
+    , ("primPoisonedDef", PrimPoisonedDef)
+    , ("primGenerateError", PrimGenerateError)
+    , ("primMessage", PrimMessage)
+    , ("primWarning", PrimWarning)
+    , ("primDynamicError", PrimDynamicError)
 
-        tp "primStringConcat" = PrimStringConcat
-        tp "primStringToInteger" = PrimStringToInteger
-        tp "primStringEQ" = PrimStringEQ
-        tp "primStringLT" = PrimStringLT
-        tp "primStringLE" = PrimStringLE
-        tp "primStringLength" = PrimStringLength
+    , ("primJoinActions", PrimJoinActions)
+    , ("primNoActions", PrimNoActions)
+    , ("primExpIf", PrimExpIf)
+    , ("primNoExpIf", PrimNoExpIf)
+    , ("primSplitDeep", PrimSplitDeep)
+    , ("primNosplitDeep", PrimNosplitDeep)
+    , ("primAddRules", PrimAddRules)
+    , ("primModuleBind", PrimModuleBind)
+    , ("primModuleReturn", PrimModuleReturn)
+    , ("primModuleFix", PrimModuleFix)
+    , ("primModuleClock", PrimModuleClock)
+    , ("primModuleReset", PrimModuleReset)
+    , ("primBuildModule", PrimBuildModule)
+    , ("primJoinRules", PrimJoinRules)
+    , ("primJoinRulesPreempt", PrimJoinRulesPreempt)
+    , ("primJoinRulesUrgency", PrimJoinRulesUrgency)
+    , ("primJoinRulesExecutionOrder", PrimJoinRulesExecutionOrder)
+    , ("primJoinRulesMutuallyExclusive", PrimJoinRulesMutuallyExclusive)
+    , ("primJoinRulesConflictFree", PrimJoinRulesConflictFree)
+    , ("primNoRules", PrimNoRules)
+    , ("primRule", PrimRule)
 
-        tp "primStringSplit" = PrimStringSplit
-        tp "primStringCons" = PrimStringCons
+    , ("primStringConcat", PrimStringConcat)
+    , ("primStringToInteger", PrimStringToInteger)
+    , ("primStringEQ", PrimStringEQ)
+    , ("primStringLT", PrimStringLT)
+    , ("primStringLE", PrimStringLE)
+    , ("primStringLength", PrimStringLength)
 
-        tp "primCharToString" = PrimCharToString
-        tp "primStringToChar" = PrimStringToChar
-        tp "primCharOrd" = PrimCharOrd
-        tp "primCharChr" = PrimCharChr
+    , ("primStringSplit", PrimStringSplit)
+    , ("primStringCons", PrimStringCons)
 
-        tp "primFmtConcat" = PrimFmtConcat
-        tp "primCurrentClock" = PrimCurrentClock
-        tp "primCurrentReset" = PrimCurrentReset
-        tp "primSameFamilyClock" = PrimSameFamilyClock
-        tp "primIsAncestorClock" = PrimIsAncestorClock
-        tp "primChkClockDomain" = PrimChkClockDomain
-        tp "primClockEQ" = PrimClockEQ
-        tp "primClockOf" = PrimClockOf
-        tp "primClocksOf" = PrimClocksOf
-        tp "primNoClock" = PrimNoClock
-        tp "primResetEQ" = PrimResetEQ
-        tp "primResetOf" = PrimResetOf
-        tp "primResetsOf" = PrimResetsOf
-        tp "primNoReset" = PrimNoReset
-        tp "primResetUnassertedVal" = PrimResetUnassertedVal
+    , ("primCharToString", PrimCharToString)
+    , ("primStringToChar", PrimStringToChar)
+    , ("primCharOrd", PrimCharOrd)
+    , ("primCharChr", PrimCharChr)
 
-        tp "primGetName" = PrimGetName
-        tp "primGetParamName" = PrimGetParamName
-        tp "primStateName" = PrimStateName
-        tp "primGetModuleName" = PrimGetModuleName
-        tp "primJoinNames" = PrimJoinNames
-        tp "primExtendNameInteger" = PrimExtendNameInteger
-        tp "primGetNamePosition" = PrimGetNamePosition
-        tp "primGetNameString" = PrimGetNameString
-        tp "primMakeName" = PrimMakeName
+    , ("primFmtConcat", PrimFmtConcat)
+    , ("primCurrentClock", PrimCurrentClock)
+    , ("primCurrentReset", PrimCurrentReset)
+    , ("primSameFamilyClock", PrimSameFamilyClock)
+    , ("primIsAncestorClock", PrimIsAncestorClock)
+    , ("primChkClockDomain", PrimChkClockDomain)
+    , ("primClockEQ", PrimClockEQ)
+    , ("primClockOf", PrimClockOf)
+    , ("primClocksOf", PrimClocksOf)
+    , ("primNoClock", PrimNoClock)
+    , ("primResetEQ", PrimResetEQ)
+    , ("primResetOf", PrimResetOf)
+    , ("primResetsOf", PrimResetsOf)
+    , ("primNoReset", PrimNoReset)
+    , ("primResetUnassertedVal", PrimResetUnassertedVal)
 
-        tp "primStateAttrib" = PrimStateAttrib
+    , ("primGetName", PrimGetName)
+    , ("primGetParamName", PrimGetParamName)
+    , ("primStateName", PrimStateName)
+    , ("primGetModuleName", PrimGetModuleName)
+    , ("primJoinNames", PrimJoinNames)
+    , ("primExtendNameInteger", PrimExtendNameInteger)
+    , ("primGetNamePosition", PrimGetNamePosition)
+    , ("primGetNameString", PrimGetNameString)
+    , ("primMakeName", PrimMakeName)
 
-        tp "primNoPosition" = PrimNoPosition
-        tp "primPrintPosition" = PrimPrintPosition
-        tp "primGetStringPosition" = PrimGetStringPosition
-        tp "primSetStringPosition" = PrimSetStringPosition
-        tp "primGetEvalPosition" = PrimGetEvalPosition
+    , ("primStateAttrib", PrimStateAttrib)
 
-        tp "primGenC" = PrimGenC
-        tp "primGenVerilog" = PrimGenVerilog
-        tp "primGenModuleName" = PrimGenModuleName
+    , ("primNoPosition", PrimNoPosition)
+    , ("primPrintPosition", PrimPrintPosition)
+    , ("primGetStringPosition", PrimGetStringPosition)
+    , ("primSetStringPosition", PrimSetStringPosition)
+    , ("primGetEvalPosition", PrimGetEvalPosition)
 
-        tp "primOpenFile" = PrimOpenFile
-        tp "primCloseHandle" = PrimCloseHandle
-        tp "primHandleIsEOF" = PrimHandleIsEOF
-        tp "primHandleIsOpen" = PrimHandleIsOpen
-        tp "primHandleIsClosed" = PrimHandleIsClosed
-        tp "primHandleIsReadable" = PrimHandleIsReadable
-        tp "primHandleIsWritable" = PrimHandleIsWritable
-        tp "primSetHandleBuffering" = PrimSetHandleBuffering
-        tp "primGetHandleBuffering" = PrimGetHandleBuffering
-        tp "primFlushHandle" = PrimFlushHandle
-        tp "primWriteHandle" = PrimWriteHandle
-        tp "primReadHandleLine" = PrimReadHandleLine
-        tp "primReadHandleChar" = PrimReadHandleChar
+    , ("primGenC", PrimGenC)
+    , ("primGenVerilog", PrimGenVerilog)
+    , ("primGenModuleName", PrimGenModuleName)
 
-        tp "primTypeOf" = PrimTypeOf
-        tp "primPrintType" = PrimPrintType
-        tp "primTypeEQ" = PrimTypeEQ
-        tp "primIsIfcType" = PrimIsIfcType
+    , ("primOpenFile", PrimOpenFile)
+    , ("primCloseHandle", PrimCloseHandle)
+    , ("primHandleIsEOF", PrimHandleIsEOF)
+    , ("primHandleIsOpen", PrimHandleIsOpen)
+    , ("primHandleIsClosed", PrimHandleIsClosed)
+    , ("primHandleIsReadable", PrimHandleIsReadable)
+    , ("primHandleIsWritable", PrimHandleIsWritable)
+    , ("primSetHandleBuffering", PrimSetHandleBuffering)
+    , ("primGetHandleBuffering", PrimGetHandleBuffering)
+    , ("primFlushHandle", PrimFlushHandle)
+    , ("primWriteHandle", PrimWriteHandle)
+    , ("primReadHandleLine", PrimReadHandleLine)
+    , ("primReadHandleChar", PrimReadHandleChar)
 
-        tp "primSavePortType" = PrimSavePortType
+    , ("primTypeOf", PrimTypeOf)
+    , ("primPrintType", PrimPrintType)
+    , ("primTypeEQ", PrimTypeEQ)
+    , ("primIsIfcType", PrimIsIfcType)
 
-        tp "primSeq" = PrimSeq
-        tp "primSeqCond" = PrimSeqCond
+    , ("primSavePortType", PrimSavePortType)
 
-        tp "primIntegerAdd" = PrimIntegerAdd
-        tp "primIntegerSub" = PrimIntegerSub
-        tp "primIntegerNeg" = PrimIntegerNeg
-        tp "primIntegerMul" = PrimIntegerMul
-        tp "primIntegerDiv" = PrimIntegerDiv
-        tp "primIntegerMod" = PrimIntegerMod
-        tp "primIntegerQuot" = PrimIntegerQuot
-        tp "primIntegerRem" = PrimIntegerRem
-        tp "primIntegerExp" = PrimIntegerExp
-        tp "primIntegerLog2" = PrimIntegerLog2
-        tp "primIntegerLog10" = PrimIntegerLog10
+    , ("primSeq", PrimSeq)
+    , ("primSeqCond", PrimSeqCond)
 
-        tp "primIntegerEQ"  = PrimIntegerEQ
-        tp "primIntegerLE"  = PrimIntegerLE
-        tp "primIntegerLT"  = PrimIntegerLT
+    , ("primIntegerAdd", PrimIntegerAdd)
+    , ("primIntegerSub", PrimIntegerSub)
+    , ("primIntegerNeg", PrimIntegerNeg)
+    , ("primIntegerMul", PrimIntegerMul)
+    , ("primIntegerDiv", PrimIntegerDiv)
+    , ("primIntegerMod", PrimIntegerMod)
+    , ("primIntegerQuot", PrimIntegerQuot)
+    , ("primIntegerRem", PrimIntegerRem)
+    , ("primIntegerExp", PrimIntegerExp)
+    , ("primIntegerLog2", PrimIntegerLog2)
+    , ("primIntegerLog10", PrimIntegerLog10)
 
-        tp "primRealToString" = PrimRealToString
-        tp "primIntegerToReal" = PrimIntegerToReal
-        tp "primRealEQ"  = PrimRealEQ
-        tp "primRealLE"  = PrimRealLE
-        tp "primRealLT"  = PrimRealLT
-        tp "primRealAdd"  = PrimRealAdd
-        tp "primRealSub"  = PrimRealSub
-        tp "primRealNeg"  = PrimRealNeg
-        tp "primRealMul"  = PrimRealMul
-        tp "primRealDiv"  = PrimRealDiv
-        tp "primRealAbs"  = PrimRealAbs
-        tp "primRealSignum" = PrimRealSignum
-        tp "primRealExpE" = PrimRealExpE
-        tp "primRealPow"  = PrimRealPow
-        tp "primRealLogE" = PrimRealLogE
-        tp "primRealLogBase" = PrimRealLogBase
-        tp "primRealLog2" = PrimRealLog2
-        tp "primRealLog10" = PrimRealLog10
-        tp "primRealToBits" = PrimRealToBits
-        tp "primBitsToReal" = PrimBitsToReal
-        tp "primRealSin"    = PrimRealSin
-        tp "primRealCos"    = PrimRealCos
-        tp "primRealTan"    = PrimRealTan
-        tp "primRealSinH"   = PrimRealSinH
-        tp "primRealCosH"   = PrimRealCosH
-        tp "primRealTanH"   = PrimRealTanH
-        tp "primRealASin"   = PrimRealASin
-        tp "primRealACos"   = PrimRealACos
-        tp "primRealATan"   = PrimRealATan
-        tp "primRealASinH"  = PrimRealASinH
-        tp "primRealACosH"  = PrimRealACosH
-        tp "primRealATanH"  = PrimRealATanH
-        tp "primRealATan2"  = PrimRealATan2
-        tp "primRealSqrt"   = PrimRealSqrt
-        tp "primRealTrunc"  = PrimRealTrunc
-        tp "primRealCeil"   = PrimRealCeil
-        tp "primRealFloor"  = PrimRealFloor
-        tp "primRealRound"  = PrimRealRound
-        tp "primSplitReal"  = PrimSplitReal
-        tp "primDecodeReal" = PrimDecodeReal
-        tp "primRealToDigits" = PrimRealToDigits
-        tp "primRealIsInfinite" = PrimRealIsInfinite
-        tp "primRealIsNegativeZero" = PrimRealIsNegativeZero
+    , ("primIntegerEQ", PrimIntegerEQ)
+    , ("primIntegerLE", PrimIntegerLE)
+    , ("primIntegerLT", PrimIntegerLT)
 
-        tp "primUninitialized" = PrimUninitialized
-        tp "primMakeRawUninitialized" = PrimRawUninitialized
-        tp "primMarkArrayUninitialized" = PrimMarkArrayUninitialized
+    , ("primRealToString", PrimRealToString)
+    , ("primIntegerToReal", PrimIntegerToReal)
+    , ("primRealEQ", PrimRealEQ)
+    , ("primRealLE", PrimRealLE)
+    , ("primRealLT", PrimRealLT)
+    , ("primRealAdd", PrimRealAdd)
+    , ("primRealSub", PrimRealSub)
+    , ("primRealNeg", PrimRealNeg)
+    , ("primRealMul", PrimRealMul)
+    , ("primRealDiv", PrimRealDiv)
+    , ("primRealAbs", PrimRealAbs)
+    , ("primRealSignum", PrimRealSignum)
+    , ("primRealExpE", PrimRealExpE)
+    , ("primRealPow", PrimRealPow)
+    , ("primRealLogE", PrimRealLogE)
+    , ("primRealLogBase", PrimRealLogBase)
+    , ("primRealLog2", PrimRealLog2)
+    , ("primRealLog10", PrimRealLog10)
+    , ("primRealToBits", PrimRealToBits)
+    , ("primBitsToReal", PrimBitsToReal)
+    , ("primRealSin", PrimRealSin)
+    , ("primRealCos", PrimRealCos)
+    , ("primRealTan", PrimRealTan)
+    , ("primRealSinH", PrimRealSinH)
+    , ("primRealCosH", PrimRealCosH)
+    , ("primRealTanH", PrimRealTanH)
+    , ("primRealASin", PrimRealASin)
+    , ("primRealACos", PrimRealACos)
+    , ("primRealATan", PrimRealATan)
+    , ("primRealASinH", PrimRealASinH)
+    , ("primRealACosH", PrimRealACosH)
+    , ("primRealATanH", PrimRealATanH)
+    , ("primRealATan2", PrimRealATan2)
+    , ("primRealSqrt", PrimRealSqrt)
+    , ("primRealTrunc", PrimRealTrunc)
+    , ("primRealCeil", PrimRealCeil)
+    , ("primRealFloor", PrimRealFloor)
+    , ("primRealRound", PrimRealRound)
+    , ("primSplitReal", PrimSplitReal)
+    , ("primDecodeReal", PrimDecodeReal)
+    , ("primRealToDigits", PrimRealToDigits)
+    , ("primRealIsInfinite", PrimRealIsInfinite)
+    , ("primRealIsNegativeZero", PrimRealIsNegativeZero)
+
+    , ("primUninitialized", PrimUninitialized)
+    , ("primMakeRawUninitialized", PrimRawUninitialized)
+    , ("primMarkArrayUninitialized", PrimMarkArrayUninitialized)
         -- the same primitive is used to implement both of these
-        tp "primMarkArrayInitialized" = PrimMarkArrayInitialized
-        tp "primMarkBitArrayInitialized" = PrimMarkArrayInitialized
-        tp "primUninitBitArray" = PrimUninitBitArray
-        tp "primIsBitArray" = PrimIsBitArray
-        tp "primUpdateBitArray" = PrimUpdateBitArray
-        tp "primBuildUndefined" = PrimBuildUndefined
-        tp "primMakeRawUndefined" = PrimRawUndefined
-        tp "primIsRawUndefined" = PrimIsRawUndefined
-        tp "primImpCondOf" = PrimImpCondOf
-        tp "primArrayNew" = PrimArrayNew
-        tp "primArrayLength" = PrimArrayLength
-        tp "primArraySelect" = PrimArraySelect
-        tp "primArrayUpdate" = PrimArrayUpdate
-        tp "primArrayDynSelect" = PrimArrayDynSelect
-        tp "primArrayDynUpdate" = PrimArrayDynUpdate
-        tp "primBuildArray" = PrimBuildArray
+    , ("primMarkArrayInitialized", PrimMarkArrayInitialized)
+    , ("primMarkBitArrayInitialized", PrimMarkArrayInitialized)
+    , ("primUninitBitArray", PrimUninitBitArray)
+    , ("primIsBitArray", PrimIsBitArray)
+    , ("primUpdateBitArray", PrimUpdateBitArray)
+    , ("primBuildUndefined", PrimBuildUndefined)
+    , ("primMakeRawUndefined", PrimRawUndefined)
+    , ("primIsRawUndefined", PrimIsRawUndefined)
+    , ("primImpCondOf", PrimImpCondOf)
+    , ("primArrayNew", PrimArrayNew)
+    , ("primArrayLength", PrimArrayLength)
+    , ("primArraySelect", PrimArraySelect)
+    , ("primArrayUpdate", PrimArrayUpdate)
+    , ("primArrayDynSelect", PrimArrayDynSelect)
+    , ("primArrayDynUpdate", PrimArrayDynUpdate)
+    , ("primBuildArray", PrimBuildArray)
 
-        tp "primSetSelPosition" = PrimSetSelPosition
+    , ("primSetSelPosition", PrimSetSelPosition)
 
-        tp "primPack" = PrimPack
-        tp "primUnpack" = PrimUnpack
-        tp s = internalError ("unknown primitive: " ++ s ++ " " ++ prPosition (getIdPosition i))
+    , ("primPack", PrimPack)
+    , ("primUnpack", PrimUnpack)
+    ]
 
 instance PPrint PrimOp where
     pPrint d p op = text (toString op)

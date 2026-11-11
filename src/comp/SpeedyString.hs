@@ -3,6 +3,7 @@
 module SpeedyString(SString, toString, fromString, fromEnumName,
                     noteGenName, utf8Bytes, fromUtf8,
                     (++), concat, filter,
+                    foldrChars, isSuffixOfChars, lookupChars,
                     InternSnapshot(..), snapshotInternState, validSnapshot,
                     snapshotProblem, restoreInternState,
                     renderInternTable, internCount, internedSince,
@@ -31,7 +32,7 @@ import qualified Data.ByteString.Short as SBS
 import qualified Data.ByteString.Short.Internal as SBS(unsafeIndex)
 import Data.Char(chr, ord, toUpper, isDigit)
 import Data.Word(Word8)
-import Data.List(foldl', intersperse)
+import Data.List(find, foldl', intersperse, isSuffixOf)
 import Data.Maybe(isNothing)
 import Numeric(showHex)
 -- import qualified NotSoSpeedyString
@@ -445,6 +446,75 @@ internBytes h p =
          Left j -> fmap (SString . idOf) (insert t j h 0 p)
 
 
+-- Reading spellings
+--
+-- Questions about toString s, answered from s's entry without building the
+-- String.  Mirror argument, for each helper below: entryOf forces s and reads
+-- the table exactly as toString does (indexOf, then the stored bytes or the
+-- key); nothing here interns or materializes a reserved id, and an entry
+-- never changes once written.  So a helper forces and interns exactly what the
+-- String function on toString s did, provided its other arguments (String
+-- literals, a pure f) intern nothing when forced, and it gives the same
+-- answer.  A generated entry answers from genSpelling k, a lazy String of
+-- which only the part the question needs is built.
+
+data Entry = Packed !SBS.ShortByteString | Gen !Int
+
+-- toString's table read, without the decoding
+entryOf :: SString -> Entry
+entryOf (SString d) = unsafePerformIO $
+                      do t <- readIORef table
+                         i <- indexOf d
+                         if i < 0 || i >= tNext t then err else do
+                           k <- unsafeRead (tKey t) i
+                           if k == 0 then fmap Packed (unsafeRead (tStr t) i)
+                                     else return (Gen k)
+
+-- | foldr f z (toString s).  Mirror: f gets the same Chars in the same order,
+-- each decoded only when f demands it.  Inlined, so that a fold consuming its
+-- Chars as they come (all, take) runs as a loop.
+{-# INLINE foldrChars #-}
+foldrChars :: (Char -> b -> b) -> b -> SString -> b
+foldrChars f z s =
+    case entryOf s of
+      Packed p -> let n = SBS.length p
+                      go i | i >= n = z
+                           | otherwise = f (charAt p i)
+                                           (go (i + leadWidth (byteAt p i)))
+                  in  go 0
+      Gen k -> foldr f z (genSpelling k)
+
+-- | isSuffixOf str (toString s).  Mirror: str's Chars are compared with the
+-- code points from the end of the bytes; str must intern nothing when forced.
+isSuffixOfChars :: String -> SString -> Bool
+isSuffixOfChars str s =
+    case entryOf s of
+      Packed p -> let -- where str's packing starts if p ends with it, or -1
+                      endsAt e [] = e
+                      endsAt e (c : cs) =
+                          let j = endsAt e cs
+                              i = codeStart p (j - 1)
+                          in  if j > 0 && codeAt p i == ord c then i else -1
+                  in  endsAt (SBS.length p) str >= 0
+      Gen k -> isSuffixOf str (genSpelling k)
+
+-- | lookup (toString s) tbl.  Mirror: packs compares each key with the bytes,
+-- as findPlain does, in tbl's order; the keys must intern nothing when forced.
+lookupChars :: [(String, a)] -> SString -> Maybe a
+lookupChars tbl s =
+    case entryOf s of
+      Packed p -> fmap snd (find (packs p . fst) tbl)
+      Gen k -> lookup (genSpelling k) tbl
+
+-- the Char whose bytes start at i
+charAt :: SBS.ShortByteString -> Int -> Char
+charAt p i = let n = codeAt p i
+             in  if n < 0x80 then unsafeAt asciiChars n else chr n
+
+-- the start of the code point whose bytes include i
+codeStart :: SBS.ShortByteString -> Int -> Int
+codeStart p i = if byteAt p i .&. 0xC0 == 0x80 then codeStart p (i - 1) else i
+
 -- UTF-8
 --
 -- BinData stores a string as Data.Text's UTF-8 encoding of it.  A packed
@@ -455,11 +525,10 @@ internBytes h p =
 
 -- | encodeUtf8 (pack (toString s)), when that is s's packed spelling.
 utf8Bytes :: SString -> Maybe SBS.ShortByteString
-utf8Bytes (SString d) = unsafePerformIO $
-                        do t <- readIORef table
-                           i <- indexOf d
-                           p <- if i < 0 || i >= tNext t then err else bytesOf t i
-                           return (if hasSurrogate p then Nothing else Just p)
+utf8Bytes s = if hasSurrogate p then Nothing else Just p
+  where p = case entryOf s of
+              Packed q -> q
+              Gen k -> genBytes k
 
 -- | fromString (unpack (decodeUtf8 b)), when b is well-formed UTF-8: b is
 -- checked now and interned when the SString is forced.

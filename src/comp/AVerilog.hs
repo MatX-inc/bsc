@@ -22,7 +22,6 @@ import qualified Data.Generics as Generic
 
 import ListMap(lookupWithDefault)
 import Util
-import FileNameUtil(hasSuf)
 import PFPrint
 import Error(internalError, ErrorHandle, bsWarning,
              ErrMsg(WSVReservedIdent, WSVStdIdentRenamed, WSVStdIdentExternal))
@@ -32,6 +31,7 @@ import Flags(Flags, systemVerilogOutput,
              removeReg, removeCross, removeInoutConnect, removeUnusedMods,
              useDPI, verilogDeclareAllFirst)
 import Id
+import FStringCompat(eqFString, isSuffixOfFString)
 import Pragma(PProp(..))
 import ASyntax
 import ASyntaxUtil
@@ -1137,9 +1137,16 @@ genInstances errh flags ff_blocks vDef aspack =
 
         -- XXX they have been created with the string "_AlwaysEnabled"
         -- XXX appended to them, so look for that string
-        alwaysEnabledString string = (hasSuf "_AlwaysEnabled" string)
+        -- hasSuf sfx (getIdString aid), from the base's bytes: sfx has no
+        -- ".", so the name ends with it only if the base does, and hasSuf
+        -- wants the name longer than sfx (a qualified one always is)
+        alwaysEnabledString aid =
+            let b = getIdBase aid
+                sfx = "_AlwaysEnabled"
+            in  isSuffixOfFString sfx b &&
+                not (isUnqualId aid && b `eqFString` sfx)
         notAlwaysEnabledADef (ADef aid _ _ _) =
-            (not (alwaysEnabledString (getIdString aid)))
+            (not (alwaysEnabledString aid))
 
         -- definitions which are not always_enabled
         filtered_ds = filter notAlwaysEnabledADef (aspkg_values aspack)

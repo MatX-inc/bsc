@@ -10,6 +10,7 @@ module Id(
         emptyId,
         unq_eqs,
         getIdString,
+        foldrIdString,
         getIdQualString,
         getIdPosition,
         isEmptyId,
@@ -327,7 +328,7 @@ type Longname = [Id]
 mkQId :: Position -> FString -> FString -> Id
 mkQId pos mfs fs
     | fs == fsEmpty = Id pos fsEmpty fsEmpty []
-    | isDigit (head (getFString fs)) = Id pos fsEmpty fs [] -- XXX
+    | Just c <- headFString fs, isDigit c = Id pos fsEmpty fs [] -- XXX
     | otherwise = Id pos mfs fs []
 
 -- Qualify  id(2) with the name from id(1)   join id properties.
@@ -377,6 +378,17 @@ getIdString a | mfs == fsEmpty = getFString fs
     where mfs = getIdQual a
           fs = getIdBase a
 
+-- | foldr f z (getIdString a), on the packed spellings: the qualifier, ".",
+-- then the base, each Char decoded only when f demands it.  Mirror: reads what
+-- getIdString reads, in its order, and interns nothing (foldrFString).
+{-# INLINE foldrIdString #-}
+foldrIdString :: (Char -> b -> b) -> b -> Id -> b
+foldrIdString f z a
+    | mfs == fsEmpty = foldrFString f z fs
+    | otherwise = foldrFString f (f '.' (foldrFString f z fs)) mfs
+    where mfs = getIdQual a
+          fs = getIdBase a
+
 getIdBaseString :: Id -> String
 getIdBaseString a = getFString $ getIdBase a
 
@@ -403,9 +415,9 @@ getIdFStringP a =
     let mfs = getIdQual a
         fs = getIdBase a
     in if mfs == fsEmpty then fs else
-        case getFString fs of
-        "->" -> fs
-        c:_ | isDigit c -> fs
+        case headFString fs of
+        Just '-' | fs `eqFString` "->" -> fs
+        Just c | isDigit c -> fs
         _ -> concatFString [mfs, fsDot, fs]
 
 getIdTuple :: Id -> (Position, String)

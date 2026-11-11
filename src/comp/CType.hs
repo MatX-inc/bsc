@@ -1121,8 +1121,10 @@ cTVarNum :: Id -> CType
 cTVarNum name = cTVarKind name KNum
 
 cTCon :: Id -> CType
-cTCon i | all isDigit s = cTNum (read s) (getIdPosition i)
-        | head s == '"' = cTStr (mkFString $ read s) (getIdPosition i)
+cTCon i | foldrIdString (\c r -> isDigit c && r) True i = -- all isDigit s
+            cTNum (read s) (getIdPosition i)
+        | foldrIdString (\c _ -> c == '"') False i = -- head s == '"', s /= ""
+            cTStr (mkFString $ read s) (getIdPosition i)
   where s = getIdString i
 cTCon i = TCon (TyCon i Nothing TIabstract)
 

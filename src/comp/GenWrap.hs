@@ -1971,7 +1971,7 @@ fsIndexPlaceholder = mkFString "[_]"
 fixupPathElement :: FString -> FString
 fixupPathElement fs
   | fs == fsUnderscore = fsDot
-  | all isDigit (getFString fs) = fsIndexPlaceholder
+  | allFString isDigit fs = fsIndexPlaceholder
   | otherwise = fs
 
 -- Extend the prefixes
