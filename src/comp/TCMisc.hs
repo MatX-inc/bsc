@@ -715,8 +715,8 @@ sat dvs ps p =
 -- given unifies with in the Commitment check), made no newVar
 -- draw and no numeric-equality dependency, ran no satisfy in normT, has
 -- only non-recursive, coherent, ground bindings closed over their own
--- names (Monad ActionValue excluded), and recorded only ground ATF
--- results.  A hit is
+-- names (Monad ActionValue excluded), recorded only ground ATF results,
+-- and has no output variable among the last-resort variables.  A hit is
 -- taken only when the stacks have room for the solve, no given, explicit
 -- given or outer stack entry could meet a nested goal of the solve
 -- (lookfor's equality on undetermined positions, decided on keys without
@@ -1259,6 +1259,11 @@ buildEntry dp ai dvs c ts ki c0 c1 dsat dsuper evs sm (SatResult _ _ s_final _ r
       -- names; a nested pooled solve is closed, and binds its root)
       when (not (IS.null (IS.difference (refsOf tmpl) (boundOf tmpl)))) $
         Left CRecUnbound
+      -- the last-resort rules (StdPrel.checkDVS) can fire on an output in
+      -- dvs, and a hit's solve has none there (hitGuards' dvsOK)
+      when (not (null outNums) &&
+            any (\ (TyVar _ n _) -> n `elem` outNums) (fromMaybe [] dvs)) $
+        Left CRecOutDvs
       outs <- mapM (\ (i, v) -> (,) i <$> subT (TVar v)) (kiOutVars ki)
       KeyInfo { kiKey = key, kiTable = kt1 } <- poolKey True (dpKeyTab dp) ai dvs c ts
       let (before, rootPkg) = splitRoot evs
@@ -1324,6 +1329,7 @@ buildEntry dp ai dvs c ts ki c0 c1 dsat dsuper evs sm (SatResult _ _ s_final _ r
                 Just e | not (hasTVarE e) -> Right e
                 Just _ -> Left CRecNonGround
                 Nothing -> Left CRecShape
+    outNums = [ n | (_, TyVar _ n _) <- kiOutVars ki ]
     -- a dictionary drawn in the solve
     slotNum n | n >= c0 && n < c1 = Just (SDict (n - c0))
               | otherwise = Nothing
