@@ -5,7 +5,8 @@
 --   noted      a restore after a generated name is noted is rejected
 --   empty      an empty snapshot restores and changes nothing, so another
 --              restore may follow it
---   generated  generated spellings restore as plain entries, and a name
+--   generated  generated spellings restore as plain entries, a CSE name
+--              made from its number is its restored entry, and a name
 --              noted after the restore is placed after every restored entry
 --   lazycount  a snapshot whose internNextId interns a string when it is
 --              evaluated is rejected, and none of its entries is restored
@@ -15,8 +16,8 @@ import Data.Either(isLeft, isRight)
 import System.Environment(getArgs)
 import System.Exit(exitFailure)
 
-import SpeedyString(InternSnapshot(..), fromString, internCount, noteGenName,
-                    restoreInternState, snapshotInternState)
+import SpeedyString(InternSnapshot(..), fromString, fromEnumName, internCount,
+                    noteGenName, restoreInternState, snapshotInternState)
 
 main :: IO ()
 main = do
@@ -69,8 +70,9 @@ main = do
         after <- snapshotInternState
         check "the table is that snapshot" (after == sample)
       "generated" -> do
-        let spellings = ["a", "_tctyvar5", "_tcdict2", "_tctyvar05", "b"]
-            snap = InternSnapshot 5 (zip [0 ..] spellings)
+        let spellings = ["a", "_tctyvar5", "_tcdict2", "_tctyvar05", "__i7",
+                         "__j0", "__i07", "b"]
+            snap = InternSnapshot 8 (zip [0 ..] spellings)
         r <- restoreInternState snap
         check "generated spellings restore" (isRight r)
         let ss = map fromString spellings
@@ -81,11 +83,13 @@ main = do
         v9 <- evaluate (fromString "_tctyvar9")
         check "_tctyvar5 is its restored entry"
               (fromString "_tctyvar5" == ss !! 1)
+        check "__i7 and __j0 made from their numbers are their restored entries"
+              (fromEnumName "_i" 7 == ss !! 4 && fromEnumName "_j" 0 == ss !! 5)
         check "a name noted after the restore follows every restored entry"
               (last ss < v9 && v9 < c)
         after <- snapshotInternState
         check "the snapshot lists the noted name at its note"
-              (after == InternSnapshot 7
+              (after == InternSnapshot 10
                           (zip [0 ..] (spellings ++ ["_tctyvar9", "c"])))
       "lazycount" -> do
         let snap = sample { internNextId = fromString "count" `seq` 4 }
