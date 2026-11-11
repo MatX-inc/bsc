@@ -142,12 +142,16 @@ iInlineUseLimit use_limit
                           imod_state_insts = state_vars' }
     in new_imod
 
+-- The references in e, left to right.  The list is built onto an
+-- accumulator: appending each subterm's list copied it once per enclosing
+-- node, which is quadratic in the depth of long action and if chains.
 iValVars :: IExpr a -> [Id]
-iValVars (IAps e _ es) = iValVars e ++ concatMap iValVars es
-iValVars (ICon i (ICValue { })) = [i]
-iValVars (ICon i (ICUndet {imVal = Just e})) = iValVars e
-iValVars (ICon _ _) = []
-iValVars e = internalError ("iValVars: " ++ ppReadable e)
+iValVars e0 = go e0 []
+  where go (IAps e _ es) acc = go e (foldr go acc es)
+        go (ICon i (ICValue { })) acc = i : acc
+        go (ICon i (ICUndet {imVal = Just e})) acc = go e acc
+        go (ICon _ _) acc = acc
+        go e _ = internalError ("iValVars: " ++ ppReadable e)
 
 -- #############################################################################
 -- #
