@@ -24,6 +24,8 @@ import Prelude hiding ((<>))
 #endif
 
 import qualified Data.Map.Strict as M
+import qualified Data.IntMap.Strict as IM
+import Data.Bits(shiftL, (.|.))
 import qualified Data.Set as S
 import Data.IORef(IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Data.Maybe(isJust, fromJust)
@@ -49,7 +51,7 @@ import PPrint
 import PFPrint
 import Position(noPosition)
 import Util(itos)
-import FStringCompat(FString, mkNumFString)
+import FStringCompat(FString, mkNumFString, fstringId)
 import PreStrings(fsEmpty)
 import SpeedyString(internCount)
 
@@ -449,11 +451,32 @@ tKey (ITVar_ i)            = TKVar (getIdBase i)
 tKey (ITNum n)             = TKNum n
 tKey (ITStr s)             = TKStr s
 
-data InternTable = InternTable !(M.Map NodeKey IType) {-# UNPACK #-} !Int
+-- An application whose children both have a tCode is keyed in the
+-- IntMap, any other key in the Map: the path is a function of the key.
+data InternTable = InternTable !(IM.IntMap (IM.IntMap IType))
+                               !(M.Map NodeKey IType) {-# UNPACK #-} !Int
+
+-- An injective code of a child's TKey: a tag over a value in [0, 2^60),
+-- else -1.  A tycon unique is one-to-one with its qualified name.
+tCode :: IType -> Int
+tCode (ITForAll_ u _ _ _ _ _ _) = tagged 0 u
+tCode (ITAp_ u _ _ _ _ _)       = tagged 0 u
+tCode (ITCon_ u _ _ _)      = tagged 1 u
+tCode (ITVar_ i)            = tagged 2 (fstringId (getIdBase i))
+tCode (ITStr s)             = tagged 3 (fstringId s)
+tCode (ITNum n) | n >= 0 && n < toInteger codeLimit = tagged 4 (fromInteger n)
+                | otherwise = -1
+
+tagged :: Int -> Int -> Int
+tagged tag x | x >= 0 && x < codeLimit = (x `shiftL` 3) .|. tag
+             | otherwise = -1
+
+codeLimit :: Int
+codeLimit = 1 `shiftL` 60
 
 {-# NOINLINE internTable #-}
 internTable :: IORef InternTable
-internTable = unsafePerformIO $ newIORef (InternTable M.empty 0)
+internTable = unsafePerformIO $ newIORef (InternTable IM.empty M.empty 0)
 
 -- The hidden flag -hack-no-itype-ftv-cache (registered with the
 -- other progArgs-queried flags in FlagsDecode.traceflags, so the
@@ -472,35 +495,54 @@ ftvCacheEnabled = not ("-hack-no-itype-ftv-cache" `elem` progArgs)
 
 {-# NOINLINE internAp #-}
 internAp :: IType -> IType -> IType
-internAp f a = unsafePerformIO $ do
+internAp f a
+  -- forces f, then a, as the strict fields of NKAp do
+  | cf >= 0 && ca >= 0 = unsafePerformIO $ do
+    InternTable im0 _ _ <- readIORef internTable
+    case IM.lookup cf im0 >>= IM.lookup ca of
+      Just t  -> return t
+      Nothing -> atomicModifyIORef' internTable goFast
+  | otherwise = unsafePerformIO $ do
     let key = NKAp (tKey f) (tKey a)
-    InternTable m0 _ <- readIORef internTable
+    InternTable _ m0 _ <- readIORef internTable
     case M.lookup key m0 of
       Just t  -> return t
       Nothing -> atomicModifyIORef' internTable (go key)
   where
-    go key st@(InternTable m n) =
+    cf = tCode f
+    ca = tCode a
+    -- inlined so that fvs is not floated out to a thunk built on every call
+    {-# INLINE new #-}
+    new n = let fvs | ftvCacheEnabled = fTVarSet f `vsUnionCanon` fTVarSet a
+                    | otherwise       = vsEmpty
+                b = iTypeAtfFree f && iTypeAtfFree a
+                t | groundNew fvs = ITAp_ n fvs b (groundKindOf t) f a
+                  | otherwise     = ITAp_ n fvs b Nothing f a
+            in  t
+    goFast st@(InternTable im m n) =
+        case IM.lookup cf im >>= IM.lookup ca of
+          Just t  -> (st, t)
+          Nothing -> let !t = new n
+                         im' = IM.insertWith IM.union cf (IM.singleton ca t) im
+                     in  (InternTable im' m (n+1), t)
+    go key st@(InternTable im m n) =
         case M.lookup key m of
           Just t  -> (st, t)
-          Nothing -> let fvs | ftvCacheEnabled = fTVarSet f `vsUnionCanon` fTVarSet a
-                             | otherwise       = vsEmpty
-                         b = iTypeAtfFree f && iTypeAtfFree a
-                         t | groundNew fvs = ITAp_ n fvs b (groundKindOf t) f a
-                           | otherwise     = ITAp_ n fvs b Nothing f a
-                     in  (InternTable (M.insert key t m) (n+1), t)
+          Nothing -> let t = new n
+                     in  (InternTable im (M.insert key t m) (n+1), t)
 
 {-# NOINLINE mkITForAll #-}
 mkITForAll :: Id -> IKind -> IType -> IType
 mkITForAll i k t = unsafePerformIO $ do
     let key = NKForAll ti k (tKey t)
-    InternTable m0 _ <- readIORef internTable
+    InternTable _ m0 _ <- readIORef internTable
     case M.lookup key m0 of
       Just t' -> return t'
       Nothing -> atomicModifyIORef' internTable (go key)
   where
     -- binder Ids are type-embedded Ids like any other: normalized
     ti = tidyTypeId i
-    go key st@(InternTable m n) =
+    go key st@(InternTable im m n) =
         case M.lookup key m of
           Just t' -> (st, t')
           Nothing -> let fvs | ftvCacheEnabled = vsDeleteCanon ti (fTVarSet t)
@@ -508,7 +550,7 @@ mkITForAll i k t = unsafePerformIO $ do
                          b = iTypeAtfFree t
                          t' | groundNew fvs = ITForAll_ n fvs b (groundKindOf t') ti k t
                             | otherwise     = ITForAll_ n fvs b Nothing ti k t
-                     in  (InternTable (M.insert key t' m) (n+1), t')
+                     in  (InternTable im (M.insert key t' m) (n+1), t')
 
 -- Whether a new node with free variables fvs gets a kind field thunk.
 groundNew :: VarSet -> Bool
@@ -661,11 +703,11 @@ markWalked ref u () = unsafePerformIO $ do
 rnfChecked :: () -> ()
 rnfChecked walk = unsafePerformIO $ do
     s0 <- internCount
-    InternTable _ n0 <- readIORef internTable
+    InternTable _ _ n0 <- readIORef internTable
     TConTable c0 <- readIORef tconTable
     evaluate walk
     s1 <- internCount
-    InternTable _ n1 <- readIORef internTable
+    InternTable _ _ n1 <- readIORef internTable
     TConTable c1 <- readIORef tconTable
     when (s1 /= s0 || n1 /= n0 || M.size c1 /= M.size c0) $
         internalError ("IType.rnf: the walk after the bit interned " ++
