@@ -13,7 +13,7 @@ module BinData ( Byte
                , Lazy(..), toBinLazy, fromBinLazy
                , encodeWithIO, encodeV2, encodeV2With
                , encodeV2Strip, keepPositions
-               , decode, decodeStrict, decodeWithHash
+               , decode, decodeStrict, decodeWithHash, decodeStrings
                ) where
 
 {- Routines for converting structures to/from byte strings.
@@ -2462,28 +2462,12 @@ mkTables walk s ft = do
   mapM_ (\(k, t) -> checkTable k t) (zip (formatKinds fmt) (fTables ft))
   let emptyBoxed :: Array Int v
       emptyBoxed = listArray (0, -1) []
-      emptyChunks :: UArray Int Int
-      emptyChunks = listArray (0, -1) []
-      tbl0 = Tables { tBytes = s, tStrings = emptyBoxed
-                    , tIds = emptyBoxed, tPositions = emptyBoxed
-                    , tTypes = emptyBoxed, tITypes = emptyBoxed
-                    , tSorts = emptyBoxed
-                    , tChunks = emptyChunks, tChunkCount = 0
-                    , tWalk = False }
+      tbl0 = emptyTables s
   -- the string table, interned now (unless walking) and in table
   -- order: FString ids are the Ord of every Id-keyed map, so this must
   -- happen before and in the same order as a sequential decode would
   -- have interned them
-  strs <- runAt tbl0 False (fStrStart ft) (fChunkStart ft) "string table" $ do
-            n <- getU32
-            when (n /= fStrCount ft) $ bad "string count"
-            let loop i acc
-                  | i >= n    = return (reverse acc)
-                  | otherwise = do str <- readBytes
-                                   fs <- if walk then return (mkFString str)
-                                         else In (\_ -> evaluateST (mkFString str))
-                                   loop (i + 1) (fs : acc)
-            loop (0 :: Int) []
+  strs <- readStrTable walk s ft
   let strArr = listArray (0, fStrCount ft - 1) strs :: Array Int FString
   -- the chunk index: every chunk lies within the bodies region
   chunks <- runAt tbl0 False (fChunkStart ft) (BS.length s - footerSize fmt) "chunk index" $ do
@@ -2520,6 +2504,39 @@ mkTables walk s ft = do
                       , tChunks = chunkArr, tChunkCount = nChunks
                       , tWalk = walk }
   return tables
+
+-- Tables with no entries, for the regions read before the tables exist
+emptyTables :: BS.ByteString -> Tables
+emptyTables s =
+  let emptyBoxed :: Array Int v
+      emptyBoxed = listArray (0, -1) []
+  in  Tables { tBytes = s, tStrings = emptyBoxed
+             , tIds = emptyBoxed, tPositions = emptyBoxed
+             , tTypes = emptyBoxed, tITypes = emptyBoxed
+             , tSorts = emptyBoxed
+             , tChunks = listArray (0, -1) [], tChunkCount = 0
+             , tWalk = False }
+
+-- The string table in table order, each string interned as it is read
+-- (unless walking: see mkTables)
+readStrTable :: Bool -> BS.ByteString -> Footer -> ST s [FString]
+readStrTable walk s ft =
+  runAt (emptyTables s) False (fStrStart ft) (fChunkStart ft) "string table" $ do
+    n <- getU32
+    when (n /= fStrCount ft) $
+      internalError "BinData.decode: malformed container (string count)"
+    let loop i acc
+          | i >= n    = return (reverse acc)
+          | otherwise = do str <- readBytes
+                           fs <- if walk then return (mkFString str)
+                                 else In (\_ -> evaluateST (mkFString str))
+                           loop (i + 1) (fs : acc)
+    loop (0 :: Int) []
+
+-- A container's strings, interned in table order as decode interns them,
+-- with nothing else decoded
+decodeStrings :: BS.ByteString -> [FString]
+decodeStrings s = runST (readStrTable False s (parseFooter s))
 
 decodeContainer :: (Bin a) => Bool -> BS.ByteString -> a
 decodeContainer strict s = runST $ do
