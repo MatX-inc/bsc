@@ -722,7 +722,8 @@ sat dvs ps p =
 -- (lookfor's equality on undetermined positions, decided on keys without
 -- forcing, where a position without a key is no witness that they
 -- differ), no such entry or last-resort variable holds an output
--- variable, and the output variables unify with the recorded types;
+-- variable, the output variables are numbered in the record's order,
+-- and they unify with the recorded types;
 -- otherwise the predicate is solved as without the pool (and after
 -- refuseLimit refusals by the context guard the key is not looked up
 -- again).  Keys are
@@ -837,6 +838,12 @@ poolSat dp ai dvs ps p@(VPred w (PredWithPositions (IsIn c ts) _ _)) whole_stack
               plain
             Just (KEntry e) | eRefused e >= refuseLimit -> do
               countDP CSkipRefused 1
+              plain
+            -- the solve orders variables by number (joins, unification):
+            -- outputs numbered in another order than the record's would
+            -- bind its dictionaries in another order
+            Just (KEntry e) | eOutRank e /= outRank ki -> do
+              countDP CFallbackRank 1
               plain
             Just (KEntry e) -> do
               g <- hitGuards dp e ki dvs whole_stack givens bvs
@@ -987,6 +994,12 @@ isPVar _ = False
 isPKey :: PK -> Bool
 isPKey (PKey _) = True
 isPKey _ = False
+
+-- Per distinct output variable, in position order, the rank of its number
+-- among theirs.
+outRank :: KeyInfo -> [Int]
+outRank ki = [ length (filter (< n) ns) | n <- ns ]
+  where ns = nub [ n | (_, TyVar _ n _) <- kiOutVars ki ]
 
 replayHit :: Class -> Entry -> KeyInfo -> Id -> Int -> Int -> Int -> Subst
           -> (Subst -> TI ()) -> TI SatResult
@@ -1210,7 +1223,7 @@ permanentCnts = [CRecRecursive, CRecIncoherent, CRecMonadAV, CRecShape, CRecShap
 forceEntry :: Entry -> ()
 forceEntry e = eDraws e `seq` ft (eTmpl e) `seq`
                forceList (\ (i, t) -> i `seq` t `seq` ()) (eOuts e) `seq`
-               M.size (eGoals e) `seq` ()
+               M.size (eGoals e) `seq` forceList (`seq` ()) (eOutRank e) `seq` ()
   where forceList f xs = foldr (\ x r -> f x `seq` r) () xs
         ft TEmpty = ()
         ft (TLeaf sl t ex cls) = sl `seq` t `seq` fe ex `seq` cls `seq` ()
@@ -1282,6 +1295,7 @@ buildEntry dp ai dvs c ts ki c0 c1 dsat dsuper evs sm (SatResult _ _ s_final _ r
                       eGoals = smGoals sm,
                       eMaxSat = max 0 dsat,
                       eMaxSuper = max 0 dsuper,
+                      eOutRank = outRank ki,
                       eRefused = 0 },
               kt1)
   where
