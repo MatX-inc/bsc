@@ -60,6 +60,7 @@ initSState str flags doHardFail ds avis rs = do
                                             | avi <- avis],
                    proofMap = M.empty,
                    proofMapS = M.empty,
+                   satMap = M.empty,
 
                    anyId = 0,
                    unknownId = 0,
@@ -90,10 +91,14 @@ withTraceTest m =
 -- -------------------------
 
 checkDisjointExpr :: SState -> AExpr -> AExpr -> IO (Maybe Bool, SState)
-checkDisjointExpr s e1 e2 = runStateT (checkDisjointExprM e1 e2) s
+checkDisjointExpr s e1 e2 = runStateT (checkDisjointExprM True e1 e2) s
 
-checkDisjointExprM :: AExpr -> AExpr -> SM (Maybe Bool)
-checkDisjointExprM e1 e2 = withTraceTest $ do
+-- For expression queries (single = True; rule pairs pass False), a pair
+-- that is one condition with itself or with True is satisfiable exactly when
+-- that condition is, so the result is kept per condition (satMap) and the
+-- solver runs once for each.  The conversions are made as for any pair.
+checkDisjointExprM :: Bool -> AExpr -> AExpr -> SM (Maybe Bool)
+checkDisjointExprM single e1 e2 = withTraceTest $ do
 
   when traceTest $ traceM("comparing exprs: " ++ ppString (e1, e2))
   when traceConv $ traceM("   e1 = " ++ show e1)
@@ -108,11 +113,21 @@ checkDisjointExprM e1 e2 = withTraceTest $ do
         (ye2, _) <- convAExpr2SExpr_Force True e2
         --when traceTest $ traceM("conv2 done")
 
-        liftIO $ S.assert ctx ye1
-        liftIO $ S.assert ctx ye2
+        sat_memo <- gets satMap
+        let mcond = if single then singleCondition e1 e2 else Nothing
+        sat_res <- case mcond of
+          Just c | Just r <- M.lookup c sat_memo -> return r
+          _ -> do
+            liftIO $ S.assert ctx ye1
+            liftIO $ S.assert ctx ye2
 
-        yf <- gets falseExpr
-        sat_res <- liftIO $ S.query ctx yf
+            yf <- gets falseExpr
+            res <- liftIO $ S.query ctx yf
+            case mcond of
+              Just c | res == S.Valid || res == S.Invalid ->
+                modify (\s -> s { satMap = M.insert c res (satMap s) })
+              _ -> return ()
+            return res
         liftIO $ S.ctxPop ctx
         --
         addToProofMap e1 e2 sat_res
@@ -139,7 +154,15 @@ checkDisjointRulePairM (r1, r2) = do
   when traceTest $ traceM("comparing rules: " ++ ppString (r1,r2))
   c1 <- getRuleCond r1
   c2 <- getRuleCond r2
-  checkDisjointExprM c1 c2
+  checkDisjointExprM False c1 c2
+
+-- The condition whose satisfiability is that of the pair, if there is one.
+singleCondition :: AExpr -> AExpr -> Maybe AExpr
+singleCondition e1 e2
+  | isTrue e1 = Just e2
+  | isTrue e2 = Just e1
+  | e1 == e2 = Just e1
+  | otherwise = Nothing
 
 getRuleCond :: ARuleId -> SM AExpr
 getRuleCond rid = do
@@ -300,6 +323,8 @@ data SState =
                stateMap      :: M.Map AId VModInfo,
                proofMap      :: M.Map (AExpr, AExpr) S.Result,
                proofMapS     :: M.Map S.Expr S.Result,
+               -- satisfiability of single conditions (checkDisjointExprM)
+               satMap        :: M.Map AExpr S.Result,
 
                anyId         :: Integer,
                unknownId     :: Integer,
