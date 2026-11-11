@@ -394,7 +394,7 @@ parseFile errh flags fatal_name_mismatch fname = do
     -- Check for package name mismatch
     let reportMismatch = if fatal_name_mismatch then bsError else bsWarning
     -- Use getIdString rather than pfpString here: pfpString calls isClassic(),
-    -- which reads a global IORef.  If it fires before compilePackage calls
+    -- which reads a global IORef.  If it fires before beginPackage calls
     -- setSyntax, GHC can memoize the result as CLASSIC and corrupt the print
     -- mode for the entire subsequent compilation.  Package names are always
     -- simple unqualified identifiers, so getIdString is equivalent.

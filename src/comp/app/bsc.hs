@@ -102,6 +102,7 @@ import MakeSymTab(mkSymTab, mkSymTabWithWarnings, mkSymTabBase, mkSymTabExtend,
                   mkSymTabExtendRewording, cConvInst,
                   getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck, CATFCache, mergeCATFCaches)
+import CtxRed(SignProvisos)
 import Eval(rnf)
 import RedundantProvisos(warnRedundantProvisos, checkRedundantProvisos)
 import PatMatchCheck(patternMatchWarnings)
@@ -128,7 +129,7 @@ import GenChk(ChkFile(..), genChkFile)
 import GenTci(TciFile(..), TciInput(..), TciStats(..), genTciFile, readTciFile,
               readTciLibraries)
 import GenWrap(genWrap, WrapInfo(..))
-import GenFuncWrap(genFuncWrap, addFuncWrap)
+import GenFuncWrap(genFuncWrap, addFuncWrap, FuncInfo)
 import GenForeign(genForeign, checkForeign)
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
@@ -357,14 +358,8 @@ compile_with_deps errh flags name = do
                     when (not $ null parse_warns) $ bsWarning errh parse_warns
                     t <- getNow
                     removeStaleTci errh fl fn
-                    -- readImportsBi reports an import's failed check at the
-                    -- first check that reads its .bi; a signature pass reads
-                    -- no .chk, so its reads do not count
-                    let seen = if frontEndMode fl == SignatureOnly
-                               then Nothing
-                               else biSeen
                     (cur_success, binmap', hashmap')
-                        <- compilePackage errh fl t binmap hashmap seen fn pkg
+                        <- compileParsed errh fl t binmap hashmap biSeen fn pkg
                     return (cur_success && ok, binmap', hashmap')
             foldM pass (success, binmap0, hashmap0) (passes fn)
     when (verb) $ putStrLnF "checking package dependencies"
@@ -404,8 +399,24 @@ compile_no_deps errh flags name = do
     -- Show warnings for this file
     when (not $ null parse_warns) $ bsWarning errh parse_warns
 
-    (ok, _, _) <- compilePackage errh flags t M.empty M.empty Nothing name pkg
+    (ok, _, _) <- compileParsed errh flags t M.empty M.empty Nothing name pkg
     return ok
+
+-- One parsed package, by the pipeline of its mode: the full compile
+-- (compilePackage), -signature-only (signaturePackage) or -check-only
+-- (checkPackage).  Only the full compile reads .bo files, so the
+-- front-end-only pipelines leave the maps of those read so far as they
+-- are.  biSeen: -u -check-only's record of the packages whose .bi earlier
+-- checks read (readImportsBi).
+compileParsed :: ErrorHandle -> Flags -> TimeInfo -> BinMap HeapData -> HashMap ->
+                 Maybe (IORef (S.Set String)) -> String -> CPackage ->
+                 IO (Bool, BinMap HeapData, HashMap)
+compileParsed errh flags t binmap hashmap biSeen name pkg =
+    case frontEndMode flags of
+      FullCompile   -> compilePackage errh flags t binmap hashmap name pkg
+      SignatureOnly -> unchanged <$> signaturePackage errh flags t name pkg
+      CheckOnly     -> unchanged <$> checkPackage errh flags t biSeen name pkg
+  where unchanged ok = (ok, binmap, hashmap)
 
 -- -signature-only first removes the package's .tci, so that a compile
 -- that fails cannot leave an earlier one beside the files it rewrote
@@ -416,19 +427,63 @@ removeStaleTci errh flags name =
         stale <- doesFileExist tci_filename
         when stale $ removeFileCatch errh tci_filename
 
--- -check-only X.tci: the steps of compilePackage after the table that
--- follows CtxReduce, from what -signature-only recorded in the .tci (see
+-- -signature-only: the phases through CtxReduce (ctxReducePackage), with
+-- the imports read from .bi files, then the package's .bi and .tci
+-- (writeSignature, writeTci).  readImportsBi reports an import's failed
+-- check at the first check of a -u run that reads its .bi; this pipeline
+-- reads no .chk, so its reads are not recorded.
+signaturePackage :: ErrorHandle -> Flags -> TimeInfo -> String -> CPackage -> IO Bool
+signaturePackage errh flags tStart name_orig min@(CPackage pkgId _ _ _ _ _ _) = do
+    (name, pwd, dumpnames) <- beginPackage flags name_orig pkgId
+    (biClosure, CtxReduced { cr_time = t, cr_pkgsUsedInTypes = pkgsUsedInTypes,
+                             cr_mctx = mctx, cr_pkgsUsedInCtxReduce = pkgsUsedInCtxReduce,
+                             cr_atfCache = atfCacheFromCtxReduce, cr_symt = symt })
+        <- ctxReducePackage errh flags tStart dumpnames
+               (frontEndImports errh flags Nothing min)
+    -- what a check of this package would have interned by now
+    handoffStrings <- internedFStringsSince 0
+    (ok, pkgsUsedInExports) <-
+        writeSignature errh flags t dumpnames name pwd biClosure symt mctx
+    when ok $
+        writeTci errh flags name biClosure handoffStrings mctx atfCacheFromCtxReduce
+                 (pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInExports)
+    return ok
+
+-- -check-only from source: the phases through CtxReduce
+-- (ctxReducePackage), with the imports read from .bi files, the
+-- typecheck (typecheckPackage), then the package's .chk (writeCheck).
+checkPackage :: ErrorHandle -> Flags -> TimeInfo -> Maybe (IORef (S.Set String)) ->
+                String -> CPackage -> IO Bool
+checkPackage errh flags tStart biSeen name_orig min@(CPackage pkgId _ _ _ _ _ _) = do
+    (name, pwd, dumpnames) <- beginPackage flags name_orig pkgId
+    (biClosure, CtxReduced { cr_time = t, cr_symt11 = symt11, cr_mder = mder,
+                             cr_pkgsUsedInTypes = pkgsUsedInTypes, cr_mctx = mctx,
+                             cr_pkgsUsedInCtxReduce = pkgsUsedInCtxReduce,
+                             cr_atfCache = atfCacheFromCtxReduce,
+                             cr_signProvisos = signProvisos, cr_symt = symt })
+        <- ctxReducePackage errh flags tStart dumpnames
+               (frontEndImports errh flags biSeen min)
+    (mod, tcErrors, pkgsUsedInCode, ctypeATFCache, t) <-
+        typecheckPackage errh flags t dumpnames symt mctx
+    -- Off by default; when off, this evaluates nothing the check would not.
+    when (warnRedundantProvisos && not tcErrors) $
+      checkRedundantProvisos errh symt11 mder signProvisos mod
+    writeCheck errh flags t dumpnames name pwd biClosure symt
+               (mergeCATFCaches ctypeATFCache atfCacheFromCtxReduce)
+               mctx mod tcErrors
+               [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode] Nothing
+
+-- -check-only X.tci: checkPackage's steps after the table that follows
+-- CtxReduce, from what -signature-only recorded in the .tci (see
 -- writeTci), which is the only file read besides the library .bi files
 -- it refers to (found on the -p path).  Messages that the steps
 -- before it produce were reported by -signature-only, so the .chk holds
 -- only this run's.  The table is built once, from the pruned signatures
 -- and the package, after the canonical-word gate opens: the .tci's
 -- strings, interned first, are every string a type here can reach.
--- (compilePackage's tail is not shared with this, so that a full
--- compile's code stays as it is.)
+-- It shares typecheckPackage and writeCheck with checkPackage.
 checkTci :: ErrorHandle -> Flags -> String -> IO Bool
-checkTci errh flags name_tci =
-  CE.handle (\(FrontEndDone ok) -> return ok) $ do
+checkTci errh flags name_tci = do
     tStart <- getNow
     disableCanonIds
     pwd <- getCurrentDirectory
@@ -462,59 +517,24 @@ checkTci errh flags name_tci =
     symt <- mkSymTab errh mctx
     t <- dump errh flags t DFsympostctxreduce dumpnames symt
 
-    -- Turn instance declarations into ordinary definitions
-    start flags DFconvinst
-    let minst = cConvInst errh symt mctx
-    t <- dump errh flags t DFconvinst dumpnames minst
-
-    -- Type check and insert dictionaries
-    start flags DFtypecheck
-    (mod, tcErrors, pkgsUsedInCode, ctypeATFCache) <- cTypeCheck errh flags symt True minst
-    t <- dump errh flags t DFtypecheck dumpnames mod
-
-    when checkBinRoundTrip $
-        checkRoundTrip "typechecked package" CPackageBin
-                       (\(CPackageBin p) -> sortSched p) (sortSched (stripImpSigs mod))
-
-    when (not tcErrors) $ do
-      let pm_warns = patternMatchWarnings flags symt minst mod
-      when (not (null pm_warns)) $ bsWarning errh pm_warns
+    (mod, tcErrors, pkgsUsedInCode, ctypeATFCache, t) <-
+        typecheckPackage errh flags t dumpnames symt mctx
 
     writeCheck errh flags t dumpnames tci_name pwd [(pkgId, tci_hash)] symt
                (mergeCATFCaches ctypeATFCache (tci_atf tci))
                mctx mod tcErrors
                [tci_used_types tci, tci_used_ctx tci, pkgsUsedInCode]
                (Just (tci_used_exports tci))
-        >>= CE.throwIO . FrontEndDone
 
--------------------------------------------------------------------------
-
-compilePackage ::
-    ErrorHandle ->
-    Flags ->
-    TimeInfo ->
-    BinMap HeapData ->
-    HashMap ->
-    Maybe (IORef (S.Set String)) ->
-    String ->
-    CPackage ->
-    IO (Bool, BinMap HeapData, HashMap)
-compilePackage
-    errh
-    flags                -- user switches
-    tStart
-    binmap0
-    hashmap0
-    biSeen   -- -u: the packages whose .bi earlier compiles read (readImportsBi)
-    name_orig -- String --
-    min@(CPackage pkgId _ _ _ _ _ _) =
-  -- a front-end-only compile ends by throwing FrontEndDone
-  CE.handle (\(FrontEndDone ok) -> return (ok, binmap0, hashmap0)) $ do
-
-    -- Shut the CType canonical-word gate while this package's parser
-    -- thunks, GenWrap, Deriving and symbol-table builds run; enableCanonIds
-    -- below, after symt11, opens it.  bsc -u compiles several packages in
-    -- one process, so an earlier package's opening must not carry over.
+-- The start of each pipeline from source (compilePackage,
+-- signaturePackage, checkPackage): the package's encoded file name, the
+-- current directory and the dump names.  It shuts the CType
+-- canonical-word gate while the package's parser thunks, GenWrap,
+-- Deriving and symbol-table builds run; ctxReducePackage opens it after
+-- the table that follows Deriving.  bsc -u compiles several packages in
+-- one process, so an earlier package's opening must not carry over.
+beginPackage :: Flags -> String -> Id -> IO (String, FilePath, DumpNames)
+beginPackage flags name_orig pkgId = do
     disableCanonIds
 
     -- Set syntax mode for the compilation pipeline (error messages, printing, etc.)
@@ -527,31 +547,45 @@ compilePackage
 
     -- where -trace-intern-table writes its dump (see dumpInternTable)
     writeIORef internDumpFile (Just (putInDir (bdir flags) name "intern.json"))
+    return (name, pwd, dumpnames)
 
-    clkTime <- getClockTime
-    epochTime <- getPOSIXTime
+-- The imports of a front-end-only pipeline, read from .bi files, with the
+-- hash of each package's .bi (readImportsBi).  biSeen: as compileParsed.
+frontEndImports :: ErrorHandle -> Flags -> Maybe (IORef (S.Set String)) -> CPackage ->
+                   IO (CPackage, [(Id, String)])
+frontEndImports errh flags biSeen min = do
+    seen0 <- mapM readIORef biSeen
+    (p, _, seen, closure) <- readImportsBi errh flags M.empty seen0 min
+    sequence_ (writeIORef <$> biSeen <*> seen)
+    return (p, closure)
 
-    -- Values needed for the Environment module
-    let env =
-            [("compilerVersion",iMkString $ bscVersionStr True),
-             ("date",                iMkString $ show clkTime),
-             ("epochTime",      iMkLitSize 32 $ floor epochTime),
-             ("buildVersion",   iMkLitSize 32 $ buildnum),
-             ("genPackageName", iMkString $ getIdBaseString pkgId),
-             ("testAssert",        iMkRealBool $ testAssert flags)
-            ]
+-- What ctxReducePackage hands on to the rest of a pipeline
+data CtxReduced = CtxReduced {
+        cr_time :: TimeInfo,
+        cr_impsigs :: [CImportedSignature],
+        cr_funcs :: [FuncInfo],           -- the `noinline' functions
+        cr_gens :: [WrapInfo],            -- the modules GenWrap wrapped
+        cr_symt11 :: SymTab,              -- the table after Deriving
+        cr_mder :: CPackage,              -- the package after Deriving
+        cr_pkgsUsedInTypes :: S.Set Id,
+        cr_mctx :: CPackage,              -- the package after CtxReduce
+        cr_pkgsUsedInCtxReduce :: S.Set Id,
+        cr_atfCache :: CATFCache,         -- CtxReduce's
+        cr_signProvisos :: [SignProvisos],
+        cr_symt :: SymTab                 -- the table after CtxReduce
+    }
 
+-- The phases of each pipeline from source (compilePackage,
+-- signaturePackage, checkPackage) from reading the imports, by readImps,
+-- through CtxReduce and the symbol table that follows it.  readImps
+-- returns the package with its imported signatures, and what else its
+-- pipeline keeps from the read.
+ctxReducePackage :: ErrorHandle -> Flags -> TimeInfo -> DumpNames ->
+                    IO (CPackage, r) -> IO (r, CtxReduced)
+ctxReducePackage errh flags tStart dumpnames readImps = do
     start flags DFimports
-    -- Read imported signatures (from .bi files in the front-end-only
-    -- modes, with the hash of each package's .bi)
-    (mimp@(CPackage _ _ imps impsigs _ _ _), binmap, hashmap, biClosure)
-        <- if frontEndMode flags == FullCompile
-           then do (p, bm, hm) <- readImports errh flags binmap0 hashmap0 min
-                   return (p, bm, hm, [])
-           else do seen0 <- mapM readIORef biSeen
-                   (p, hm, seen, cl) <- readImportsBi errh flags hashmap0 seen0 min
-                   sequence_ (writeIORef <$> biSeen <*> seen)
-                   return (p, binmap0, hm, cl)
+    -- Read imported signatures
+    (mimp@(CPackage _ _ _ impsigs _ _ _), fromRead) <- readImps
     when (hasDump flags DFimports) $
       let impsigs' = [ppReadable s |  (CImpSign _ _ s) <- impsigs]
       in mapM_ (putStr) impsigs'
@@ -644,16 +678,20 @@ compilePackage
               _ -> mkSymTabNext mctx
     t <- dump errh flags t DFsympostctxreduce dumpnames symt
 
-    when (frontEndMode flags == SignatureOnly) $ do
-        -- what a check of this package would have interned by now
-        handoffStrings <- internedFStringsSince 0
-        (ok, pkgsUsedInExports) <-
-            writeSignature errh flags t dumpnames name pwd biClosure symt mctx
-        when ok $
-            writeTci errh flags name biClosure handoffStrings mctx atfCacheFromCtxReduce
-                     (pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInExports)
-        CE.throwIO (FrontEndDone ok)
+    return (fromRead,
+            CtxReduced { cr_time = t, cr_impsigs = impsigs, cr_funcs = funcs,
+                         cr_gens = gens, cr_symt11 = symt11, cr_mder = mder,
+                         cr_pkgsUsedInTypes = pkgsUsedInTypes, cr_mctx = mctx,
+                         cr_pkgsUsedInCtxReduce = pkgsUsedInCtxReduce,
+                         cr_atfCache = atfCacheFromCtxReduce,
+                         cr_signProvisos = signProvisos, cr_symt = symt })
 
+-- The typecheck of each checking pipeline (compilePackage, checkPackage,
+-- checkTci), from the package after CtxReduce and the table built from
+-- it: ConvInst, typecheck, then the messages that read the result.
+typecheckPackage :: ErrorHandle -> Flags -> TimeInfo -> DumpNames -> SymTab -> CPackage ->
+                    IO (CPackage, Bool, S.Set Id, CATFCache, TimeInfo)
+typecheckPackage errh flags t dumpnames symt mctx = do
     -- Turn instance declarations into ordinary definitions
     start flags DFconvinst
     let minst = cConvInst errh symt mctx
@@ -678,16 +716,64 @@ compilePackage
       let pm_warns = patternMatchWarnings flags symt minst mod
       when (not (null pm_warns)) $ bsWarning errh pm_warns
 
+    return (mod, tcErrors, pkgsUsedInCode, ctypeATFCache, t)
+
+-------------------------------------------------------------------------
+
+-- The full compile: the phases through CtxReduce (ctxReducePackage),
+-- with the imports read from .bo files, the typecheck
+-- (typecheckPackage), the internal phases, the modules to synthesize,
+-- then the .bo file.  -u hands the maps of the .bo files read so far
+-- from one package to the next.
+compilePackage ::
+    ErrorHandle ->
+    Flags ->
+    TimeInfo ->
+    BinMap HeapData ->
+    HashMap ->
+    String ->
+    CPackage ->
+    IO (Bool, BinMap HeapData, HashMap)
+compilePackage
+    errh
+    flags                -- user switches
+    tStart
+    binmap0
+    hashmap0
+    name_orig -- String --
+    min@(CPackage pkgId _ _ _ _ _ _) = do
+
+    (name, pwd, dumpnames) <- beginPackage flags name_orig pkgId
+
+    clkTime <- getClockTime
+    epochTime <- getPOSIXTime
+
+    -- Values needed for the Environment module
+    let env =
+            [("compilerVersion",iMkString $ bscVersionStr True),
+             ("date",                iMkString $ show clkTime),
+             ("epochTime",      iMkLitSize 32 $ floor epochTime),
+             ("buildVersion",   iMkLitSize 32 $ buildnum),
+             ("genPackageName", iMkString $ getIdBaseString pkgId),
+             ("testAssert",        iMkRealBool $ testAssert flags)
+            ]
+
+    ((binmap, hashmap),
+     CtxReduced { cr_time = t, cr_impsigs = impsigs, cr_funcs = funcs, cr_gens = gens,
+                  cr_symt11 = symt11, cr_mder = mder, cr_pkgsUsedInTypes = pkgsUsedInTypes,
+                  cr_mctx = mctx, cr_pkgsUsedInCtxReduce = pkgsUsedInCtxReduce,
+                  cr_atfCache = atfCacheFromCtxReduce, cr_signProvisos = signProvisos,
+                  cr_symt = symt })
+        <- ctxReducePackage errh flags tStart dumpnames $ do
+               (p, bm, hm) <- readImports errh flags binmap0 hashmap0 min
+               return (p, (bm, hm))
+
+    (mod, tcErrors, pkgsUsedInCode, ctypeATFCache, t) <-
+        typecheckPackage errh flags t dumpnames symt mctx
+
     -- Off by default; when off, this evaluates nothing the compile would not.
     when (warnRedundantProvisos && not tcErrors) $
       checkRedundantProvisos errh symt11 mder signProvisos mod
-
-    when (frontEndMode flags == CheckOnly) $
-        writeCheck errh flags t dumpnames name pwd biClosure symt
-                   (mergeCATFCaches ctypeATFCache atfCacheFromCtxReduce)
-                   mctx mod tcErrors
-                   [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode] Nothing
-            >>= CE.throwIO . FrontEndDone
 
     --when (early flags) $ return ()
     let prefix = dirName name ++ "/"
@@ -931,19 +1017,10 @@ compilePackage
 
     t <- getNow
     -- Finally, generate interface files
-    start flags DFwriteBin
-
-    -- Generate the user-visible type signature
-    (bi_sig, pkgsUsedInExports) <- genUserSign errh symt mctx
-    -- Generate a type signature where everything is visible
-    bo_sig <- genEverythingSign errh symt mctx
-    when checkBinRoundTrip $ do
-        checkRoundTrip "user signature" id id bi_sig
-        checkRoundTrip "full signature" id id bo_sig
-
-    -- Check for unused imports by combining packages from all four sources
-    warnUnusedImports errh mctx
-        [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
+    (m_bi_sig, bo_sig) <-
+        genSignatures errh flags symt mctx
+                      [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode] Nothing
+    let bi_sig = fromJustOrErr "compilePackage: no user signature" m_bi_sig
 
     -- Generate binary version of the internal tree .bo file
     let bin_filename = putInDir (bdir flags) name binSuffix
@@ -974,14 +1051,31 @@ warnUnusedImports errh (CPackage _ _ imports _ _ _ _) usedSets = do
         unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg)) | pkg <- unusedPkgs]
     when (not (null unusedWarns)) $ bsWarning errh unusedWarns
 
--- A front-end-only compile (Flags.frontEndMode) ends early, with whether
--- it succeeded, by throwing this to compilePackage.
-newtype FrontEndDone = FrontEndDone Bool
+-- The package's signatures as its .bo stores them, with genUserSign's
+-- and genEverythingSign's messages, then the warning for the imports
+-- that no stage used: usedSets, and the packages that the exports use.
+-- Checking a .tci, those come from the .tci (tciUsedExports) and there
+-- is no user-visible signature.  Shared by the full compile and writeCheck.
+genSignatures :: ErrorHandle -> Flags -> SymTab -> CPackage -> [S.Set Id] ->
+                 Maybe (S.Set Id) -> IO (Maybe CSignature, CSignature)
+genSignatures errh flags symt mctx usedSets tciUsedExports = do
+    start flags DFwriteBin
 
-instance Show FrontEndDone where
-    show (FrontEndDone ok) = "FrontEndDone " ++ show ok
+    -- Generate the user-visible type signature
+    (m_bi_sig, pkgsUsedInExports) <-
+        case tciUsedExports of
+          Nothing -> do (bi_sig, used) <- genUserSign errh symt mctx
+                        return (Just bi_sig, used)
+          Just used -> return (Nothing, used)
+    -- Generate a type signature where everything is visible
+    bo_sig <- genEverythingSign errh symt mctx
+    when checkBinRoundTrip $ do
+        mapM_ (checkRoundTrip "user signature" id id) m_bi_sig
+        checkRoundTrip "full signature" id id bo_sig
 
-instance CE.Exception FrontEndDone
+    -- Check for unused imports by combining packages from all four sources
+    warnUnusedImports errh mctx (usedSets ++ [pkgsUsedInExports])
+    return (m_bi_sig, bo_sig)
 
 -- -signature-only: write the package's .bi.  genUserSign reads only the
 -- post-ctxreduce package and the symbol table built from it, so this is
@@ -1077,15 +1171,14 @@ flagsFingerprint flags =
 -- -check-only: write the package's .chk after typecheck.  First report
 -- what the full compile, which has no backend in this mode, reports after
 -- typecheck: a foreign function imported twice (genForeign), a local
--- mutual recursion that iConvPackage cannot convert, genUserSign's
--- messages, unused imports, and what writing the .bo's signatures
--- raises.  The other messages of later stages are not produced.  The
--- .bi of an import that -u -check-only checks comes from a
--- -signature-only pass (compile_with_deps), not from here.  Checking a
--- .tci, the packages used by the exports come from the .tci:
--- genUserSign, and its messages, belong to -signature-only, whose table
--- holds every imported entry.  The .chk records the files the check read
--- (closure).
+-- mutual recursion that iConvPackage cannot convert, then genSignatures'
+-- messages and what writing the .bo's signatures raises.  The other
+-- messages of later stages are not produced.  The .bi of an import that
+-- -u -check-only checks comes from a -signature-only pass
+-- (compile_with_deps), not from here.  Checking a .tci, the packages used
+-- by the exports come from the .tci: genUserSign, and its messages,
+-- belong to -signature-only, whose table holds every imported entry.
+-- The .chk records the files the check read (closure).
 writeCheck :: ErrorHandle -> Flags -> TimeInfo -> DumpNames -> String ->
               FilePath -> [(Id, String)] -> SymTab -> CATFCache -> CPackage ->
               CPackage -> Bool -> [S.Set Id] -> Maybe (S.Set Id) -> IO Bool
@@ -1105,17 +1198,7 @@ writeCheck errh flags t dumpnames name pwd closure symt atfCache
         _ <- CE.evaluate (rnf lifted)
         _ <- CE.evaluate (rnf (imod :: IPackage HeapData))
         return ()
-    start flags DFwriteBin
-    (m_bi_sig, pkgsUsedInExports) <-
-        case tciUsedExports of
-          Nothing -> do (bi_sig, used) <- genUserSign errh symt mctx
-                        return (Just bi_sig, used)
-          Just used -> return (Nothing, used)
-    bo_sig <- genEverythingSign errh symt mctx
-    when checkBinRoundTrip $ do
-        mapM_ (checkRoundTrip "user signature" id id) m_bi_sig
-        checkRoundTrip "full signature" id id bo_sig
-    warnUnusedImports errh mctx (usedSets ++ [pkgsUsedInExports])
+    (m_bi_sig, bo_sig) <- genSignatures errh flags symt mctx usedSets tciUsedExports
     forceSignatures (fromMaybe (CSignature pkgId [] [] []) m_bi_sig) bo_sig
     diags <- takeDiagnostics errh
     let ok = not tcErrors

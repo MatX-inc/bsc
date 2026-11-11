@@ -498,9 +498,10 @@ instance Ord TyCon where
 -- strings have never been interned would intern them earlier than the
 -- structural paths do, which can permute the iteration order of any
 -- Id-keyed Map.  The gate keeps words off while a package's parser
--- thunks, GenWrap, Deriving and symbol-table builds run: compilePackage
--- (app/bsc.hs) shuts it on entry and opens it just before DFctxreduce,
--- for each package it compiles (bsc -u compiles several in one process).
+-- thunks, GenWrap, Deriving and symbol-table builds run: each pipeline
+-- from source in app/bsc.hs shuts it on entry (beginPackage) and opens it
+-- just before DFctxreduce (ctxReducePackage), for each package it
+-- compiles (bsc -u compiles several in one process).
 -- From then on every TyCon Id reachable from a type is a symbol-table
 -- key, a Prelude PreId or a .bo-decoded Id whose strings the eager
 -- string-table read already interned, so no type constructor's name is
@@ -576,21 +577,21 @@ data CanonTable = CanonTable !(M.Map CKey Int) {-# UNPACK #-} !Int
 canonTable :: IORef CanonTable
 canonTable = unsafePerformIO $ newIORef (CanonTable M.empty 0)
 
--- Shut while a package's front end runs (compilePackage shuts it on
+-- Shut while a package's front end runs (beginPackage shuts it on
 -- entry) and open from enableCanonIds, just before DFctxreduce, to the
 -- end of that package; see Forcing above.
 {-# NOINLINE canonGate #-}
 canonGate :: IORef Bool
 canonGate = unsafePerformIO $ newIORef False
 
--- Open the gate (compilePackage, immediately before DFctxreduce).  The
+-- Open the gate (ctxReducePackage, immediately before DFctxreduce).  The
 -- hidden flag -no-ctype-ids keeps it shut, for A/B measurement and as a
 -- fallback to the structural paths.
 enableCanonIds :: IO ()
 enableCanonIds =
     unless ("-no-ctype-ids" `elem` progArgs) $ writeIORef canonGate True
 
--- Shut the gate (compilePackage, on entry).  The table is kept: a word
+-- Shut the gate (beginPackage, on entry).  The table is kept: a word
 -- is a fact about a name or a pair of words, so a node that got one
 -- under an earlier opening keeps it, and nodes built while the gate is
 -- shut carry -1.
