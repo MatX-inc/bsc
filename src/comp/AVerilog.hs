@@ -1178,10 +1178,26 @@ genInstances errh flags ff_blocks vDef aspack =
         (unused_defs, inst_info2)
             = dropUnusedPortWires ff_blocks (filtered_defs ++ all_io_wires) reg_uses inst_infos
 
+        -- unused_ids is read only as far as a notElem scan per def would
+        -- read it (the same elements, in the same order), so no unused Id is
+        -- forced at another point; the Set holds the prefix read so far
         filtered_ds2 =
             let unused_ids = map vidToId unused_defs
-                isUsedDef (ADef { adef_objid=i }) = i `notElem` unused_ids
-            in  filter isUsedDef filtered_ds
+                keepUsed _ _ [] = []
+                keepUsed seen rest (d@(ADef { adef_objid=i }) : ds)
+                    | i `S.member` seen = keepUsed seen rest ds
+                    | otherwise =
+                        case scanFor i seen rest of
+                          (True, seen', rest') -> keepUsed seen' rest' ds
+                          (False, seen', rest') -> d : keepUsed seen' rest' ds
+                scanFor _ seen [] = (False, seen, [])
+                scanFor i seen (u:us)
+                    | i == u = (True, S.insert u seen, us)
+                    | otherwise =
+                        -- strict, so a long scan builds no chain of inserts
+                        let seen' = S.insert u seen
+                        in  seen' `seq` scanFor i seen' us
+            in  keepUsed S.empty unused_ids filtered_ds
 
     -- ----------
     -- separate out probes and generate their items
