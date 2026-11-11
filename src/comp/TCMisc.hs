@@ -554,7 +554,8 @@ sat dvs ps p =
        -- (lookfor compares the class of every entry with the goal's first
        -- and goes no further on another class, so it is given only the
        -- entries of the goal's class)
-       GivenExp p_entries ps_exp <- return (givenExp p ps)
+       GivenExp p_entries ps_trees <- return (givenExp p ps)
+       let ps_exp = concatMap (concatMap flattenT . snd) ps_trees
        return_val <- case lookfor bound_tyvars p p_entries of
          Just (b, (s, [])) -> do
              recLog EvLookfor
@@ -666,7 +667,7 @@ sat dvs ps p =
           mdp <- getDictPool
           case mdp of
             Just dp | not dictPoolOff ->
-              poolSat dp ai dvs ps p whole_stack ps_exp bound_tyvars
+              poolSat dp ai dvs ps p whole_stack ps_trees bound_tyvars
                       recordATFs solveFor
             _ -> fmap fst solveFor
        decrementSatStack
@@ -817,9 +818,9 @@ forceKeys kt ts0 = case go ts0 of (ks, s) -> (ks, s, kt)
     keyable (PVar _) (TVar _) = True
     keyable _ _ = False
 
-poolSat :: DictPool -> Bool -> DVS -> Givens -> VPred -> [EPred] -> [EPred] -> [TyVar]
-        -> (Subst -> TI ()) -> TI (SatResult, Bool) -> TI SatResult
-poolSat dp ai dvs ps p@(VPred w (PredWithPositions (IsIn c ts) _ _)) whole_stack givens bvs
+poolSat :: DictPool -> Bool -> DVS -> Givens -> VPred -> [EPred] -> [(GSeg, [ETree])]
+        -> [TyVar] -> (Subst -> TI ()) -> TI (SatResult, Bool) -> TI SatResult
+poolSat dp ai dvs ps p@(VPred w (PredWithPositions (IsIn c ts) _ _)) whole_stack gtrees bvs
         recordATFs solveFor
   | isPreClass c = countDP CNumericSkip 1 >> plain
   | otherwise = do
@@ -841,7 +842,7 @@ poolSat dp ai dvs ps p@(VPred w (PredWithPositions (IsIn c ts) _ _)) whole_stack
               countDP CSkipRefused 1
               plain
             Just (KEntry e) -> do
-              g <- hitGuards dp e ki dvs whole_stack givens bvs
+              g <- hitGuards dp e ki dvs whole_stack gtrees bvs
               case g of
                 Left CFallbackContext -> do
                   countDP CFallbackContext 1
@@ -877,14 +878,14 @@ poolSat dp ai dvs ps p@(VPred w (PredWithPositions (IsIn c ts) _ _)) whole_stack
                         show (eDraws e) ++ " at " ++ show c0)
       return r
 
-hitGuards :: DictPool -> Entry -> KeyInfo -> DVS -> [EPred] -> [EPred] -> [TyVar]
+hitGuards :: DictPool -> Entry -> KeyInfo -> DVS -> [EPred] -> [(GSeg, [ETree])] -> [TyVar]
           -> TI (Either Cnt (Int, Int, Int, Subst))
-hitGuards dp e ki dvs whole_stack givens bvs = do
+hitGuards dp e ki dvs whole_stack gtrees bvs = do
     (satSz, superSz) <- getSatStackSizes
     flags <- getFlags
     c0 <- getTyVarCounter
     -- normT inside the solve satisfies type-function goals from these
-    stack_eps <- getExplPreds
+    stack_segs <- fmap givensSegs getExplGivens
     -- (the goal's own entry is on top of the whole_stack's)
     own_keys <- getSatKeys
     let lim = maxTIStackDepth flags
@@ -900,14 +901,23 @@ hitGuards dp e ki dvs whole_stack givens bvs = do
                                   (k : ks) -> (k, ks)
                                   [] -> internalError "hitGuards: sat keys"
         (stackOK, updates) = stackClear kt (eGoals e) outNums c0 whole_stack stack_keys
+        -- the entries of the givens' expansions (sat's trees) and of the
+        -- explicit preds' (as concatMap bySuperE builds them), a GRigid
+        -- level's as guardEntries reads them
+        givens_lab = concat [ guardEntries kt seg ets | (seg, ets) <- gtrees ]
+        expl_lab = concat [ guardEntries kt seg (map bySuperT (gsList seg)) | seg <- stack_segs ]
     if not (satSz + eMaxSat e < lim && superSz + eMaxSuper e < lim)
       then return (Left CFallbackDepth)
       else do
-        let ok = dvsOK && stackOK && clear givens &&
-                 clear (concatMap bySuperE stack_eps)
+        let ok = dvsOK && stackOK && clear (map snd givens_lab) && clear (map snd expl_lab)
         -- keys computed for the stack's entries are kept for later guards
         when (dvsOK && not (null updates)) $
           setSatKeys (top_key : applyKeyUpdates updates stack_keys)
+        when (traceDictPool && not ok) $ do
+          let (cnt, why) = refusalCnt kt (eGoals e) outNums c0 dvsOK stackOK givens_lab expl_lab
+          countDP cnt 1
+          when traceDictPoolEntries $
+            traceM ("tc dict pool refuse " ++ show (eId e) ++ " " ++ why)
         if not ok
           then return (Left CFallbackContext)
           else do
@@ -940,6 +950,87 @@ goalsClear kt gs outNums c0 eps = M.null gs || all clear eps
       case M.lookup (typeclassId (name c)) gs of
         Nothing -> True
         Just rows -> predClear outNums c0 c rows (fst3 (typeKeys False kt ts))
+
+-- The entries of a level's expansion that the hit guard keys, each
+-- labelled (a given of the level, a GRigid level): a GFlex level's
+-- expansion (its trees, ets) as the solve reads it.  A GRigid level's
+-- substitutions give its next levels (rigidChain), which the solve's
+-- nested sats read; the guard keys the level's givens and the expansions
+-- of the level and of those it becomes.  Where every type of the list the
+-- level was made with is keyed PKey or PVar without forcing (stableNF:
+-- evaluated, normal apart from type variables, so no synonym or type
+-- function for expandSyn or normTAp to rewrite), they are all the same
+-- value, so are their expansions, and the guard keys the last one's
+-- alone: the one a level's sats force, through lookfor, from the second
+-- substitution on.
+guardEntries :: KeyTable -> GSeg -> [ETree] -> [((Bool, Bool), EPred)]
+guardEntries kt seg ets = case gsBound seg of
+    GFlex -> concatMap (labT False) ets
+    GRigid _ _ _ raw ->
+      let chain = seg : rigidChain seg
+          keyed | stableNF kt raw = [last chain]
+                | otherwise = chain
+      in  [ ((True, True), ep) | ep <- gsList seg ] ++
+          [ ((False, True), ep) | s' <- keyed, et <- segTrees s', ep <- flattenT et ]
+  where
+    labT rigid (ETree ep subs comm) =
+        ((True, rigid), ep) :
+        [ ((False, rigid), ep') | et <- subs, ep' <- flattenT et ] ++
+        [ ((False, rigid), ep') | ep' <- comm ]
+
+-- Whether the list's spine, givens and type lists are evaluated and every
+-- type is keyed PKey or PVar (DictPool.typeKey), read without forcing.
+stableNF :: KeyTable -> [EPred] -> Bool
+stableNF kt eps = maybe False (all ok) (listNF eps)
+  where
+    ok ep
+      | isEvaluated ep, EPred _ p <- ep, isEvaluated p, IsIn _ ts <- p,
+        Just ts' <- listNF ts = all keyed ts'
+      | otherwise = False
+    keyed t = case typeKey False kt t of
+                (PKey _, _, _) -> True
+                (PVar _, _, _) -> True
+                _ -> False
+    listNF xs
+      | not (isEvaluated xs) = Nothing
+      | otherwise = case xs of
+          [] -> Just []
+          (x : rest) -> (x :) <$> listNF rest
+
+-- The counter of a refusal by the context guard (-trace-tc-dict-pool) and a
+-- description (-trace-tc-dict-pool-entries): the first part that is not
+-- clear, and for an entry of the givens' or explicit preds' expansions,
+-- whether it is a given or an expansion entry, whether its level is
+-- GRigid, and whether it has a PUneval key.  (Keys are computed as
+-- goalsClear's, forcing nothing.)
+refusalCnt :: KeyTable -> GoalSum -> [Int] -> Int -> Bool -> Bool
+           -> [((Bool, Bool), EPred)] -> [((Bool, Bool), EPred)] -> (Cnt, String)
+refusalCnt kt gs outNums c0 dvsOK stackOK givens_lab expl_lab
+  | not dvsOK = (CRefDvs, "dvs")
+  | not stackOK = (CRefStack, "stack")
+  | (b@((root, rigid), _, ks) : _) <- blocks givens_lab =
+      (case (root, rigid, any (== PUneval) ks) of
+        (True, True, True) -> CRefRootRigidUneval
+        (True, True, False) -> CRefRootRigidKeyed
+        (True, False, True) -> CRefRootFlexUneval
+        (True, False, False) -> CRefRootFlexKeyed
+        (False, True, True) -> CRefSuperRigidUneval
+        (False, True, False) -> CRefSuperRigidKeyed
+        (False, False, True) -> CRefSuperFlexUneval
+        (False, False, False) -> CRefSuperFlexKeyed, "given " ++ desc b)
+  | (b@((_, rigid), _, ks) : _) <- blocks expl_lab =
+      (if not (any (== PUneval) ks) then CRefExplKeyed
+       else if rigid then CRefExplRigidUneval else CRefExplFlexUneval, "expl " ++ desc b)
+  | otherwise = (CRefExplKeyed, "none")
+  where
+    blocks les = [ (l, c, ks)
+                 | (l, EPred _ (IsIn c ts)) <- les,
+                   Just rows <- [M.lookup (typeclassId (name c)) gs],
+                   let ks = fst3 (typeKeys False kt ts),
+                   not (predClear outNums c0 c rows ks) ]
+    desc ((root, rigid), c, ks) =
+        (if rigid then "rigid " else "flex ") ++ (if root then "root " else "exp ") ++
+        pfpString (name c) ++ " " ++ show ks
 
 -- goalsClear over the sat stack, whose entries' keys are kept from the
 -- goal's own lookup (poolSat) or an earlier guard, and computed again
@@ -2292,11 +2383,6 @@ mayEqMatch (IsIn c1 ts1) (IsIn c2 ts2) =
             (b || t1 == t2) && eqUndetermined row rest1 rest2
         eqUndetermined _ _ _ = True
 
-commute :: [Type] -> [Type]
-commute ts@[t1,t2] = [t2, t1]
-commute ts@[t1,t2,t3] = [t2, t1, t3]
-commute _ = internalError("commutative class not taking two or three arguments")
-
 bySuperE :: EPred -> [EPred]
 bySuperE ep@(EPred e p@(IsIn c ts)) = ep : eps ++ comm
   where s       = mkSubst (zip (csig c) ts)
@@ -2308,20 +2394,8 @@ bySuperE ep@(EPred e p@(IsIn c ts)) = ep : eps ++ comm
                      [(EPred e (IsIn c (commute ts)))]
                   else []
 
--- bySuperE's expansion of a given as a tree: the given, its superclasses'
--- trees in the order of the class's super list, and its commuted form.
--- flattenT (bySuperT ep) is bySuperE ep: the same entries, built by the
--- same expressions, in the same order and with the same sharing (each
--- superclass entry is both an entry and the root of its own expansion).
-data ETree = ETree EPred [ETree] [EPred]
-
-bySuperT :: EPred -> ETree
-bySuperT ep@(EPred e p@(IsIn c ts)) = ETree ep (map bySuperT esupers) comm
-  where s       = mkSubst (zip (csig c) ts)
-        esupers = map (\ (CTypeclass i, p) ->
-                        let p' = apSub s p
-                        in  EPred (CApply (cTApply (CSelectT (typeclassId $ name c) i) ts) [e]) p') (super c)
-        comm    = if (isComm c) then [(EPred e (IsIn c (commute ts)))] else []
+-- (ETree and bySuperT, bySuperE's expansion of a given as a tree, are in
+-- TIMonad, which keeps a GRigid level's trees.)
 
 flattenT :: ETree -> [EPred]
 flattenT (ETree ep subs comm) = ep : concatMap flattenT subs ++ comm
@@ -2353,18 +2427,24 @@ givenEntries k segs =
              (i, et) <- pickAt (classIdxLookup (gsIdx seg) k) ets ]
 
 -- The givens' expansion as sat reads it for a goal: the entries of the
--- goal's class and the whole expansion (the pool's guards), from the same
--- trees, as both once read one list.  Without givens both are empty and
--- nothing is built or read: the goal's class is not looked at.
-data GivenExp = GivenExp [EPred] [EPred]
+-- goal's class, and the trees of every level (the pool's guards).
+-- Without givens both are empty and nothing is built or read: the goal's
+-- class is not looked at.
+data GivenExp = GivenExp [EPred] [(GSeg, [ETree])]
 
 givenExp :: VPred -> Givens -> GivenExp
 givenExp vp gv =
     case givensSegs gv of
       [] -> GivenExp [] []
-      segs -> let trees = [ (seg, map bySuperT (gsList seg)) | seg <- segs ]
-              in  GivenExp (givenEntries (vpClassKey vp) trees)
-                           (concatMap (concatMap flattenT . snd) trees)
+      segs -> let trees = [ (seg, segTrees seg) | seg <- segs ]
+              in  GivenExp (givenEntries (vpClassKey vp) trees) trees
+
+-- A level's trees: a GRigid level's own, built once for every sat that
+-- reads the level, or built for this one.
+segTrees :: GSeg -> [ETree]
+segTrees seg = case gsBound seg of
+                 GRigid _ _ ets _ -> ets
+                 GFlex -> map bySuperT (gsList seg)
 
 vpClassKey :: VPred -> Int
 vpClassKey vp = case toPred vp of IsIn c _ -> classKey c

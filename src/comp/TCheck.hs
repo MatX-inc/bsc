@@ -2318,9 +2318,11 @@ tiExpl_1 as (i, cqt, alts, me) = do
     -- Convert "qs" into local instances
     eqs <- mapM (mkEPred . removePredPositions) qs
 
-    -- Push the variables bound at this level onto the bound var stack
+    -- Push the variables bound at this level onto the bound var stack.
+    -- Every variable of "qs" is in "vs" or "bvs", so on that stack while
+    -- the level is on the explicit-pred stack (TIMonad.GBound).
     addBoundTVs vs
-    addExplPreds eqs
+    addRigidExplPreds eqs
 
     -- Proceed to the next step
     tiExpl'' as i sc alts me (qt, map TVar vs)
@@ -2444,9 +2446,10 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
     -- calls to "satisfy" are aware of all the bound vars
     addBoundTVs vs_bound_here
 
-    let eqs = apSub s0 eqs0
-        -- eqs with the level's class index
-        eqsG = givensOnList eqs0_seg eqs
+    let -- the level substituted, with its class index (a GRigid level's
+        -- is kept, TIMonad.GBound)
+        eqsG = givensOnList eqs0_seg (apSub s0 eqs0)
+        eqs = givensList eqsG
 
     ---- Begin: Section which Lennart marked with XXXX
 

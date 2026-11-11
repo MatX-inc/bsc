@@ -18,9 +18,10 @@ module TIMonad(
         getVPredPositions, expandSynVPred,
         EPred(..), Infer2, CheckT, TaskCheckT,
         getBoundTVs, getBoundTVStack, getTopBoundTVs, addBoundTVs, popBoundTVs,
-        getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
-        GSeg(..), GTree(..), Givens, mkGivens, givensSegs, givensList, givensOnList,
-        givensAppend,
+        getExplPreds, getTopExplPreds, addExplPreds, addRigidExplPreds,
+        popExplPreds, mkEPred,
+        GSeg(..), GTree(..), GBound(..), rigidChain, Givens, mkGivens, givensSegs,
+        givensList, givensOnList, givensAppend, ETree(..), bySuperT, commute,
         ClassIdx, classIdxLookup,
         classKey, getExplGivens, getTopExplSeg,
         getNumProven, getNumRefuted, addNumDecided,
@@ -46,7 +47,7 @@ import PFPrint
 import Id
 import IdPrint
 import Position
-import CSyntax(CExpr(..))
+import CSyntax(CExpr(..), cTApply)
 import CType
 import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..))
 import Flags(Flags, maxTIStackDepth)
@@ -572,6 +573,12 @@ addExplPreds :: [EPred] -> TI ()
 addExplPreds ps = modify addPreds
   where addPreds s = s { tsExplPreds = mkGSeg ps : (tsExplPreds s) }
 
+-- addExplPreds for a level whose type variables are all on the bound
+-- variable stack for as long as the level is on this one (GBound)
+addRigidExplPreds :: [EPred] -> TI ()
+addRigidExplPreds ps = modify addPreds
+  where addPreds s = s { tsExplPreds = rigidSeg 0 (mkGSeg ps) ps ps : (tsExplPreds s) }
+
 popExplPreds :: TI ()
 popExplPreds = modify dropPreds
   where dropPreds s = s { tsExplPreds = tail (tsExplPreds s) }
@@ -825,18 +832,77 @@ classTree c = GTree k (IS.insert k (IS.unions (map gtReach subs))) subs
         subs = [ classTree c' | (_, IsIn c' _) <- super c ]
 
 -- | One level of givens: the list and, by position, each given's class
--- tree, with the positions whose tree holds each key (ascending).
+-- tree, with the positions whose tree holds each key (ascending), and
+-- whether a substitution can change the list (GBound).
 data GSeg = GSeg {
     gsList  :: [EPred],
     gsTrees :: Array Int GTree,
-    gsIdx   :: ClassIdx Int
+    gsIdx   :: ClassIdx Int,
+    gsBound :: !GBound
   }
 
+-- | GRigid n next trees: every type variable of the level is on the bound
+-- variable stack for as long as the level is on the explicit-pred stack (a
+-- signature's own variables and those of enclosing signatures, see
+-- TCheck.tiExpl_1), and the list has had n substitutions applied (counted
+-- to 2).  No substitution of this typechecker binds a bound variable
+-- (Unify.mgu, matchFDRow, joinCtxs and lookfor are given the stack;
+-- extSubst's -check-subst-bound), so a substitution s only rebuilds the
+-- list, as apSub nullSubst does: on a Pred, expandSyn after normTAp at
+-- every node.  That is the same value after two rebuilds, not one:
+-- expandSyn can expose a primitive type function that only normTAp folds
+-- (TNumToStr of a literal behind a synonym), which the second rebuild
+-- folds, and the third finds nothing.  So "next", the level after one more
+-- substitution, is made once (with nullSubst, lazily) and shared by every
+-- substitution of the level, and from the second on it is the level
+-- itself; "trees" are the givens' expansions (bySuperT), shared by every
+-- sat that reads the level (TCMisc.givenExp).  GFlex: a level that may
+-- hold a variable a substitution binds (a field's context over its
+-- struct's parameters, residual goals), substituted as given.
+-- The last field is the list the level was made with (TCMisc.hitGuards).
+data GBound = GFlex | GRigid !Int GSeg [ETree] [EPred]
+
+-- | The GRigid level made with the list raw, after n substitutions (its
+-- list ps), with the class trees and index of proto (whose list has the
+-- same classes in the same positions).
+rigidSeg :: Int -> GSeg -> [EPred] -> [EPred] -> GSeg
+rigidSeg n proto raw ps = seg
+  where seg = proto { gsList = ps, gsBound = GRigid n next (map bySuperT ps) raw }
+        next | n >= 2 = seg
+             | otherwise = rigidSeg (n + 1) proto raw (apSub nullSubst ps)
+
+-- | The levels a GRigid level becomes under substitutions, in order (none
+-- for GFlex, and none once a substitution keeps the level).
+rigidChain :: GSeg -> [GSeg]
+rigidChain seg = case gsBound seg of
+                   GRigid n next _ _ | n < 2 -> next : rigidChain next
+                   _ -> []
+
 mkGSeg :: [EPred] -> GSeg
-mkGSeg ps = GSeg ps trees idx
+mkGSeg ps = GSeg ps trees idx GFlex
   where trees = listArray (0, length ps - 1) [ classTree c | EPred _ (IsIn c _) <- ps ]
         idx = classIdxFromList [ (k, i) | (i, t) <- assocs trees,
                                           k <- IS.toList (gtReach t) ]
+
+-- bySuperE's expansion of a given as a tree: the given, its superclasses'
+-- trees in the order of the class's super list, and its commuted form.
+-- flattenT (bySuperT ep) is bySuperE ep: the same entries, built by the
+-- same expressions, in the same order and with the same sharing (each
+-- superclass entry is both an entry and the root of its own expansion).
+data ETree = ETree EPred [ETree] [EPred]
+
+bySuperT :: EPred -> ETree
+bySuperT ep@(EPred e p@(IsIn c ts)) = ETree ep (map bySuperT esupers) comm
+  where s       = mkSubst (zip (csig c) ts)
+        esupers = map (\ (CTypeclass i, p) ->
+                        let p' = apSub s p
+                        in  EPred (CApply (cTApply (CSelectT (typeclassId $ name c) i) ts) [e]) p') (super c)
+        comm    = if (isComm c) then [(EPred e (IsIn c (commute ts)))] else []
+
+commute :: [Type] -> [Type]
+commute ts@[t1,t2] = [t2, t1]
+commute ts@[t1,t2,t3] = [t2, t1, t3]
+commute _ = internalError("commutative class not taking two or three arguments")
 
 -- | The givens of a solve: its levels, newest first, with no empty level.
 -- Their list (givensList) is the levels' lists concatenated.  No givens
@@ -864,11 +930,62 @@ givensAppend (Givens segs1) (Givens segs2) = Givens (segs1 ++ segs2)
 -- | The level's index over another list of its givens: the level's list
 -- with a substitution applied (same classes, same positions).
 givensOnList :: GSeg -> [EPred] -> Givens
-givensOnList seg ps = mkGivensSegs [seg { gsList = ps }]
+-- (A GRigid level's is its "next", which ps equals.)
+givensOnList seg ps = case gsBound seg of
+                        GRigid _ next _ _ -> mkGivensSegs [next]
+                        GFlex -> mkGivensSegs [seg { gsList = ps }]
 
 instance Types Givens where
-    apSub s (Givens segs) = Givens [ seg { gsList = apSub s (gsList seg) } | seg <- segs ]
+    apSub s (Givens segs) = Givens (map sub segs)
+      where sub seg = case checkRigid s seg of
+              () -> case gsBound seg of
+                      GRigid _ next _ _ -> next
+                      GFlex -> seg { gsList = apSub s (gsList seg) }
     tv gv = tv (givensList gv)
+
+-- Under -trace-tc-check-bound-givens, no variable of a GRigid level is in
+-- the substitution's domain, and the level's "next" is what substituting
+-- it gives, positions and canonical words included; a violation is an
+-- internal error.  (It forces the level, its next and the substitution: a
+-- diagnostic, not for measurement.  Named -trace- so that the flags'
+-- fingerprint leaves it out, bsc.flagsFingerprint.)
+checkRigid :: Subst -> GSeg -> ()
+checkRigid s seg
+  | not checkBoundGivens = ()
+  | GRigid _ next _ _ <- gsBound seg =
+      let ps = gsList seg
+          dom = S.fromList (getSubstDomain s)
+          bad = [ v | v <- tv ps, S.member v dom ]
+          ps' = apSub s ps
+          ns = gsList next
+          same = length ns == length ps' && and (zipWith sameEPred ns ps')
+      in  if not (null bad)
+            then internalError ("bound givens: substituted variable " ++
+                                ppReadable (bad, ps))
+            else if not same
+                   then internalError ("bound givens: kept level differs " ++
+                                       ppReadable (ns, ps'))
+                   else ()
+  | otherwise = ()
+  where
+    sameEPred (EPred _ (IsIn c ts)) (EPred _ (IsIn c' ts')) =
+        c == c' && length ts == length ts' && and (zipWith sameType ts ts')
+    sameType x y =
+        typeCanonWordNode x == typeCanonWordNode y &&
+        case (x, y) of
+          (TVar v, TVar v') -> v == v' && getPosition v == getPosition v'
+          (TCon c, TCon c') -> c == c' && getPosition c == getPosition c' &&
+                               sameLeaf c c'
+          (TAp f a, TAp f' a') -> sameType f f' && sameType a a'
+          (TGen p i, TGen p' i') -> p == p' && i == i'
+          (TDefMonad p, TDefMonad p') -> p == p'
+          _ -> False
+    sameLeaf (TyNum a _) (TyNum b _) = a == b
+    sameLeaf (TyStr a _) (TyStr b _) = a == b
+    sameLeaf _ _ = True
+
+checkBoundGivens :: Bool
+checkBoundGivens = elem "-trace-tc-check-bound-givens" progArgs
 
 type Infer2 e t r = [Assump] -> e -> TI ([VPred], t, r)
 

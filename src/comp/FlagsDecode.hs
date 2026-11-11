@@ -519,6 +519,7 @@ traceflags = [
           "no-symtab-reword-insts",
           "no-tc-dict-pool",
           "tc-dict-pool-verify",
+          "trace-tc-check-bound-givens",
           "no-use-layout",
           "trace-aopt",
           "trace-apaths",

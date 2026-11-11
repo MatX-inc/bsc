@@ -330,6 +330,12 @@ data Cnt = CReducePred | CSat | CLookup | CHitWord | CHitStr | CHitVarOut
          | CSkipNoRec | CNoRecAdd
          | CNoRecVar | CNoRecTaint | CNoRecNested
          | CSkipRefused | CRecJoinOut | CHitJoins | CRecOutDvs | CFallbackFresh
+         | CRefDvs | CRefStack
+         | CRefRootRigidUneval | CRefRootRigidKeyed
+         | CRefRootFlexUneval | CRefRootFlexKeyed
+         | CRefSuperRigidUneval | CRefSuperRigidKeyed
+         | CRefSuperFlexUneval | CRefSuperFlexKeyed
+         | CRefExplRigidUneval | CRefExplFlexUneval | CRefExplKeyed
     deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- Counter keys at noRecByBase + fromEnum c count the lookups skipped for a
@@ -364,3 +370,14 @@ cntName c = case c of
     CSkipRefused -> "skip_refused"
     CRecJoinOut -> "rec_join_outside"; CHitJoins -> "hit_joins"
     CRecOutDvs -> "rec_output_in_dvs"; CFallbackFresh -> "fallback_fresh"
+    CRefDvs -> "refuse_dvs"; CRefStack -> "refuse_stack"
+    CRefRootRigidUneval -> "refuse_root_rigid_uneval"
+    CRefRootRigidKeyed -> "refuse_root_rigid_keyed"
+    CRefRootFlexUneval -> "refuse_root_flex_uneval"
+    CRefRootFlexKeyed -> "refuse_root_flex_keyed"
+    CRefSuperRigidUneval -> "refuse_super_rigid_uneval"
+    CRefSuperRigidKeyed -> "refuse_super_rigid_keyed"
+    CRefSuperFlexUneval -> "refuse_super_flex_uneval"
+    CRefSuperFlexKeyed -> "refuse_super_flex_keyed"
+    CRefExplRigidUneval -> "refuse_expl_rigid_uneval"
+    CRefExplFlexUneval -> "refuse_expl_flex_uneval"; CRefExplKeyed -> "refuse_expl_keyed"
