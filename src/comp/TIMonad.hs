@@ -19,6 +19,9 @@ module TIMonad(
         EPred(..), Infer2, CheckT, TaskCheckT,
         getBoundTVs, getTopBoundTVs, addBoundTVs, popBoundTVs,
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
+        GSeg(..), GTree(..), Givens, mkGivens, givensSegs, givensList, givensOnList,
+        givensAppend,
+        classKey, getExplGivens, getTopExplSeg,
         getNumProven, getNumRefuted, addNumDecided,
         errorAtId, findCons, findTyCon, findFields, findCls,
         bitCls,
@@ -57,6 +60,8 @@ import Control.Monad.Except(ExceptT, runExceptT, throwError, catchError)
 import Control.Monad.State(State, StateT, runState, runStateT,
                            lift, gets, get, put, modify)
 import qualified Data.IntSet as IS
+import Data.Array(Array, listArray, assocs)
+import FStringCompat(fstringId)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -138,7 +143,9 @@ data TStateRecover = TStateRecover {
   tsCurSubst :: !Subst, -- current substitution
   -- stack of bound tyvars (list of lists for stuff bound at each level)
   tsBoundTyVarStack :: [[TyVar]],
-  tsExplPreds :: [[EPred]],
+  -- the explicit preds bound at each level, newest first, each level's
+  -- with its class index (GSeg)
+  tsExplPreds :: [GSeg],
   tsSatStack :: TSSuperSatStack,
   -- the dictionary pool's keys of the sat stack's entries (TCMisc.hitGuards),
   -- per context and entry as tsSatStack
@@ -152,7 +159,7 @@ data TStateRecover = TStateRecover {
 
 type TSSatElement = EPred
 
-mkTSSatElement :: (Maybe [TyVar]) -> [EPred] -> VPred -> TSSatElement
+mkTSSatElement :: (Maybe [TyVar]) -> Givens -> VPred -> TSSatElement
 -- this solves a VPred in a circular way by simply assigning the
 -- variable to the pred.  We still will need to solve the pred "p".
 -- It is useful when there is recursion, where the solved "p" will
@@ -526,14 +533,22 @@ popBoundTVs = modify dropVars
   where dropVars s = s { tsBoundTyVarStack = tail (tsBoundTyVarStack s) }
 
 getExplPreds :: TI [EPred]
-getExplPreds = gets tsExplPreds >>= (return . concat)
+getExplPreds = gets tsExplPreds >>= (return . concatMap gsList)
 
 getTopExplPreds :: TI [EPred]
-getTopExplPreds = gets tsExplPreds >>= (return . headOrErr "getTopExplPreds")
+getTopExplPreds = gets tsExplPreds >>= (return . gsList . headOrErr "getTopExplPreds")
+
+-- getExplPreds with the levels' class indexes
+getExplGivens :: TI Givens
+getExplGivens = gets tsExplPreds >>= (return . mkGivensSegs)
+
+-- the newest level (getTopExplPreds is its gsList)
+getTopExplSeg :: TI GSeg
+getTopExplSeg = gets tsExplPreds >>= (return . headOrErr "getTopExplSeg")
 
 addExplPreds :: [EPred] -> TI ()
 addExplPreds ps = modify addPreds
-  where addPreds s = s { tsExplPreds = ps : (tsExplPreds s) }
+  where addPreds s = s { tsExplPreds = mkGSeg ps : (tsExplPreds s) }
 
 popExplPreds :: TI ()
 popExplPreds = modify dropPreds
@@ -722,6 +737,91 @@ instance Types EPred where
 
 instance PPrint EPred where
     pPrint d p (EPred e q) = pparen (p>0) (pparen True (pPrint d 0 e) <> text":" <> pPrint d 10 q)
+
+-- Givens with an index by class
+--
+-- sat and its partial-reduction check look for a given of the goal's class
+-- in TCMisc.bySuperE's expansion of the givens (each given, its
+-- superclasses' expansions in super-list order, then its commuted form),
+-- isReduciblePred among the givens themselves.  Each compares an entry's
+-- class with the goal's before anything else and passes over an entry of
+-- another class, so visiting only the entries whose class has the goal's
+-- base name, in the same order, makes the same comparisons on the same
+-- entries.  The index is built from classes alone, and apSub keeps every
+-- given's class and position, so a list's index serves every
+-- substitution of it.
+--
+-- What building it forces that a scan might not: each given to weak head
+-- normal form, and the class, name, super list and isComm of every class
+-- in its superclass closure.  No type, position or type variable.  A
+-- Class is a symbol-table record whose name is a key of the table, and a
+-- superclass is looked up there by name (MakeSymTab), so this interns
+-- nothing (class names are interned by the parser or by the .bo reader's
+-- eager string-table read).
+
+-- | A class and its superclass closure, as bySuperE expands a given of the
+-- class: the class's key, the keys anywhere below, and the superclasses'
+-- trees in the order of the class's super list.
+data GTree = GTree { gtKey :: !Int, gtReach :: !IS.IntSet, gtSubs :: [GTree] }
+
+-- | Equal classes have equal keys: Eq Class is qualEq on the names, which
+-- needs equal base names.  Unequal classes may share a key (the
+-- qualifier is not in it); a scan of a key's entries still compares the
+-- classes.
+classKey :: Class -> Int
+classKey c = fstringId (getIdBase (typeclassId (name c)))
+
+classTree :: Class -> GTree
+classTree c = GTree k (IS.insert k (IS.unions (map gtReach subs))) subs
+  where k = classKey c
+        subs = [ classTree c' | (_, IsIn c' _) <- super c ]
+
+-- | One level of givens: the list and, by position, each given's class
+-- tree, with the positions whose tree holds each key (ascending).
+data GSeg = GSeg {
+    gsList  :: [EPred],
+    gsTrees :: Array Int GTree,
+    gsIdx   :: IM.IntMap [Int]
+  }
+
+mkGSeg :: [EPred] -> GSeg
+mkGSeg ps = GSeg ps trees idx
+  where trees = listArray (0, length ps - 1) [ classTree c | EPred _ (IsIn c _) <- ps ]
+        idx = IM.map reverse $
+              IM.fromListWith (++) [ (k, [i]) | (i, t) <- assocs trees,
+                                                k <- IS.toList (gtReach t) ]
+
+-- | The givens of a solve: its levels, newest first, with no empty level.
+-- Their list (givensList) is the levels' lists concatenated.  No givens
+-- is no level: nothing of an index is made for it.
+newtype Givens = Givens [GSeg]
+
+mkGivens :: [EPred] -> Givens
+mkGivens [] = Givens []
+mkGivens ps = Givens [mkGSeg ps]
+
+mkGivensSegs :: [GSeg] -> Givens
+mkGivensSegs segs = Givens [ seg | seg <- segs, not (null (gsList seg)) ]
+
+givensSegs :: Givens -> [GSeg]
+givensSegs (Givens segs) = segs
+
+givensList :: Givens -> [EPred]
+givensList (Givens [seg]) = gsList seg
+givensList (Givens segs) = concatMap gsList segs
+
+-- | The givens of both, in order (the lists' (++)).
+givensAppend :: Givens -> Givens -> Givens
+givensAppend (Givens segs1) (Givens segs2) = Givens (segs1 ++ segs2)
+
+-- | The level's index over another list of its givens: the level's list
+-- with a substitution applied (same classes, same positions).
+givensOnList :: GSeg -> [EPred] -> Givens
+givensOnList seg ps = mkGivensSegs [seg { gsList = ps }]
+
+instance Types Givens where
+    apSub s (Givens segs) = Givens [ seg { gsList = apSub s (gsList seg) } | seg <- segs ]
+    tv gv = tv (givensList gv)
 
 type Infer2 e t r = [Assump] -> e -> TI ([VPred], t, r)
 

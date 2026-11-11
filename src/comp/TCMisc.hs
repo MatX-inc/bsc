@@ -2,6 +2,7 @@
 module TCMisc(
         splitF, satisfyFV, satisfy,
         satisfyStream, satisfyFVStream, batchSolveNumericPreds,
+        satisfyG, satisfyStreamG, satisfyFVStreamG,
         reducePred, Reduction(..),
         reducePredsAggressive, SolveResult(..), expTFun, expTConPred,
         findAssump, mkQualType, closeFD, niceTypes,
@@ -19,6 +20,7 @@ import Data.Maybe
 import Data.List
 import Control.Monad(foldM, when)
 import qualified Data.IntSet as IS
+import Data.Array((!))
 import qualified Data.Map as M
 import qualified Data.Set as S
 import System.IO.Unsafe(unsafePerformIO)
@@ -153,10 +155,18 @@ data SolveResult = SolveResult {
     }
 
 satisfy :: [EPred] -> [VPred] -> TI ([VPred], SolvedBinds)
-satisfy es ps = satisfyX Nothing es ps
+satisfy es ps = satisfyX Nothing (mkGivens es) ps
 
 satisfyStream :: [EPred] -> [VPred] -> TI ([VPred], SolvedBinds)
-satisfyStream es ps = satisfyXStream Nothing es ps
+satisfyStream es ps = satisfyXStream Nothing (mkGivens es) ps
+
+-- satisfy and satisfyStream, with givens whose class index is at hand
+-- (TIMonad.getExplGivens, getTopExplSeg)
+satisfyG :: Givens -> [VPred] -> TI ([VPred], SolvedBinds)
+satisfyG es ps = satisfyX Nothing es ps
+
+satisfyStreamG :: Givens -> [VPred] -> TI ([VPred], SolvedBinds)
+satisfyStreamG es ps = satisfyXStream Nothing es ps
 
 -- This version also takes a list of the variables from the
 -- environment, which have been filtered for dependencies.  These
@@ -167,23 +177,28 @@ satisfyStream es ps = satisfyXStream Nothing es ps
 satisfyFV :: [TyVar] -> [EPred] -> [VPred] -> TI ([VPred], SolvedBinds)
 satisfyFV vs es ps =
         satTrace ("satisfyFV " ++ ppReadable ps) $
-        satisfyX (Just vs) es ps
+        satisfyX (Just vs) (mkGivens es) ps
 
 satisfyFVStream :: [TyVar] -> [EPred] -> [VPred] -> TI ([VPred], SolvedBinds)
 satisfyFVStream vs es ps =
         satTrace ("satisfyFVStream " ++ ppReadable ps) $
+        satisfyXStream (Just vs) (mkGivens es) ps
+
+satisfyFVStreamG :: [TyVar] -> Givens -> [VPred] -> TI ([VPred], SolvedBinds)
+satisfyFVStreamG vs es ps =
+        satTrace ("satisfyFVStream " ++ ppReadable ps) $
         satisfyXStream (Just vs) es ps
 
-satisfyX :: DVS -> [EPred] -> [VPred] -> TI ([VPred], SolvedBinds)
+satisfyX :: DVS -> Givens -> [VPred] -> TI ([VPred], SolvedBinds)
 satisfyX _   es [] = return ([], emptySBs)
 satisfyX dvs es ps = do
         (rs, sbs) <- satisfyXStream dvs es ps
         -- settle the numeric residuals (see the contract above)
         s <- getSubst
-        (rs', nsbs) <- batchSolveNumericPreds (apSub s es) rs
+        (rs', nsbs) <- batchSolveNumericPreds (givensList (apSub s es)) rs
         return (rs', nsbs <++ sbs)
 
-satisfyXStream :: DVS -> [EPred] -> [VPred] -> TI ([VPred], SolvedBinds)
+satisfyXStream :: DVS -> Givens -> [VPred] -> TI ([VPred], SolvedBinds)
 satisfyXStream _   es [] = return ([], emptySBs)
 satisfyXStream dvs es ps = do
         -- satTraceM ("satisfy enter: " ++ ppString (dvs, ps))
@@ -206,7 +221,7 @@ split_rs s' rs  = partition affected_pred rs
           affected_var v = v `elem` changed_tv
           affected_pred r = any affected_var (tv r)
 
-satisfy' :: DVS -> [EPred] -> [VPred] -> TI SolveResult
+satisfy' :: DVS -> Givens -> [VPred] -> TI SolveResult
 satisfy' dvs es ps = do
        (ps0, s0, sbs0) <- joinNeededCtxs ps
        -- satTraceM ("satisfy (join)' = " ++ ppString (ps0, sbs0, s0))
@@ -240,7 +255,7 @@ satisfy' dvs es ps = do
         -- (but only when not attempting "last resort" satisfying, though
         -- is that condition even necessary?).
         --
-        sMany :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Subst -> [VPred] ->
+        sMany :: DVS -> Givens -> [VPred] -> SolvedBinds -> Subst -> [VPred] ->
                  TI SolveResult
         sMany dvs es rs sbs s [] =
             {- satTrace ("sMany: rs=" ++ ppReadable rs) $ -} do
@@ -441,9 +456,9 @@ joinPair bound_tyvars vps n v1@(VPred i pp@(PredWithPositions (IsIn c ts) pos an
 -- and no in-scope given could ever satisfy, so the caller may commit to
 -- it (keep the bindings and continue with the residual goals) instead of
 -- putting the original predicate aside to retry.
-sat :: DVS -> [EPred] -> VPred -> TI SatResult
+sat :: DVS -> Givens -> VPred -> TI SatResult
 sat dvs ps p =
-    satTrace ("sat: trying " ++ ppReadable p ++ " in " ++ ppReadable ps) $ do
+    satTrace ("sat: trying " ++ ppReadable p ++ " in " ++ ppReadable (givensList ps)) $ do
     countDP CSat 1
     recLog (case toPred p of IsIn c ts -> EvGoal c ts)
     whole_stack <- getSatStack
@@ -492,10 +507,14 @@ sat dvs ps p =
        let this_point :: TSSatElement
            this_point = (mkTSSatElement dvs ps p)
        incrementSatStack this_point
-       return_val <- case lookfor bound_tyvars p (concatMap bySuperE ps) of
+       -- (lookfor compares the class of every entry with the goal's first
+       -- and goes no further on another class, so it is given only the
+       -- entries of the goal's class)
+       GivenExp p_entries ps_exp <- return (givenExp p ps)
+       return_val <- case lookfor bound_tyvars p p_entries of
          Just (b, (s, [])) -> do
              recLog EvLookfor
-             satTrace ("sat in super: " ++ ppReadable (p, concatMap bySuperE ps)) $ return ()
+             satTrace ("sat in super: " ++ ppReadable (p, ps_exp)) $ return ()
              let sb = mkSolvedBind b False -- Satisfied via superclass from source, not recursive
              return (SatResult [] (fromSB sb) s Provisional RcOpaque)
          -- we might introduce a numeric equality here, so try instance reduction first
@@ -505,7 +524,7 @@ sat dvs ps p =
                 case m_equals of
                   Just (b, (s, num_eqs)) -> do
                     recLog EvLookfor
-                    satTrace ("sat in super (num eq): " ++ ppReadable (p, concatMap bySuperE ps, num_eqs)) $ return ()
+                    satTrace ("sat in super (num eq): " ++ ppReadable (p, ps_exp, num_eqs)) $ return ()
                     let VPred _ p_pwp = p
                     eq_ps <- concatMapM (eqToVPred (getPredAncestors p_pwp) (getVPredPositions p)) num_eqs
                     let sb = mkSolvedBind b False -- From superclass, not recursive
@@ -518,7 +537,7 @@ sat dvs ps p =
           -- result the dictionary pool records)
           let notFull m = do { r <- m; return (r, False) }
               solveFor = do
-                  x  <- reducePred ps dvs p
+                  x  <- reducePred (givensList ps) dvs p
                   case x of
                     Nothing -> notFull (fail "sat unreduced")
                     Just (Reduction qs sb us Nothing mpkg ns) ->
@@ -542,9 +561,14 @@ sat dvs ps p =
                               if legacyDeferInstances
                               then return Provisional
                               else do
-                                stack_eps <- getExplPreds
+                                stack_eps <- getExplGivens
                                 let p_pred = apSub s_final (toPred p)
-                                    givens = concatMap bySuperE (ps ++ stack_eps)
+                                    -- the entries of concatMap bySuperE
+                                    -- (ps ++ stack_eps) of the goal's
+                                    -- class (predUnify compares the
+                                    -- classes first), built afresh as
+                                    -- that expansion was
+                                    givens = freshGivenEntries p (givensAppend ps stack_eps)
                                     -- Modal check, so unify unguarded ([]): a
                                     -- given from an enclosing frame quantifies
                                     -- over its own rigid variables, which are
@@ -571,7 +595,7 @@ sat dvs ps p =
                       result <- case result0 of
                         SolveResult needed0@(_:_) sbs s_final -> do
                             (needed, nsbs) <- batchSolveNumericPreds
-                                                  (apSub s_final ps) needed0
+                                                  (givensList (apSub s_final ps)) needed0
                             return (SolveResult needed (nsbs <++ sbs) s_final)
                         r -> return r
                       case result of
@@ -595,7 +619,7 @@ sat dvs ps p =
           mdp <- getDictPool
           case mdp of
             Just dp | not dictPoolOff ->
-              poolSat dp ai dvs ps p whole_stack (concatMap bySuperE ps) bound_tyvars
+              poolSat dp ai dvs ps p whole_stack ps_exp bound_tyvars
                       recordATFs solveFor
             _ -> fmap fst solveFor
        decrementSatStack
@@ -741,7 +765,7 @@ forceKeys kt ts0 = case go ts0 of (ks, s) -> (ks, s, kt)
     keyable (PVar _) (TVar _) = True
     keyable _ _ = False
 
-poolSat :: DictPool -> Bool -> DVS -> [EPred] -> VPred -> [EPred] -> [EPred] -> [TyVar]
+poolSat :: DictPool -> Bool -> DVS -> Givens -> VPred -> [EPred] -> [EPred] -> [TyVar]
         -> (Subst -> TI ()) -> TI (SatResult, Bool) -> TI SatResult
 poolSat dp ai dvs ps p@(VPred w (PredWithPositions (IsIn c ts) _ _)) whole_stack givens bvs
         recordATFs solveFor
@@ -1544,19 +1568,19 @@ logJoin nb nu ns = do
 -- preds to retry satisfying
 --
 -- Return values are similar to "sat" since they recursively call each other.
-satMany :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Subst -> [VPred] ->
+satMany :: DVS -> Givens -> [VPred] -> SolvedBinds -> Subst -> [VPred] ->
            TI SolveResult
 satMany dvs es rs_accum sbs s ps =
     fmap fst (satManyR dvs es rs_accum sbs RcOpaque s ps)
 
-satMany' :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Subst -> [VPred] ->
+satMany' :: DVS -> Givens -> [VPred] -> SolvedBinds -> Subst -> [VPred] ->
     TI SolveResult
 satMany' dvs es rs_accum sbs s ps =
     fmap fst (satManyR' dvs es rs_accum sbs RcOpaque s ps)
 
 -- satMany and satMany', with the recipe of the bindings beside them
 -- (DictPool.Recipe): "rc" is how "sbs" was built.
-satManyR :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Recipe -> Subst -> [VPred] ->
+satManyR :: DVS -> Givens -> [VPred] -> SolvedBinds -> Recipe -> Subst -> [VPred] ->
             TI (SolveResult, Recipe)
 -- Heuristic: sort predicates so those with concrete type arguments are processed
 -- before those with all-variable arguments.  This ensures fundep-producing
@@ -1572,7 +1596,7 @@ satManyR dvs es rs_accum sbs rc s ps =
             compare (concreteness ts2) (concreteness ts1) -- higher first
         concreteness ts = length (filter (not . isTVar) ts)
 
-satManyR' :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Recipe -> Subst -> [VPred] ->
+satManyR' :: DVS -> Givens -> [VPred] -> SolvedBinds -> Recipe -> Subst -> [VPred] ->
     TI (SolveResult, Recipe)
 -- rs_accum is an accumulating parameter of "needed" VPreds
 -- if satisfying fails these are returned (for error messages and ctxReduce)
@@ -1644,9 +1668,9 @@ reducePredsAggressive dvs es vps0 = do
   -- traceM ("reducePredsAggressive (enter): " ++ ppReadable vps0)
   (vps1, s1, sbs1) <- joinNeededCtxs vps0
   checkJoinCtxs "reducePredsAggressive 1" vps0 s1 vps1
-  reducePredsAggressive' dvs es sbs1 s1 vps1
+  reducePredsAggressive' dvs (mkGivens es) sbs1 s1 vps1
 
-reducePredsAggressive' :: DVS -> [EPred] -> SolvedBinds -> Subst -> [VPred] ->
+reducePredsAggressive' :: DVS -> Givens -> SolvedBinds -> Subst -> [VPred] ->
                           TI SolveResult
 reducePredsAggressive' dvs es sbs1 s1 vps1 = do
   -- Note that we are calling satMany' here, which does not apply the sorting optimization.
@@ -1681,7 +1705,7 @@ reducePredsAggressive' dvs es sbs1 s1 vps1 = do
     -- error reporters) all need a final residual, so settle the
     -- numeric preds here.
     let vps2' = apSub s2 vps2
-    (vps3, nsbs) <- batchSolveNumericPreds (apSub s2 es) vps2'
+    (vps3, nsbs) <- batchSolveNumericPreds (givensList (apSub s2 es)) vps2'
     return (SolveResult vps3 (nsbs <++ sbs2 <++ sbs1) s2)
 
 -- note that the subst we return is safe to commit to as long as the
@@ -2169,6 +2193,87 @@ bySuperE ep@(EPred e p@(IsIn c ts)) = ep : eps ++ comm
                      [(EPred e (IsIn c (commute ts)))]
                   else []
 
+-- bySuperE's expansion of a given as a tree: the given, its superclasses'
+-- trees in the order of the class's super list, and its commuted form.
+-- flattenT (bySuperT ep) is bySuperE ep: the same entries, built by the
+-- same expressions, in the same order and with the same sharing (each
+-- superclass entry is both an entry and the root of its own expansion).
+data ETree = ETree EPred [ETree] [EPred]
+
+bySuperT :: EPred -> ETree
+bySuperT ep@(EPred e p@(IsIn c ts)) = ETree ep (map bySuperT esupers) comm
+  where s       = mkSubst (zip (csig c) ts)
+        esupers = map (\ (CTypeclass i, p) ->
+                        let p' = apSub s p
+                        in  EPred (CApply (cTApply (CSelectT (typeclassId $ name c) i) ts) [e]) p') (super c)
+        comm    = if (isComm c) then [(EPred e (IsIn c (commute ts)))] else []
+
+flattenT :: ETree -> [EPred]
+flattenT (ETree ep subs comm) = ep : concatMap flattenT subs ++ comm
+
+-- The entries of flattenT whose class has key k (TIMonad.classKey), in
+-- its order, entering only the subtrees whose class tree holds k.  The
+-- class tree is the given's (GTree): the tree of its class, which
+-- bySuperT walks the same way.
+entriesK :: Int -> GTree -> ETree -> [EPred]
+entriesK k (GTree key _ gsubs) (ETree ep esubs comm) =
+    (if key == k then (ep :) else id)
+    (concat [ entriesK k gt et | (gt, et) <- zip gsubs esubs, IS.member k (gtReach gt) ] ++
+     (if key == k then comm else []))
+
+-- The elements at the given ascending positions, with their positions.
+pickAt :: [Int] -> [a] -> [(Int, a)]
+pickAt is0 xs0 = go 0 is0 xs0
+  where go _ [] _ = []
+        go j (i:is) xs = case drop (i - j) xs of
+                           (x:xs') -> (i, x) : go (i + 1) is xs'
+                           [] -> internalError "TCMisc.pickAt"
+
+-- The entries of key k of the givens' expansions (concatMap bySuperE of
+-- the givens), in order, from the givens' trees (givenExp's).
+givenEntries :: Int -> [(GSeg, [ETree])] -> [EPred]
+givenEntries k segs =
+    concat [ entriesK k (gsTrees seg ! i) et
+           | (seg, ets) <- segs,
+             (i, et) <- pickAt (IM.findWithDefault [] k (gsIdx seg)) ets ]
+
+-- The givens' expansion as sat reads it for a goal: the entries of the
+-- goal's class and the whole expansion (the pool's guards), from the same
+-- trees, as both once read one list.  Without givens both are empty and
+-- nothing is built or read: the goal's class is not looked at.
+data GivenExp = GivenExp [EPred] [EPred]
+
+givenExp :: VPred -> Givens -> GivenExp
+givenExp vp gv =
+    case givensSegs gv of
+      [] -> GivenExp [] []
+      segs -> let trees = [ (seg, map bySuperT (gsList seg)) | seg <- segs ]
+              in  GivenExp (givenEntries (vpClassKey vp) trees)
+                           (concatMap (concatMap flattenT . snd) trees)
+
+vpClassKey :: VPred -> Int
+vpClassKey vp = case toPred vp of IsIn c _ -> classKey c
+
+-- The goal's givenEntries from trees built for the call alone, as an
+-- expansion written out at the call is built
+{-# NOINLINE freshGivenEntries #-}
+freshGivenEntries :: VPred -> Givens -> [EPred]
+freshGivenEntries vp gv =
+    concat [ entriesK k (gsTrees seg ! i) (bySuperT ep)
+           | seg <- givensSegs gv,
+             (i, ep) <- pickAt (IM.findWithDefault [] k (gsIdx seg)) (gsList seg) ]
+  where k = vpClassKey vp
+
+-- The givens themselves (no superclass entries) whose class has c's key,
+-- in order.
+{-# NOINLINE directEntries #-}
+directEntries :: Class -> Givens -> [EPred]
+directEntries c gv =
+    [ ep | seg <- givensSegs gv,
+           (i, ep) <- pickAt (IM.findWithDefault [] k (gsIdx seg)) (gsList seg),
+           gtKey (gsTrees seg ! i) == k ]
+  where k = classKey c
+
 -- Match a predicate against an instance head: each fundep row goes
 -- through matchFDRow and the rows join with firstMatch.  The "match"
 -- function decides how non-fundep positions compare: byInst passes
@@ -2306,8 +2411,8 @@ normT t = do
         return t''
      else do
         -- A type function can expand to a pred that is satisfied locally by an explicit pred.
-        eps <- getExplPreds
-        (ps', _) <- satisfy eps ps
+        eps <- getExplGivens
+        (ps', _) <- satisfyG eps ps
         --unless (null ps') (internalError ("expandSynN " ++ ppReadable (t, ps')))
         if not (null ps') then
             return t'                -- XXX could expand some
@@ -2772,6 +2877,8 @@ defaultClasses :: [TyVar] -> [EPred] -> [VPred] ->
                   TI ([VPred], SolvedBinds, [TyVar])
 defaultClasses fixedVars givenPreds unsatisfiedPreds =
    let
+       givenG = mkGivens givenPreds
+
        -- all variables which are not ambiguous
        fixedVars_closed = closeFD unsatisfiedPreds fixedVars
 
@@ -2825,7 +2932,7 @@ defaultClasses fixedVars givenPreds unsatisfiedPreds =
               let s = mkSubst [(i,t)]
                   ps' = apSub s ps
 
-              answer0 <- satMany (Just fixedVars) givenPreds [] emptySBs s ps'
+              answer0 <- satMany (Just fixedVars) givenG [] emptySBs s ps'
               -- candidate validation is a verdict: settle the numeric
               -- residuals under this candidate before requiring emptiness
               -- (this speculative pass is quarantined -- only the
@@ -3037,7 +3144,7 @@ propagateFunDeps :: [VPred] -> TI ([VPred], [VPred])
 propagateFunDeps ps0 =
   do
     s <- getSubst
-    eps <- getExplPreds
+    eps <- getExplGivens
 
     let ps = apSub s ps0
     satTraceM("propagateFunDeps satisfy: " ++ ppReadable ps)
@@ -3047,7 +3154,7 @@ propagateFunDeps ps0 =
     flags <- getFlags
     setFlags (flags { useProvisoSAT = False })
 
-    (ps_unsat, _) <- satisfy eps ps
+    (ps_unsat, _) <- satisfyG eps ps
 
     -- restore the flags
     setFlags flags
@@ -3084,7 +3191,8 @@ isReduciblePred (VPred i pp@(PredWithPositions p@(IsIn c ts) pos anc)) = do
         -- classes (and the legacy hatch) retain fall-through, so a
         -- conflict is never conclusive for them.
         conflict_stops = not (outputFallThroughAllowed ai c)
-        f _ [] = getExplPreds >>= g
+        -- (matchExplPred compares the classes first)
+        f _ [] = getExplGivens >>= (g . directEntries c)
         f unifiable_seen (i:is) = do
             (isReducible, may_capture) <- byInstIsReducible v' i
             -- if we discover that it could match or definitely
