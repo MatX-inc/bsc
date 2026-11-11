@@ -7,7 +7,8 @@ include ../common.mk
 
 SRCS = $(wildcard *.bs) $(wildcard *.bsv)
 
-# Only .bo files are generated (no modules are elaborated in this directory)
+# Only .bo files are generated (no modules are elaborated in this directory),
+# each with its .bi (see Base1)
 OBJS = $(addprefix $(BUILDDIR)/,$(addsuffix .bo,$(basename $(SRCS))))
 
 .PHONY: build
@@ -19,10 +20,12 @@ $(BUILDDIR):
 # .bs.bo:
 $(BUILDDIR)/%.bo: %.bs
 	${BSC} ${BSCFLAGS} $<
+	${BSC} ${BSCFLAGS} -signature-only $<
 
 # .bsv.bo:
 $(BUILDDIR)/%.bo: %.bsv
 	${BSC} ${BSCFLAGS} $<
+	${BSC} ${BSCFLAGS} -signature-only $<
 
 .PHONY: clean full_clean
 clean full_clean:

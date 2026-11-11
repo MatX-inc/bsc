@@ -3,3 +3,37 @@
 # encode, decode and re-encode
 compile_pass RoundTrip.bs "-check-bin-roundtrip"
 compile_pass RoundTripBSV.bsv "-check-bin-roundtrip"
+
+# Front-end-only compiles, which write no .bo
+proc front_end_pass { source mode {options ""} {nodeps 0} } {
+    incr_stat "front_end_pass"
+    if [bsc_compile $source "$mode $options" $nodeps] then {
+        pass "`$source' passes $mode"
+    } else {
+        fail "`$source' should pass $mode"
+    }
+}
+
+proc front_end_fail { source mode {options ""} {nodeps 0} } {
+    incr_stat "front_end_fail"
+    if [bsc_compile $source "$mode $options" $nodeps] then {
+        fail "`$source' should fail $mode"
+    } else {
+        pass "`$source' fails $mode"
+    }
+}
+
+# -signature-only writes the signature that the full compile stores
+compile_pass FrontEndA.bs
+front_end_pass FrontEndA.bs -signature-only "-check-bin-roundtrip"
+if { [do_internal_checks] } {
+    dumpbi FrontEndA.bo
+    dumpbi FrontEndA.bi
+    compare_file [make_dumpbi_output_name FrontEndA.bi] \
+        [make_dumpbi_output_name FrontEndA.bo]
+}
+
+# imports are read from .bi files only
+compile_pass FrontEndLib.bs
+front_end_fail FrontEndUsesLib.bs -signature-only "" 1
+find_regexp [make_bsc_output_name FrontEndUsesLib.bs] {S0004}

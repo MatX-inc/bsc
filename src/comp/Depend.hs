@@ -28,7 +28,7 @@ import FStringCompat
 import Lex
 import Parse
 import FileNameUtil(hasDotSuf, dropSuf, baseName, dirName,
-                    bscSrcSuffix, bsvSrcSuffix, binSuffix,
+                    bscSrcSuffix, bsvSrcSuffix, binSuffix, biSuffix,
                     mkAName, mkVName, mkVPIHName, mkVPICName,
                     createEncodedFullFilePath)
 import FileIOUtil(readFilesPath, readBinFilePath, readFileCatch, writeFileCatch,
@@ -111,13 +111,19 @@ chkDeps errh flags name = do
                 return (reverse [ (fileName pi, pkg, warns) | pi@(PkgInfo { compileStatus = Recompile pkg warns }) <- pis'' ])
             Left [] -> internalError "Depend.chkDeps: tsort empty cycle"
 
+-- The file whose date shows that a package is compiled: its .bo, or its
+-- .bi in the front-end-only modes, which read and write .bi files
+ifcSuffix :: Flags -> String
+ifcSuffix flags | frontEndMode flags == FullCompile = binSuffix
+                | otherwise = biSuffix
+
 -- Get PkgInfo for a package name.  Try to open the corresponding file.
 -- Also try the .bo file (for installed libraries).
 getPkgInfo :: ErrorHandle -> Flags -> PkgName -> IO (Either EMsg PkgInfo)
 getPkgInfo errh flags pname =
     let name = getIdString pname ++ "." ++ bscSrcSuffix
         bsvname = getIdString pname ++ "." ++ bsvSrcSuffix
-        bname = getIdString pname ++ "." ++ binSuffix
+        bname = getIdString pname ++ "." ++ ifcSuffix flags
         path = ifcPath flags
         errPackageMissing = (getIdPosition pname,
                              EMissingPackage (pfpString pname))
@@ -170,10 +176,10 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
     let mkdname dir suf = dir ++ "/" ++ baseName (dropSuf fname) ++ "." ++ suf
 
     -- find the mod time of the bo file (either in same dir or in the bdir)
-    tbo_samedir <- getModTime (dropSuf fname ++ "." ++ binSuffix)
+    tbo_samedir <- getModTime (dropSuf fname ++ "." ++ ifcSuffix flags)
     tbo_bdir <- case (bdir flags) of
                     Nothing -> return Nothing
-                    Just dir -> getModTime (mkdname dir binSuffix)
+                    Just dir -> getModTime (mkdname dir (ifcSuffix flags))
     let tbo = if (isJust tbo_bdir) then tbo_bdir else tbo_samedir
 
     -- include the prelude to avoid failures when predule was updated.

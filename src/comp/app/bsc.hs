@@ -44,7 +44,7 @@ import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, remap
                     mkAName, mkVName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
-                    bscSrcSuffix, binSuffix,
+                    bscSrcSuffix, binSuffix, biSuffix,
                     hSuffix, cSuffix, cxxSuffix, cppSuffix, ccSuffix,
                     objSuffix, useSuffix,
                     genFileName, createEncodedFullFilePath,
@@ -63,6 +63,7 @@ import SpeedyString(snapshotInternState, renderInternTable)
 import Exceptions(bsCatch)
 import Flags(
         Flags(..),
+        FrontEndMode(..),
         remapFlagsPaths,
         storedFlagsPaths,
         DumpFlag(..),
@@ -79,7 +80,7 @@ import FlagsDecode(
         exitWithHelpHidden)
 import Error(internalError, ErrMsg(..),
              ErrorHandle, initErrorHandle, setErrorHandleFlags,
-             bsError, bsWarning, bsMessage,
+             bsError, bsErrorNoExit, bsWarning, bsMessage,
              exitFail, exitOK, exitFailWith)
 import Position(noPosition, cmdPosition, remapPositionFile)
 import CVPrint
@@ -106,8 +107,9 @@ import ISimpDicts(iSimpDicts)
 import FixupDefs(fixupDefs, updDef, mkDictBuckets, mkDictRedirects)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
-import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
+import BinUtil(BinMap, HashMap, readImports, readImportsBi, replaceImportedSignatures)
 import GenBin(genBinFile, CPackageBin(..), stripImpSigs, checkRoundTrip, sortSched)
+import GenBi(BiFile(..), genBiFile)
 import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap)
 import GenForeign(genForeign)
@@ -373,7 +375,9 @@ compilePackage
     binmap0
     hashmap0
     name_orig -- String --
-    min@(CPackage pkgId _ _ _ _ _ _) = do
+    min@(CPackage pkgId _ _ _ _ _ _) =
+  -- a front-end-only compile ends by throwing FrontEndDone
+  CE.handle (\(FrontEndDone ok) -> return (ok, binmap0, hashmap0)) $ do
 
     -- Shut the CType canonical-word gate while this package's parser
     -- thunks, GenWrap, Deriving and symbol-table builds run; enableCanonIds
@@ -406,9 +410,14 @@ compilePackage
             ]
 
     start flags DFimports
-    -- Read imported signatures
-    (mimp@(CPackage _ _ imps impsigs _ _ _), binmap, hashmap)
-        <- readImports errh flags binmap0 hashmap0 min
+    -- Read imported signatures (from .bi files in the front-end-only
+    -- modes, with the hash of each package's .bi)
+    (mimp@(CPackage _ _ imps impsigs _ _ _), binmap, hashmap, biClosure)
+        <- if frontEndMode flags == FullCompile
+           then do (p, bm, hm) <- readImports errh flags binmap0 hashmap0 min
+                   return (p, bm, hm, [])
+           else do (p, hm, cl) <- readImportsBi errh flags hashmap0 min
+                   return (p, binmap0, hm, cl)
     when (hasDump flags DFimports) $
       let impsigs' = [ppReadable s |  (CImpSign _ _ s) <- impsigs]
       in mapM_ (putStr) impsigs'
@@ -484,6 +493,10 @@ compilePackage
     start flags DFsympostctxreduce
     symt <- mkSymTab errh mctx
     t <- dump errh flags t DFsympostctxreduce dumpnames symt
+
+    when (frontEndMode flags == SignatureOnly) $
+        writeSignature errh flags t dumpnames name pwd biClosure symt mctx
+            >>= CE.throwIO . FrontEndDone
 
     -- Turn instance declarations into ordinary definitions
     start flags DFconvinst
@@ -778,6 +791,42 @@ compilePackage
 
     return (success && not tcErrors, binmap, hashmap)
 
+
+-- A front-end-only compile (Flags.frontEndMode) ends early, with whether
+-- it succeeded, by throwing this to compilePackage.
+newtype FrontEndDone = FrontEndDone Bool
+
+instance Show FrontEndDone where
+    show (FrontEndDone ok) = "FrontEndDone " ++ show ok
+
+instance CE.Exception FrontEndDone
+
+-- -signature-only: write the package's .bi.  genUserSign reads only the
+-- post-ctxreduce package and the symbol table built from it, so this is
+-- the signature that the full compile stores in the .bo.
+writeSignature :: ErrorHandle -> Flags -> TimeInfo -> DumpNames -> String ->
+                  FilePath -> [(Id, String)] -> SymTab -> CPackage -> IO Bool
+writeSignature errh flags t dumpnames name pwd closure symt
+               mctx@(CPackage pkgId _ _ _ _ ds _) = do
+    -- typecheck (not reached here) rejects a top-level definition without
+    -- a type signature, which the signature would silently leave out
+    let unsigned = [ (getIdPosition i, ENoTopTypeSign (pfpString i))
+                   | CValue i _ <- ds ]
+    ok <- if null unsigned
+          then return True
+          else if enablePoisonPills flags
+               then bsErrorNoExit errh unsigned >> return False
+               else bsError errh unsigned
+    start flags DFwriteBin
+    (bi_sig, _) <- genUserSign errh symt mctx
+    when checkBinRoundTrip $ checkRoundTrip "user signature" id id bi_sig
+    let bi_filename = putInDir (bdir flags) name biSuffix
+        remapP = remapPositionFile pwd (remapPathPrefix flags)
+    genBiFile errh remapP bi_filename (BiFile pkgId closure bi_sig)
+    when (verbose flags) $
+         putStrLnF ("Interface file created: " ++ getRelativeFilePath bi_filename)
+    _ <- dumpStr errh flags t DFwriteBin dumpnames bi_filename
+    return ok
 
 genModule ::
     ErrorHandle ->

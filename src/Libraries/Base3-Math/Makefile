@@ -8,6 +8,7 @@ include ../common.mk
 .PHONY: build
 build: $(BUILDDIR)
 	$(BSC) -u $(BSCFLAGS) Math.bsv
+	$(BSC) -u -signature-only $(BSCFLAGS) Math.bsv
 
 $(BUILDDIR):
 	mkdir -p $@

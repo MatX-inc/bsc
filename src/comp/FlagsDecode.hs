@@ -249,6 +249,10 @@ checkBSrcFlags flags filename =
     if not (null (codegenNames flags))
     then DError [(cmdPosition, EGenWithSrcFile filename)]
     else
+    -- the front-end-only modes stop before code generation
+    if (frontEndMode flags /= FullCompile) && (backend flags /= Nothing)
+    then DError [(cmdPosition, EFrontEndOnlyBackend)]
+    else
     -- if generate is requested, require a backend
     if not (null (genName flags)) && (backend flags == Nothing)
     then DError [(cmdPosition, ENoBackendCodeGen (genName flags))]
@@ -746,7 +750,8 @@ defaultFlags bluespecdir = Flags {
         verilogFilter = [],
         warnActionShadowing = True,
         warnMethodUrgency = True,
-        warnUndetPred = False
+        warnUndetPred = False,
+        frontEndMode = FullCompile
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -1637,6 +1642,11 @@ externalFlags = [
          (Toggle (\f x -> f {timeStamps=x}) (showIfTrue timeStamps),
           "include timestamps in generated files", Visible)),
 
+        ("signature-only",
+         (Toggle (\f x -> f {frontEndMode = if x then SignatureOnly else FullCompile})
+                 (showIfTrue ((== SignatureOnly) . frontEndMode)),
+          "write only the package interface (.bi), from imported .bi files", Hidden)),
+
         ("show-version",
          (Toggle (\f x -> f {showVersion=x}) (showIfTrue showVersion),
           "include compiler version in generated files", Visible)),
@@ -1994,6 +2004,7 @@ showFlagsRaw flags =
           ("extraVerbose", show (extraVerbose flags)),
           ("fdir", show (fdir flags)),
           ("finalcleanup", show (finalcleanup flags)),
+          ("frontEndMode", show (frontEndMode flags)),
           ("genABin", show (genABin flags)),
           ("genABinVerilog", show (genABinVerilog flags)),
           ("genName", show (genName flags)),
