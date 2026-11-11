@@ -28,6 +28,7 @@ module ISyntaxSubst(
         tSubstBatch,
         eSubstBatch,
         eSubstClosed,
+        eScanClosed,
         eSubstClosedT,
         tSubstClosedT,
         forceTypeCtx,
@@ -510,6 +511,63 @@ eSubstClosed exprMap e
     | M.null exprMap = e
     | Changed e' <- eSubstWith (BatchExpr exprMap S.empty) EmptyType S.empty e = e'
     | otherwise = e
+
+-- What eSubstClosed's walk forces, in its order, without building: each
+-- node it visits, the spines of type and argument lists, the Ids it looks
+-- up, and the parts of an IConInfo that etSubstIConInfo enters.  No type is
+-- forced (the type context is empty).  The payloads must be forced already
+-- (as the free-variable union forces them); a lookup then forces only the
+-- Id, so a variable needs no lookup.  False if a binder empties the
+-- context, which stops the walk below it; True if the walk reaches every
+-- node.
+eScanClosed :: M.Map Id (IExpr a) -> IExpr a -> Bool
+eScanClosed m0 e0
+    | M.null m0 = False
+    | otherwise = goE m0 e0
+  where
+    both :: Bool -> Bool -> Bool
+    both !r1 !r2 = r1 && r2
+    spine :: [b] -> ()
+    spine [] = ()
+    spine (_:xs) = spine xs
+    spine2 :: [[b]] -> ()
+    spine2 [] = ()
+    spine2 (x:xs) = case spine x of () -> spine2 xs
+    goE !m e = case e of
+      ILam i _ b -> case M.lookup i m of
+                      Just _ -> let m' = M.delete i m
+                                in if M.null m' then False else goE m' b
+                      Nothing -> goE m b
+      ILAM _ _ b -> goE m b
+      IVar i -> i `seq` True
+      IAps f ts es -> case goE m f of
+                        r1 -> r1 `seq` case spine ts of
+                                         () -> both r1 (goEs m es)
+      ICon _ ii -> goI m ii
+      IRefT _ _ _ _ -> True
+    goEs !_ [] = True
+    goEs !m (x:xs) = case goE m x of
+                       r -> r `seq` both r (goEs m xs)
+    goClk !m clk = goE m (ic_wires clk)
+    goRst !m rst = case goClk m (ir_clock rst) of
+                     r -> r `seq` both r (goE m (ir_wire rst))
+    -- the cases of etSubstIConInfo
+    goI !m ii = case ii of
+      ICVerilog { } -> case spine2 (vMethTs ii) of () -> True
+      ICType { } -> True
+      ICUndet { imVal = mval } -> maybe True (goE m) mval
+      ICClock { iClock = clk } -> goClk m clk
+      ICReset { iReset = rst } -> goRst m rst
+      ICInout { iInout = io } ->
+        case goClk m (io_clock io) of
+          r1 -> r1 `seq` case goRst m (io_reset io) of
+                           r2 -> r2 `seq` both (r1 && r2) (goE m (io_wire io))
+      ICLazyArray { uninit = mu } ->
+        case mu of
+          Nothing -> True
+          Just (a, b) -> case goE m a of
+                           r -> r `seq` both r (goE m b)
+      _ -> True
 
 -- Public API: batch substitution whose expression payloads are closed and
 -- whose type payloads are ground, normalizing changed types as eSubstBatch
