@@ -20,7 +20,7 @@ import CSyntax(CSignature)
 import Error(ErrMsg(..), ErrorHandle, bsError)
 import BinData
 import GenBin()
-import FileIOUtil(writeFileBuilderCatch)
+import FileIOUtil(writeFileBuilderCatch, withFileRangesCatch)
 
 -- .bi file tag -- change this whenever the .bi format changes
 header :: [Byte]
@@ -66,13 +66,22 @@ readBiFileMaybe = decodeBi False
 readBiFileStrict :: ErrorHandle -> String -> B.ByteString -> IO (BiFile, String)
 readBiFileStrict = readBiWith True
 
--- The strings of the file, as reading it interns them, and nothing else
-readBiStrings :: ErrorHandle -> String -> B.ByteString -> IO [FString]
-readBiStrings errh nm s =
+-- The strings of the file nm, as reading it interns them, and nothing
+-- else; only the file's tag, footer and string table are read, and a bad
+-- footer or string table fails as reading the whole file fails
+readBiStrings :: ErrorHandle -> FilePath -> IO [FString]
+readBiStrings errh nm = do
     let hlen = B.length headerBS
-    in if B.take hlen s == headerBS
-       then return (decodeStrings (B.drop hlen s))
-       else bsError errh [(noPosition, EBinFileVerMismatch nm)]
+    r <- withFileRangesCatch errh noPosition nm $ \size range -> do
+           tag <- range 0 hlen
+           if tag /= headerBS then return Nothing else do
+             let len = size - hlen
+                 k = min len maxFooterSize
+             (start, end, n) <- strTableRegion len <$> range (size - k) k
+             Just . decodeStringTable n <$> range (hlen + start) (end - start)
+    case r of
+      Just strs -> return strs
+      Nothing -> bsError errh [(noPosition, EBinFileVerMismatch nm)]
 
 readBiWith :: Bool -> ErrorHandle -> String -> B.ByteString -> IO (BiFile, String)
 readBiWith strict errh nm s =
