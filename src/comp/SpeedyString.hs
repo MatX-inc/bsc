@@ -14,9 +14,10 @@ import System.IO.Unsafe(unsafePerformIO)
 import Control.DeepSeq(rnf)
 import Control.Exception(evaluate)
 import Control.Monad(forM_, when)
-import Data.Array.Base(unsafeRead, unsafeWrite)
+import Data.Array(Array, listArray)
+import Data.Array.Base(unsafeAt, unsafeRead, unsafeWrite)
 import Data.Array.IO(IOArray, IOUArray, newArray)
-import Data.Bits((.&.), shiftL, shiftR)
+import Data.Bits((.&.), (.|.), shiftL, shiftR)
 import Data.Int(Int32)
 import Data.IORef(IORef, newIORef, readIORef, writeIORef)
 import qualified Data.IntMap.Strict as IM
@@ -24,8 +25,11 @@ import qualified Data.IntSet as IS
 import qualified Data.Set as Set
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Builder as BB
+import qualified Data.ByteString.Short as SBS
+import qualified Data.ByteString.Short.Internal as SBS(unsafeIndex)
 import Data.Char(chr, ord, toUpper, isDigit)
-import Data.List(intersperse)
+import Data.Word(Word8)
+import Data.List(foldl', intersperse)
 import Data.Maybe(isNothing)
 import Numeric(showHex)
 -- import qualified NotSoSpeedyString
@@ -143,14 +147,14 @@ genKey _ = Nothing
 --
 -- Entries are numbered 0 .. tNext - 1 in arrival order; an entry's id is
 -- not its number (see Reserved ids).  tKey holds 0 for a plain spelling
--- (kept in tStr) and the key of a generated one.  tSlots is an
--- open-addressed table of (hash or key, entry + 1) pairs, 0 marking an
--- empty slot.
+-- (kept packed in tStr, see Packed spellings) and the key of a generated
+-- one.  tSlots is an open-addressed table of (hash or key, entry + 1)
+-- pairs, 0 marking an empty slot.
 
 data Table = Table
     { tNext  :: !Int
     , tCap   :: !Int
-    , tStr   :: !(IOArray Int String)
+    , tStr   :: !(IOArray Int SBS.ShortByteString)
     , tKey   :: !(IOUArray Int Int)
     , tSlots :: !(IOUArray Int Int)
     , tMask  :: !Int
@@ -160,14 +164,14 @@ data Table = Table
 table :: IORef Table
 table = unsafePerformIO $
         do let cap = 65536
-           ss <- newArray (0, cap - 1) []
+           ss <- newArray (0, cap - 1) SBS.empty
            ks <- newArray (0, cap - 1) 0
            sl <- newArray (0, 4 * cap - 1) 0
            newIORef (Table 0 cap ss ks sl (2 * cap - 1))
 
 spelling :: Table -> Int -> IO String
 spelling t i = do k <- unsafeRead (tKey t) i
-                  if k == 0 then unsafeRead (tStr t) i
+                  if k == 0 then fmap unpackSpelling (unsafeRead (tStr t) i)
                             else return (genSpelling k)
 
 slotOf :: Int -> Int -> Int
@@ -188,8 +192,8 @@ probe t h same = go (slotOf (tMask t) h)
 findPlain :: Table -> Int -> String -> IO (Either Int Int)
 findPlain t h s = probe t h (\i -> do k <- unsafeRead (tKey t) i
                                       if k /= 0 then return False else do
-                                        s' <- unsafeRead (tStr t) i
-                                        return (s' == s))
+                                        p <- unsafeRead (tStr t) i
+                                        return (packs p s))
 
 findGen :: Table -> Int -> IO (Either Int Int)
 findGen t k = probe t k (\i -> do k' <- unsafeRead (tKey t) i
@@ -201,7 +205,7 @@ internPlain h s =
        r <- findPlain t h s
        case r of
          Right i -> return (SString (idOf i))
-         Left j -> fmap (SString . idOf) (insert t j h 0 s)
+         Left j -> fmap (SString . idOf) (insert t j h 0 (packSpelling s))
 
 internGen :: Int -> IO SString
 internGen !k =
@@ -210,13 +214,13 @@ internGen !k =
        v <- if k .&. 3 == 1 then reservedId (k `shiftR` 2) else return 0
        case r of
          Right i -> return (SString (if v /= 0 then v else idOf i))
-         Left j -> do i <- insert t j k k []
+         Left j -> do i <- insert t j k k SBS.empty
                       if v /= 0 then do materialize v i
                                         return (SString v)
                                 else return (SString (idOf i))
 
-insert :: Table -> Int -> Int -> Int -> String -> IO Int
-insert t0 j h k s =
+insert :: Table -> Int -> Int -> Int -> SBS.ShortByteString -> IO Int
+insert t0 j h k !s =
     do let i = tNext t0
        unsafeWrite (tSlots t0) (2 * j) h
        unsafeWrite (tSlots t0) (2 * j + 1) (i + 1)
@@ -232,7 +236,7 @@ growIds :: Table -> IO Table
 growIds t =
     do let cap = tCap t
            cap' = 2 * cap
-       ss <- newArray (0, cap' - 1) []
+       ss <- newArray (0, cap' - 1) SBS.empty
        ks <- newArray (0, cap' - 1) 0
        forM_ [0 .. cap - 1] $ \i ->
            do unsafeRead (tStr t) i >>= unsafeWrite ss i
@@ -255,6 +259,80 @@ growSlots t =
                                 unsafeWrite sl (2 * j' + 1) idp
                   Right _ -> err
        return t'
+
+
+-- Packed spellings
+--
+-- A plain spelling is kept as its Chars' code points in UTF-8's bit
+-- layout, surrogates included (three bytes, like any code point below
+-- 0x10000) and NUL as a zero byte.  Every String round-trips, and equal
+-- bytes are equal Strings.  The GC copies the bytes, not a list; toString
+-- decodes a new String each time.
+
+-- Written in one pass of the known length.  The state is the Chars left
+-- and how many continuation bytes of the first are still to come.
+packSpelling :: String -> SBS.ShortByteString
+packSpelling s = fst (SBS.unfoldrN (foldl' (\a c -> a + width (ord c)) 0 s) step (s, 0))
+  where
+    step :: (String, Int) -> Maybe (Word8, (String, Int))
+    step ([], _) = Nothing
+    step (cs@(c : rest), k)
+      | k > 0 = Just (byte (0x80 .|. (shiftR n (6 * (k - 1)) .&. 0x3F)),
+                      (if k == 1 then rest else cs, k - 1))
+      | n < 0x80 = Just (byte n, (rest, 0))
+      | n < 0x800 = Just (byte (0xC0 .|. shiftR n 6), (cs, 1))
+      | n < 0x10000 = Just (byte (0xE0 .|. shiftR n 12), (cs, 2))
+      | otherwise = Just (byte (0xF0 .|. shiftR n 18), (cs, 3))
+      where n = ord c
+    width n | n < 0x80 = 1
+            | n < 0x800 = 2
+            | n < 0x10000 = 3
+            | otherwise = 4 :: Int
+    byte :: Int -> Word8
+    byte = fromIntegral
+
+-- Built back to front: the whole String, in constant stack.
+unpackSpelling :: SBS.ShortByteString -> String
+unpackSpelling p = go (SBS.length p) []
+  where
+    go 0 acc = acc
+    go e acc = let s = start (e - 1)
+                   !c = toChar (codeAt p s)
+               in  go s (c : acc)
+    start i = if byteAt p i .&. 0xC0 == 0x80 then start (i - 1) else i
+    toChar n = if n < 0x80 then unsafeAt asciiChars n else chr n
+
+-- Whether p packs s, decoding as it goes.
+packs :: SBS.ShortByteString -> String -> Bool
+packs p = go 0
+  where
+    n = SBS.length p
+    go i [] = i == n
+    go i (c : cs) = i < n && codeAt p i == ord c &&
+                    go (i + width (byteAt p i)) cs
+    width b | b < 0x80 = 1
+            | b < 0xE0 = 2
+            | b < 0xF0 = 3
+            | otherwise = 4
+
+-- the code point whose bytes start at i
+codeAt :: SBS.ShortByteString -> Int -> Int
+codeAt p i
+    | b < 0x80 = b
+    | b < 0xE0 = shiftL (b .&. 0x1F) 6 .|. cont 1
+    | b < 0xF0 = shiftL (b .&. 0x0F) 12 .|. shiftL (cont 1) 6 .|. cont 2
+    | otherwise = shiftL (b .&. 0x07) 18 .|. shiftL (cont 1) 12 .|.
+                  shiftL (cont 2) 6 .|. cont 3
+  where b = byteAt p i
+        cont k = byteAt p (i + k) .&. 0x3F
+
+-- unchecked: every index read here is inside p, by the encoding
+byteAt :: SBS.ShortByteString -> Int -> Int
+byteAt p i = fromIntegral (SBS.unsafeIndex p i)
+
+-- shared, so that decoding an ASCII Char allocates no box
+asciiChars :: Array Int Char
+asciiChars = listArray (0, 0x7F) ['\0' .. '\x7F']
 
 
 -- Reserved ids
