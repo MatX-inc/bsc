@@ -385,8 +385,9 @@ instance (Bin a) => Bin (Lazy a) where
 -- The In monad makes it easy to parse a byte stream
 
 -- The reader's tables for one container: the whole encoding, the
--- eagerly interned string table, one lazily decoded (memoized per
--- entry) table per other shared kind, and the chunk index.
+-- string table (eagerly interned unless walking), one lazily decoded
+-- (memoized per entry) table per other shared kind, the chunk index,
+-- and whether a lookup forces its entry (see mkLookupIdx).
 data Tables = Tables { tBytes      :: !BS.ByteString
                      , tStrings    :: !(Array Int FString)
                      , tIds        :: Array Int Id
@@ -395,6 +396,7 @@ data Tables = Tables { tBytes      :: !BS.ByteString
                      , tITypes     :: Array Int IType
                      , tChunks     :: !(UArray Int Int) -- offset, length pairs
                      , tChunkCount :: !Int
+                     , tWalk       :: !Bool
                      }
 
 -- The In monad reads from a fixed environment: the byte string, a small
@@ -526,8 +528,15 @@ lazyIndex who arr idx =
       else case indexArray# arr# (case idx - lo of I# i# -> i#) of
              (# v #) -> return v
 
+-- In a strict decode every lookup forces its entry, so each string and
+-- entry is forced at its first occurrence, as the sequential decoder
+-- did: readers intern strings beyond the string table (mkITAp forces
+-- idTExp and friends), and intern order must not depend on the layout.
 mkLookupIdx :: String -> (Tables -> Array Int v) -> Int -> In v
-mkLookupIdx who get idx = In $ \env -> lazyIndex who (get (envTables env)) idx
+mkLookupIdx who get idx = In $ \env ->
+  let tbl = envTables env
+  in if tWalk tbl then lazyIndex who (get tbl) idx >>= evaluate
+     else lazyIndex who (get tbl) idx
 
 -- A shared value occurs in the stream as its index into the table for
 -- its kind.  The table entry (or string) is already there; nothing is
@@ -1913,9 +1922,10 @@ inIO act = In $ \_ -> act
 -- the lazy tables.  A table entry is a thunk that decodes its bytes on
 -- first force (memoized by the array; unsafePerformIO applies
 -- noDuplicate, so two threads cannot both decode it); a parent entry
--- may reference entries with higher indices.
-mkTables :: BS.ByteString -> Footer -> IO Tables
-mkTables s ft = do
+-- may reference entries with higher indices.  When walking (a strict
+-- decode), strings are left for mkLookupIdx to intern.
+mkTables :: Bool -> BS.ByteString -> Footer -> IO Tables
+mkTables walk s ft = do
   let bodiesEnd = fBodiesEnd ft
       bad what = internalError $ "BinData.decode: malformed container (" ++ what ++ ")"
       -- entry offsets must be non-decreasing and end at the index
@@ -1934,17 +1944,20 @@ mkTables s ft = do
       tbl0 = Tables { tBytes = s, tStrings = emptyBoxed
                     , tIds = emptyBoxed, tPositions = emptyBoxed
                     , tTypes = emptyBoxed, tITypes = emptyBoxed
-                    , tChunks = emptyChunks, tChunkCount = 0 }
-  -- the string table, interned now and in table order: FString ids
-  -- are the Ord of every Id-keyed map, so this must happen before and
-  -- in the same order as a sequential decode would have interned them
+                    , tChunks = emptyChunks, tChunkCount = 0
+                    , tWalk = False }
+  -- the string table, interned now (unless walking) and in table
+  -- order: FString ids are the Ord of every Id-keyed map, so this must
+  -- happen before and in the same order as a sequential decode would
+  -- have interned them
   strs <- runAt tbl0 False (fStrStart ft) (fChunkStart ft) "string table" $ do
             n <- getU32
             when (n /= fStrCount ft) $ bad "string count"
             let loop i acc
                   | i >= n    = return (reverse acc)
                   | otherwise = do str <- readBytes
-                                   fs <- inIO (evaluate (mkFString str))
+                                   fs <- if walk then return (mkFString str)
+                                         else inIO (evaluate (mkFString str))
                                    loop (i + 1) (fs : acc)
             loop (0 :: Int) []
   let strArr = listArray (0, fStrCount ft - 1) strs :: Array Int FString
@@ -1972,13 +1985,14 @@ mkTables s ft = do
       tables = Tables { tBytes = s, tStrings = strArr
                       , tIds = lazyTable KId, tPositions = lazyTable KPosition
                       , tTypes = lazyTable KType, tITypes = lazyTable KIType
-                      , tChunks = chunkArr, tChunkCount = nChunks }
+                      , tChunks = chunkArr, tChunkCount = nChunks
+                      , tWalk = walk }
   return tables
 
 decodeContainer :: (Bin a) => Bool -> BS.ByteString -> a
 decodeContainer strict s = unsafePerformIO $ do
   let ft = parseFooter s
-  tbl <- mkTables s ft
+  tbl <- mkTables strict s ft
   x <- runAt tbl strict 0 (fBodiesEnd ft) "root" fromBin
   when strict $ do
     let force :: forall v . Array Int v -> IO ()
