@@ -177,20 +177,22 @@ genTciFile errh fn ti = do
                          libs (sortIds ut) (sortIds uc) (sortIds ue)
                          (M.toList (ti_atf ti))
     (bsL, strsL) <- strict <$> encodeV2Strip msel local
-    -- every string of the library .bi files, which the check interns when
-    -- it reads them (Sig has read them, so these are interned already)
-    strsLib <- concat <$> sequence
-                 [ readBinaryFileCatch errh noPosition f >>= readBiStrings errh f
-                 | (True, CImpSign f _ _) <- zip isLib sigs ]
+    -- every string of the .bi files the signatures were read from (Sig has
+    -- read them, so these are interned already): the check interns a
+    -- library's when it reads it; a MatX file's that no kept entry holds
+    -- are those only the pruned entries hold (its package name is kept)
+    let biStrings lib = concat <$> sequence
+                          [ readBinaryFileCatch errh noPosition f >>= readBiStrings errh f
+                          | (l, CImpSign f _ _) <- zip isLib sigs, l == lib ]
+    strsLib <- biStrings True
     let exportAll = S.fromList [ getIdString p | Left es <- [exps], CExpPkg p <- es
                                                , p /= pid ]
-    (sigs', dropped, stats) <-
+    (sigs', stats) <-
         if ti_full ti
-        then return ([ wholeSig s | (False, s) <- zip isLib sigs ], [],
-                     keepAllStats isLib sigs)
+        then return ([ wholeSig s | (False, s) <- zip isLib sigs ], keepAllStats isLib sigs)
         else pruneSigs (IS.fromList (map fstringId strsL)) exportAll (zip isLib sigs)
     (bsS, strsS) <- strict <$> encodeV2Strip msel [ TciSig s | s <- sigs' ]
-    (_, strsD) <- encodeV2Strip Nothing dropped
+    strsD <- if ti_full ti then return [] else biStrings False
     let kept = IS.fromList (map fstringId (strsL ++ strsS ++ strsLib))
         -- a check makes the compiler's own strings itself (NumEq for a
         -- numeric proviso, say), and spellings of the shapes it generates;
@@ -258,7 +260,7 @@ keepAllStats libs sigs =
 -- non-library signatures, pruned.
 
 pruneSigs :: IS.IntSet -> S.Set String -> [(Bool, CImportedSignature)] ->
-             IO ([CSignature], [CDefn], TciStats)
+             IO ([CSignature], TciStats)
 pruneSigs seeds exportAll lsigs = do
     let -- (signature, entry) -> entry, for non-library signatures
         entries = [ ((si, di), (n, d))
@@ -310,10 +312,7 @@ pruneSigs seeds exportAll lsigs = do
         isPragma _ = False
         nLib = sum [ length ds | (True, CImpSign _ _ (CSignature _ _ _ ds)) <- lsigs ]
         sigs' = [ prune si s | (si, (False, s)) <- zip [0 ..] lsigs ]
-        dropped = [ d | (k, (_, d)) <- entries, not (S.member k keptSet) ] ++
-                  [ CPragma p | (False, CImpSign _ _ (CSignature _ _ _ ds)) <- lsigs
-                              , d@(CPragma p) <- ds, not (keepPragma d) ]
-    return (sigs', dropped,
+    return (sigs',
             TciStats (S.size keptSet, length entries) (length (filter fst lsigs), nLib)
                      (IS.size nFinal) 0 (0, 0, 0) 0)
   where isInstance (CIinstance {}) = True
