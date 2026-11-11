@@ -624,8 +624,11 @@ sat dvs ps p =
                                     -- whole.
                                     unifiable (EPred _ gp) =
                                         predUnify [] p_pred gp
-                                return (if any unifiable givens
-                                        then Provisional else Committable)
+                                    prov = any unifiable givens
+                                -- (a given decided the verdict, and with it
+                                -- the package use: no pool record keys it)
+                                when prov $ recLog EvLookfor
+                                return (if prov then Provisional else Committable)
                             when (commitment == Committable) $ recordPackageUse mpkg
                             return (SatResult needed sbs s_final commitment rc, False)
                     Just (Reduction qs sb us (Just (h@(IsIn c _))) mpkg _) | fromMaybe ai (allowIncoherent c) ->
@@ -708,7 +711,8 @@ sat dvs ps p =
 --
 -- Numeric classes are not pooled (the numeric solver resolves them
 -- directly).  A solve is recorded only when it is a full solve by a
--- coherent match, met no goal from a given or the stack, made no newVar
+-- coherent match, met no goal from a given or the stack (nor one that a
+-- given unifies with in the Commitment check), made no newVar
 -- draw and no numeric-equality dependency, ran no satisfy in normT, has
 -- only non-recursive, coherent, ground bindings closed over their own
 -- names (Monad ActionValue excluded), and recorded only ground ATF
