@@ -709,9 +709,10 @@ sat dvs ps p =
 -- Numeric classes are not pooled (the numeric solver resolves them
 -- directly).  A solve is recorded only when it is a full solve by a
 -- coherent match, met no goal from a given or the stack, made no newVar
--- draw and no numeric-equality dependency, has only non-recursive,
--- coherent, ground bindings closed over their own names (Monad
--- ActionValue excluded), and recorded only ground ATF results.  A hit is
+-- draw and no numeric-equality dependency, ran no satisfy in normT, has
+-- only non-recursive, coherent, ground bindings closed over their own
+-- names (Monad ActionValue excluded), and recorded only ground ATF
+-- results.  A hit is
 -- taken only when the stacks have room for the solve, no given, explicit
 -- given or outer stack entry could meet a nested goal of the solve
 -- (lookfor's equality on undetermined positions, decided on keys without
@@ -2501,6 +2502,9 @@ normT t = do
      else do
         -- A type function can expand to a pred that is satisfied locally by an explicit pred.
         eps <- getExplGivens
+        -- (no dictionary-pool record holds this satisfy: it reads the explicit
+        -- givens, the proviso-SAT flag and the global substitution, and warns)
+        recLog EvTaint
         (ps', _) <- satisfyG eps ps
         --unless (null ps') (internalError ("expandSynN " ++ ppReadable (t, ps')))
         if not (null ps') then
