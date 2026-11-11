@@ -194,6 +194,16 @@ proc which_showrules {} {
     return $showrules
 }
 
+# bluehs is optional, and its tests run only if it exists
+proc which_bluehs {} {
+    global env
+
+    if [info exists env(BLUEHS)] then {
+        return [absolute_filename $env(BLUEHS)]
+    }
+    return ""
+}
+
 proc which_os {} {
     global env
     if {! [info exists env(OSTYPE)]} {
@@ -1295,6 +1305,11 @@ proc make_vexe_name { file } {
 }
 proc make_syscexe_name { file } {
     set filename [format "%s.syscexe" $file ]
+    return $filename
+}
+
+proc make_bluehs_output_name { script } {
+    set filename "$script.bluehs-out"
     return $filename
 }
 
@@ -3492,6 +3507,45 @@ proc vcdcheck_fail { vcdfile options } {
     }
 }
 
+# Run a script with bluehs, record pass/fail, and return true on success.
+# Mark the test untested if bluehs is unavailable.
+# Arguments are a Tcl list. Set output to give repeated runs separate files;
+# it defaults to <script>.bluehs-out.
+proc bluehs_run_pass { script {arguments {}} {output ""} } {
+    global bluehs
+    global srcdir
+    global subdir
+
+    bsc_initialize
+
+    if { ![file isfile $bluehs] || ![file executable $bluehs] } {
+        untested "bluehs $script (bluehs unavailable)"
+        return 0
+    }
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+
+    if { $output eq "" } {set output [make_bluehs_output_name $script]}
+    set cmd [concat [list $bluehs $script] $arguments [list >& $output]]
+    set status [exec_with_log "bluehs" $cmd 2]
+    if { $status != 0 && [file exists $output] } {
+        set f [open $output r]
+        verbose -log [read $f] 0
+        close $f
+    }
+
+    cd $here
+
+    set invocation [linsert $arguments 0 $script]
+    if { $status == 0 } then {
+        pass "bluehs $invocation"
+    } else {
+        fail "bluehs $invocation"
+    }
+    return [expr {$status == 0}]
+}
+
 # Use the showrules utility to modify VCD files
 proc showrules { topmod vcdin vcdout {options ""}} {
     global showrules
@@ -4001,6 +4055,7 @@ proc bsc_initialize {} {
     global ghc_version
     global bsdir
     global showrules
+    global bluehs
 
     global DO_INTERNAL_CHECKS
 
@@ -4029,6 +4084,9 @@ proc bsc_initialize {} {
 
         # Find the showrules tool
         set showrules [which_showrules]
+
+        # Find bluehs, if it is installed
+        set bluehs [which_bluehs]
 
         # Add the test prelude to the BSC_OPTIONS
 	# XXX This may no longer be necessary, now that the tools
