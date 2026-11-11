@@ -65,8 +65,8 @@ module IExpandUtils(
 ) where
 
 import Control.Monad(when, liftM)
-import Control.Monad.State.Strict(StateT, runStateT, evalStateT, lift, liftIO,
-                                  gets, get, put, modify)
+import Control.Monad.State.Strict(StateT(..), evalStateT, lift, liftIO)
+import qualified Control.Monad.State.Strict as St
 import Data.IORef
 import System.IO.Unsafe
 import Data.List
@@ -490,7 +490,84 @@ type RulesBlobs = [(Bool, (HClock, HReset), IStateLoc, HPred, HExpr)]
 -- a writer monad for expanding rules lazily (for PrimModuleFix)
 -- it has a state monad (for result state)
 -- layered on top of IO for IORefs and errors/warnings/progress messages
-type G = StateT GState IO
+type G = StateT GS IO
+
+-- G's state: the counters, which are reached without forcing GState, and
+-- GState, which get, gets, put and modify read and replace without
+-- forcing it (see GRefs).
+data GS = GS !GRefs GState
+
+{-# INLINE get #-}
+get :: G GState
+get = StateT $ \ st@(GS _ s) -> return (s, st)
+
+{-# INLINE gets #-}
+gets :: (GState -> a) -> G a
+gets f = StateT $ \ st@(GS _ s) -> return (f s, st)
+
+{-# INLINE put #-}
+put :: GState -> G ()
+put s = StateT $ \ (GS r _) -> return ((), GS r s)
+
+{-# INLINE modify #-}
+modify :: (GState -> GState) -> G ()
+modify f = StateT $ \ (GS r s) -> return ((), GS r (f s))
+
+{-# INLINE getRefs #-}
+getRefs :: G GRefs
+getRefs = StateT $ \ st@(GS r _) -> return (r, st)
+
+-- The evaluator's counters.  Each value is returned as "s `seq` n", s the
+-- GState at the call, so that forcing it forces that GState, as forcing a
+-- GState field would: forcing GState forces its pending updates, which can
+-- intern names, and intern order reaches the output.  Putting back an
+-- older GState does not roll these back, so G code must not do that.
+data GRefs = GRefs {
+        stepNo         :: !(IORef Integer), -- evaluation step
+        nextWarnStep   :: !(IORef Integer), -- next step to issue an evaluation warning at
+        stateNo        :: !(IORef Int), -- unique number for state variables
+        ffcallNo       :: !(IORef Int), -- to generate unique names for ActionValue foreign function calls
+        newClockId     :: !(IORef ClockId), -- to generate unique ids for clocks
+        newClockDomain :: !(IORef ClockDomain), -- to generate unique ids for clock families
+        newResetId     :: !(IORef ResetId), -- to generate unique ids for resets
+        hp             :: !(IORef HeapPointer), -- next unique id for a new heap reference
+        -- store for creating unique names when ruleNameCheck is off; holds
+        -- an unforced suffix, since forcing one uniquifies rule names
+        newRuleSuffix  :: !(IORef Integer)
+        }
+
+newGRefs :: Flags -> IO GRefs
+newGRefs flags = do
+  step_r <- newIORef 0
+  warn_r <- newIORef (redStepsWarnInterval flags)
+  state_r <- newIORef 0
+  ffcall_r <- newIORef 0
+  clock_r <- newIORef initClockId
+  domain_r <- newIORef initClockDomain
+  reset_r <- newIORef initResetId
+  hp_r <- newIORef 0
+  suffix_r <- newIORef 0
+  return (GRefs { stepNo = step_r, nextWarnStep = warn_r,
+                  stateNo = state_r, ffcallNo = ffcall_r,
+                  newClockId = clock_r, newClockDomain = domain_r,
+                  newResetId = reset_r, hp = hp_r,
+                  newRuleSuffix = suffix_r })
+
+-- a counter's value (see GRefs)
+{-# INLINE readCounter #-}
+readCounter :: (GRefs -> IORef a) -> G a
+readCounter field = StateT $ \ st@(GS r s) -> do
+  n <- readIORef (field r)
+  return (s `seq` n, st)
+
+-- a counter's value (see GRefs), advancing the counter to "next" of it
+{-# INLINE takeCounter #-}
+takeCounter :: (GRefs -> IORef a) -> (a -> a) -> G a
+takeCounter field next = StateT $ \ st@(GS r s) -> do
+  let ref = field r
+  n <- readIORef ref
+  writeIORef ref $! next n
+  return (s `seq` n, st)
 
 -- only used for post-evaluation heap traversals
 -- so unsafePerformIO is fine (the refs are no longer being modified)
@@ -506,16 +583,14 @@ data GStateRO = GStateRO {
         checkMaxStep :: !Bool,
         maxStep :: !Integer,
         stepWarnInterval :: !Integer,
-        flags :: !Flags
+        flags :: !Flags,
+        -- is the evaluation a no-lined function
+        noinlined_func :: Bool
         }
 
 -- full evaluator state
 data GState = GState {
-        stepNo       :: !Integer, -- evaluation step
-        nextWarnStep :: !Integer, -- next step to issue an evaluation warning at
         profilingMap :: !(M.Map Id (M.Map Position Int)), -- map from definitions to number of entries for profiling
-
-        stateNo      :: !Int, -- unique number for state variables
 
         -- Stores the pair "(x, next unique number to start with)".
         -- When "x" is instantiated a second time, to be named "x_1",
@@ -529,14 +604,6 @@ data GState = GState {
         -- mapping an instance name to its user-added comments
         -- XXX we use Id, just to have a position around; String would do
         commentsMap    :: !(M.Map Id [String]),
-
-        ffcallNo       :: !Int,   -- to generate unique names for ActionValue foreign function calls
-
-        newClockId     :: !ClockId,  -- to generate unique ids for clocks
-        newClockDomain :: !ClockDomain, -- to generate unique ids for clock families
-        newResetId     :: !ResetId, -- to generate unique ids for resets
-
-        hp             :: !HeapPointer, -- next unique id for a new heap reference
 
         -- This is a cache for "extractWires", so that it doesn't re-walk a
         -- a heap reference that we've already walked.
@@ -552,7 +619,6 @@ data GState = GState {
         portTypeMap    :: PortTypeMap, -- map of state var -> port -> type
 
         rules          :: HRules,    -- accumulated rules
-        newRuleSuffix  :: Integer,   -- store for creating unique names when ruleNameCheck is off
 
         -- scope for scheduling attribute names
         schedNameScope  :: SchedNameScope,
@@ -567,12 +633,10 @@ data GState = GState {
         ro             :: !GStateRO,      -- read-only state
 
         -- properties of the top-level def being compiled
-        -- (these three fields could be in GStateRO, except that "pragmas"
-        -- gets set when evaluating "primBuildModule" and we may eventually
-        -- structure the evaluator to operate on multiple modules)
+        -- (not in GStateRO: pushTopValueSchedNameScope sets "mod_def_id"
+        -- for a toplevel value, and "pragmas" gets set when evaluating
+        -- "primBuildModule")
         mod_def_id :: Id,
-        -- is the evaluation a no-lined function
-        noinlined_func :: Bool,
         -- the pragmas for the top-level module
         pragmas :: [PProp],
 
@@ -623,25 +687,17 @@ initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
                           maxStep = redSteps flags,
                           stepWarnInterval = redStepsWarnInterval flags,
                           flags = flags,
-                          defenv = alldefs
+                          defenv = alldefs,
+                          noinlined_func = is_noinlined_func
                         }
-        gs = GState { stepNo = 0,
-                      nextWarnStep = redStepsWarnInterval flags,
-                      stateNo = 0,
-                      stateNameMap = M.empty,
+        gs = GState { stateNameMap = M.empty,
                       stateLocMap = M.empty,
                       commentsMap = M.empty,
-                      ffcallNo = 0,
-                      newClockId = initClockId,
-                      newClockDomain = initClockDomain,
-                      newResetId = initResetId,
-                      hp = 0,
                       heapWires = M.empty,
                       heapBNots = M.empty,
                       vars = [],
                       portTypeMap = M.empty,
                       rules = iREmpty,
-                      newRuleSuffix = 0,
                       schedNameScope = emptySchedNameScope,
                       profilingMap = M.empty,
                       clock_domains = M.empty,
@@ -654,7 +710,6 @@ initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
                       mod_def_id =
                           -- convert the raw defId to the user-recognizable Id
                           setIdBaseString defId (init (getIdBaseString defId)),
-                      noinlined_func = is_noinlined_func,
                       pragmas = pps,
                       used_clk_gates = S.empty,
                       clk_gates_inhigh = S.empty,
@@ -694,8 +749,12 @@ runG :: ErrorHandle -> Flags ->
         Id -> Bool -> [PProp] -> G a ->
         IO (GOutput a)
 runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
-  do let gs = initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps
-     (retval, gs') <- runStateT gFn gs
+  do refs <- newGRefs flags
+     let gs = initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps
+     (retval, GS _ gs') <- runStateT gFn (GS refs gs)
+     final_steps <- readIORef (stepNo refs)
+     final_hp <- readIORef (hp refs)
+     final_ffcallNo <- readIORef (ffcallNo refs)
      -- convert the relevant info in the final GState into the GOutput
      do
          -- if any file handles were not closed, close them now
@@ -736,12 +795,12 @@ runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
                      go_vclockinfo = vclockinfo,
                      go_vresetinfo = vresetinfo,
                      go_rules = rules gs',
-                     go_steps = stepNo gs',
-                     go_hp = hp gs',
+                     go_steps = final_steps,
+                     go_hp = final_hp,
                      go_profile = profilingMap gs',
                      go_comments_map = M.toList (commentsMap gs'),
                      go_backend_specific = backend_specific gs',
-                     go_ffcallNo = ffcallNo gs',
+                     go_ffcallNo = final_ffcallNo,
                      go_atfCache = atfCache gs',
                      goutput = retval
                     })
@@ -787,33 +846,47 @@ eNoNF e =
 -- max steps is a multiple of stepWarnInterval (enforced by Flags)
 -- and that stepWarnInterval > 0
 step :: Id -> G ()
-step i = do s <- get
-            -- do common update
-            let c = stepNo s
-            let s' = s { stepNo = c + 1 }
-            if (doProfile) then do
-              let prof = profilingMap s
-              let pos_map = M.singleton (getPosition i) 1
-              let prof' = M.insertWith (M.unionWith (+)) i pos_map prof
-              put (s' { profilingMap = prof' })
-             else put s'
+step i | doProfile = do
+           s <- get
+           let prof = profilingMap s
+           let pos_map = M.singleton (getPosition i) 1
+           let prof' = M.insertWith (M.unionWith (+)) i pos_map prof
+           put (s { profilingMap = prof' })
+           countStep i s
+       | otherwise = get >>= countStep i
 
-            let w = nextWarnStep s
+-- step's counting, s the state at the step.  Without profiling nothing
+-- between a step's entry and its return replaces G's state, so GHC returns
+-- that state as it came instead of rebuilding it.
+{-# INLINE countStep #-}
+countStep :: Id -> GState -> G ()
+countStep i s = do
+  refs <- getRefs
+  c <- liftIO (readIORef (stepNo refs))
+  liftIO (writeIORef (stepNo refs) $! c + 1)
+  w <- liftIO (readIORef (nextWarnStep refs))
+  -- every step forces the state here, and with it any pending updates,
+  -- which can intern (see GRefs)
+  when (s `seq` c == w) $ stepWarning i s c w
 
-            when (c == w) $ do
-              let check = checkMaxStep (ro s)
-              let m = maxStep (ro s)
-              -- can only hit the max step if we would issue a warning
-              if (check && c == m) then
-                errG (getIdPosition i, ETooManySteps (pfpString i) (itos m))
-               else do let w_i = stepWarnInterval (ro s)
-                       let w' = w + w_i
-                       when (badEvaluation s) $
-                         errG (getIdPosition i, EStepsIntervalError (pfpString i) c w_i)
-                       eWarning (getIdPosition i, WTooManySteps (pfpString i) c w' m)
-                       s' <- get
-                       when doProfile $ liftIO (putStrLn (ppReadable (profilingMap s')))
-                       put s' { nextWarnStep = w' }
+{-# NOINLINE stepWarning #-}
+stepWarning :: Id -> GState -> Integer -> Integer -> G ()
+stepWarning i s c w = do
+  let check = checkMaxStep (ro s)
+  let m = maxStep (ro s)
+  -- can only hit the max step if we would issue a warning
+  if (check && c == m) then
+    errG (getIdPosition i, ETooManySteps (pfpString i) (itos m))
+   else do let w_i = stepWarnInterval (ro s)
+           let w' = w + w_i
+           when (badEvaluation s) $
+             errG (getIdPosition i, EStepsIntervalError (pfpString i) c w_i)
+           eWarning (getIdPosition i, WTooManySteps (pfpString i) c w' m)
+           when doProfile $ do
+             s' <- get
+             liftIO (putStrLn (ppReadable (profilingMap s')))
+           refs <- getRefs
+           liftIO (writeIORef (nextWarnStep refs) $! w')
 
 -- ---------------
 
@@ -2161,10 +2234,7 @@ chkIfcPortNames errh args ifcs (ClockInfo ci co _ _) (ResetInfo ri ro) =
 
 {-# INLINE newStateNo #-}
 newStateNo :: G Int
-newStateNo = do s <- get
-                let n = stateNo s
-                put (s { stateNo = n+1 })
-                return n
+newStateNo = takeCounter stateNo (+1)
 
 -- disambiguates state names using stateNameMap
 uniqueStateName :: Id -> G Id
@@ -2352,10 +2422,7 @@ getElabProgressContext = do
 -- #############################################################################
 
 newFFCallNo :: G Int
-newFFCallNo = do s <- get
-                 let n = ffcallNo s
-                 put (s { ffcallNo = n + 1 })
-                 return n
+newFFCallNo = takeCounter ffcallNo (+1)
 
 -- create a clock given an expression for the wires
 -- and (maybe) a family to add it to
@@ -2363,24 +2430,17 @@ newFFCallNo = do s <- get
 -- be careful about what to display because this is called from newState
 newClock :: HExpr -> Maybe (HClock) -> [Either HClock HClock] -> G HClock
 newClock wires mclock ancestors = do
-  s <- get
-
   -- this trace sometimes leads to loops
   -- because state elements with output clocks point to themselves
   -- traceM ("new clock: " ++ ppReadable wires)
-  let clockid = newClockId s
-  let clockid' = nextClockId clockid
+  clockid <- takeCounter newClockId nextClockId
   domain <- case mclock of
               Just clock -> do
                 when doTraceClock $ traceM ("existing domain: " ++ (show (getClockDomain clock)))
-                put (s { newClockId = clockid'})
                 return (getClockDomain clock)
               Nothing -> do
                 when doTraceClock $ traceM ("new domain")
-                let domain  = newClockDomain s
-                let domain' = nextClockDomain domain
-                put ( s {newClockId = clockid', newClockDomain = domain'})
-                return domain
+                takeCounter newClockDomain nextClockDomain
   when doTraceClock $ traceM ("new clock id: " ++ (show clockid) ++
                               " domain: " ++ (show domain))
   let clock = makeClock clockid domain wires
@@ -2395,10 +2455,7 @@ newClock wires mclock ancestors = do
 -- be careful about what to display because this is called from newState
 newReset :: HClock -> HExpr -> G HReset
 newReset clock wire = do
-  s <- get
-  let resetid  = newResetId s
-  let resetid' = nextResetId resetid
-  put (s { newResetId = resetid'})
+  resetid <- takeCounter newResetId nextResetId
   when doTraceClock $ traceM ("new reset id: " ++ (show resetid))
   let reset = makeReset resetid clock wire
   addReset reset
@@ -2492,10 +2549,8 @@ improveCellName e _ = inferName e
 -- snapshot of another heap cell read while inferring the name.
 addHeapCell :: String -> HeapCell -> G (HeapPointer, HeapData)
 addHeapCell tag cell = do
-  s <- get
-  let p = hp s
+  p <- takeCounter hp (+1)
   ref <- deepseq (hc_name cell) $ liftIO (newIORef (cell))
-  put (s { hp = p+1 })
   when doTraceHeapAlloc $ traceM("addHeapCell(" ++ show p ++ "): " ++ tag ++ "\n")
   return (p, HeapData ref)
 
@@ -2535,11 +2590,7 @@ addHeapWHNF tag t pe@(P _ e) cell_name_orig = do
 
 -- The address the next heap cell would get, taken without making a cell
 reserveHeapPtr :: G HeapPointer
-reserveHeapPtr = do
-  s <- get
-  let p = hp s
-  put (s { hp = p+1 })
-  return p
+reserveHeapPtr = takeCounter hp (+1)
 
 -- addHeapWHNF (without a given name) up to making the cell, for a cell
 -- that might not be needed: the name is inferred and forced and the
@@ -2695,8 +2746,7 @@ filterHeapPtrs accept =
 
 {-# INLINE getStateNo #-}
 getStateNo :: G Int
-getStateNo = do s <- get
-                return (stateNo s)
+getStateNo = readCounter stateNo
 
 {-# INLINE getSymTab #-}
 getSymTab :: G SymTab
@@ -2762,14 +2812,13 @@ getModuleName = do
 
 {-# INLINE getNewRuleSuffix #-}
 getNewRuleSuffix :: G Integer
-getNewRuleSuffix = do s <- get
-                      return (newRuleSuffix s)
+getNewRuleSuffix = readCounter newRuleSuffix
 
 {-# INLINE updNewRuleSuffix #-}
 updNewRuleSuffix :: Integer -> G ()
 updNewRuleSuffix suf = do
-  s <- get
-  put s { newRuleSuffix = suf }
+  refs <- getRefs
+  liftIO (writeIORef (newRuleSuffix refs) suf)
 
 -----------------------------------------------------------------------------
 
@@ -3411,10 +3460,10 @@ getMethodsWithWires e =
         ?jn = concat
         -- XXX why do include the position in the key?
         ?st = \ p pos ws -> do
-                visited <- get
-                put (S.insert (p, pos) visited)
+                visited <- St.get
+                St.put (S.insert (p, pos) visited)
         ?lk = \ p pos -> do
-                visited <- get
+                visited <- St.get
                 return $ if (p, pos) `S.member` visited
                          then Just []
                          else Nothing
@@ -3793,7 +3842,7 @@ mapPExprPosition doit ((P pred_0 iexpr_0), (P pred_1 iexpr_1)) = do
 -----------------------------------------------------------------------------
 
 isNoInlinedFunc :: G Bool
-isNoInlinedFunc =  gets noinlined_func
+isNoInlinedFunc =  gets (noinlined_func . ro)
 
 isAggressive :: G Bool
 isAggressive =  gets aggressive_cond
