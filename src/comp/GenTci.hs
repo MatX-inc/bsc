@@ -37,7 +37,6 @@ import Data.Maybe(isNothing, fromMaybe)
 import Data.Bits(shiftL)
 import Data.Char(isDigit)
 import Data.List(sort, foldl')
-import Data.Array(Array, listArray, (!))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Builder as BB
@@ -268,62 +267,69 @@ pruneSigs :: [FString] -> S.Set String -> [(Bool, CImportedSignature)] ->
 pruneSigs seeds exportAll lsigs = do
     let -- the non-library signatures' entries, numbered in order, with
         -- whether their package is re-exported whole
-        entries = [ (whole, d) | (False, CImpSign _ _ (CSignature n _ _ ds)) <- lsigs
-                               , let whole = getIdString n `S.member` exportAll, d <- ds ]
-        nEntries = length entries
+        pkgs = [ (getIdString n `S.member` exportAll, ds)
+               | (False, CImpSign _ _ (CSignature n _ _ ds)) <- lsigs ]
+        offsets = scanl (+) 0 (map (length . snd) pkgs)
+        nEntries = last offsets
         libDefs = [ d | (True, CImpSign _ _ (CSignature _ _ _ ds)) <- lsigs, d <- ds ]
     -- every string of the entries' default bodies (rare in signatures)
     bodies <- fmap IM.fromList $ sequence
                 [ do (_, strs) <- encodeV2Strip Nothing defs
                      return (e, strs)
-                | (e, (_, d)) <- zip [0 ..] entries, let defs = defaultBodies d, not (null defs) ]
-    let entryArr = listArray (0, nEntries - 1) (map snd entries) :: Array Int CDefn
-        byName = foldl' (\m (e, (_, d)) ->
-                           foldDefnBinders (\m' b -> IM.insertWith (++) (fstringId (getIdBase b)) [e] m') m d)
-                        IM.empty (zip [0 ..] entries)
-        -- add a name to N, queueing the entries that bind it
-        add k@(Keep ns q) x =
-            let i = fstringId x
-            in  if IS.member i ns then k
-                else Keep (IS.insert i ns) (IM.findWithDefault [] i byName ++ q)
-        k0 = [ e | (e, (whole, d)) <- zip [0 ..] entries
-                 , isInstance d || whole || foldDefnBinders (\r b -> r || isRdyId b) False d ]
-        -- keep the queued entries, then everything their names reach
-        go kept (Keep ns []) = (ns, kept)
-        go kept (Keep ns (e : q))
-            | IS.member e kept = go kept (Keep ns q)
-            | otherwise =
-                go (IS.insert e kept)
-                   (foldl' add (foldDefnNames add (Keep ns q) (entryArr ! e))
-                           (IM.findWithDefault [] e bodies))
-        start = foldl' (foldDefnNames add) (foldl' add (Keep IS.empty k0) (mkFString "val" : seeds))
-                       libDefs
-        (nFinal, keptSet) = go IS.empty start
-        inN i = IS.member (fstringId (getIdBase i)) nFinal
+                | (e0, (_, ds)) <- zip offsets pkgs, (e, d) <- zip [e0 ..] ds
+                , let defs = defaultBodies d, not (null defs) ]
+    let -- N is the least fixpoint of passes that walk every entry kept by N
+        -- so far, adding the names it binds and mentions.  A pass takes the
+        -- packages and their entries last first, since an entry mostly
+        -- mentions what its imports and earlier entries bind, and skips an
+        -- entry kept by N as the previous pass started (walked by then).
+        revPkgs = reverse [ (e0 + length ds - 1, whole, reverse ds)
+                          | (e0, (whole, ds)) <- zip offsets pkgs ]
+        pass prev ns0 = foldl' (\ns (eLast, whole, rds) -> passPkg prev whole eLast ns rds) ns0 revPkgs
+        passPkg _ !_ !_ !ns [] = ns
+        passPkg prev whole e ns (d : ds) =
+            let walked = maybe False (\p -> keptBy p whole d) prev
+            in  passPkg prev whole (e - 1)
+                        (if keptBy ns whole d && not walked then walk e d ns else ns) ds
+        walk e d ns = foldl' add (foldDefnNames add ns d) (IM.findWithDefault [] e bodies)
+        add ns x = let i = fstringId x
+                   in  if IS.member i ns then ns else IS.insert i ns
+        -- every instance, every entry of a package re-exported whole, every
+        -- entry binding a ready name, and every entry binding a name in N
+        keptBy ns whole d =
+            whole || case firstBinder d of
+                       Nothing -> isInstance d
+                       Just _ -> foldDefnBinders (\r b -> r || isRdyId b || IS.member (nameId b) ns) False d
+        fixpoint prev ns = let ns' = pass prev ns
+                           in  if IS.size ns' == IS.size ns then ns else fixpoint (Just ns) ns'
+        nFinal = fixpoint Nothing (foldl' (foldDefnNames add) (foldl' add IS.empty (mkFString "val" : seeds)) libDefs)
+        inN i = IS.member (nameId i) nFinal
+        -- an entry kept by binding a name has every name it binds in N
+        keepEntry whole d = case firstBinder d of
+                              Just b -> inN b
+                              Nothing -> whole || isInstance d
         keepFix (CInfix _ i) = inN i
         keepFix (CInfixl _ i) = inN i
         keepFix (CInfixr _ i) = inN i
         keepPragma (CPragma (Pproperties i _)) = inN i
         keepPragma (CPragma (Pnoinline is)) = any inN is
         keepPragma _ = False
-        prune e0 (CImpSign _ _ (CSignature n _ fs ds)) =
-            CSignature n [] (filter keepFix fs)
-                [ d | (e, d) <- zip [e0 ..] ds
-                    , IS.member e keptSet || (isPragma d && keepPragma d) ]
+        prune (CImpSign _ _ (CSignature n _ fs ds)) =
+            let whole = getIdString n `S.member` exportAll
+            in  CSignature n [] (filter keepFix fs)
+                    [ d | d <- ds, keepEntry whole d || (isPragma d && keepPragma d) ]
         isPragma (CPragma _) = True
         isPragma _ = False
-        pruneAll _ [] = []
-        pruneAll e0 (s@(CImpSign _ _ (CSignature _ _ _ ds)) : ss) =
-            prune e0 s : pruneAll (e0 + length ds) ss
-        sigs' = pruneAll 0 [ s | (False, s) <- lsigs ]
+        sigs' = [ prune s | (False, s) <- lsigs ]
+        nKept = length [ () | (whole, ds) <- pkgs, d <- ds, keepEntry whole d ]
     return (sigs',
-            TciStats (IS.size keptSet, nEntries) (length (filter fst lsigs), length libDefs)
+            TciStats (nKept, nEntries) (length (filter fst lsigs), length libDefs)
                      (IS.size nFinal) 0 (0, 0, 0) 0)
   where isInstance (CIinstance {}) = True
         isInstance _ = False
 
--- The keep rule's names so far (N) and the entries queued to keep
-data Keep = Keep !IS.IntSet [Int]
+nameId :: Id -> Int
+nameId = fstringId . getIdBase
 
 -- The default bodies of a struct's or class's fields
 defaultBodies :: CDefn -> [CClause]
@@ -352,6 +358,22 @@ foldDefnBinders f z d = case d of
     Cprimitive i _ -> f z i
     _ -> z
   where fs = foldl' f
+
+-- The first Id that foldDefnBinders gives
+{-# INLINE firstBinder #-}
+firstBinder :: CDefn -> Maybe Id
+firstBinder d = case d of
+    Ctype ik _ _ -> Just (iKName ik)
+    CItype ik _ _ -> Just (iKName ik)
+    CprimType ik -> Just (iKName ik)
+    Cdata { cd_name = ik } -> Just (iKName ik)
+    Cstruct _ _ ik _ _ _ -> Just (iKName ik)
+    Cclass _ _ ik _ _ _ _ -> Just (iKName ik)
+    CIclass _ _ ik _ _ _ _ _ -> Just (iKName ik)
+    CIValueSign i _ -> Just i
+    Cforeign { cforg_name = i } -> Just i
+    Cprimitive i _ -> Just i
+    _ -> Nothing
 
 -- A strict left fold over the base names an entry binds or mentions,
 -- except in default bodies (see pruneSigs).  Type variables and the sorts
