@@ -1960,7 +1960,7 @@ satManyR' dvs es rs_accum sbs rc s (p:ps) = do
                 let rs' = (apSub s' changed_rs) ++ unchanged_rs
                 (rs'', s1, sbs1, rc1) <- joinNeededCtxsR rs'
                 let s2 = s1 @@ s'
-                satManyR (dvsSub s2 dvs) (apSub s2 es) [] (sbs1 <++ sbs' <++ sbs)
+                satManyR (dvsSub s2 dvs) (apSubComposed s2 s1 s' es) [] (sbs1 <++ sbs' <++ sbs)
                          (RcMerge (RcMerge rc1 x_rc) rc)
                          (s2 @@ s) (rs'' ++ apSub s2 ps)
 

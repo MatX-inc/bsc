@@ -20,7 +20,7 @@ module TIMonad(
         getBoundTVs, getBoundTVStack, getTopBoundTVs, addBoundTVs, popBoundTVs,
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
         GSeg(..), GTree(..), GOrigin(..), Givens, mkGivens, givensSegs, givensList, givensOnList,
-        givensAppend,
+        givensAppend, apSubComposed,
         ClassIdx, classIdxLookup,
         classKey, getExplGivens, getTopExplSeg,
         getNumProven, getNumRefuted, addNumDecided,
@@ -920,6 +920,15 @@ instance Types Givens where
                                            gsOrigin = originSub s (gsOrigin seg) }
                                    | seg <- segs ]
     tv gv = tv (givensList gv)
+
+-- | apSub s for s = s1 @@ s2, whose domain is s1's and s2's together
+-- (Subst.@@): the level's origin records s1 and s2, which can be
+-- evaluated while the composition is not yet.
+apSubComposed :: Subst -> Subst -> Subst -> Givens -> Givens
+apSubComposed s s1 s2 (Givens segs) =
+    Givens [ seg { gsList = apSub s (gsList seg),
+                   gsOrigin = originSub s1 (originSub s2 (gsOrigin seg)) }
+           | seg <- segs ]
 
 type Infer2 e t r = [Assump] -> e -> TI ([VPred], t, r)
 
