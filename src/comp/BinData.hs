@@ -1470,7 +1470,7 @@ instance Bin Type where
 instance Bin TyVar where
     writeBytes (TyVar i n k) = do toBin i; toBin n; toBin k
     readBytes = do i <- fromBin; n <- fromBin; k <- fromBin;
-                   return (TyVar i n k)
+                   return (loadedTyVar i n k)
 
 instance Bin TyCon where
     writeBytes (TyCon i mk s) = do putI 0; toBin i; toBin mk; toBin s

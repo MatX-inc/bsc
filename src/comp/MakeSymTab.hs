@@ -1305,9 +1305,9 @@ isTypish _ = True
 -}
 
 trCType' :: SymTab -> [(Id, Kind)] -> CType -> K.KI (Type, Kind)
-trCType' r as (TVar (TyVar i n _)) =
+trCType' r as (TVar v@(TyVar i _ _)) =
     case lookup i as of
-    Just k -> return $ (TVar (TyVar i n k), k)
+    Just k -> return $ (TVar (setTyVarKind v k), k)
     Nothing -> --trace ("trCTypeN "++ ppReadable(i,as)) $
         K.err (getPosition i, EUnboundTyVar (pfpString i))
 
@@ -1364,9 +1364,9 @@ convCQTypeWithAssumps :: SymTab -> [(Id, Kind)] -> CQType ->
                          Either EMsg (Qual Type)
 convCQTypeWithAssumps r as ct =
     let tvs = tv ct
-        adjKind tv@(TyVar i n k) = case (lookup i as) of
+        adjKind tv@(TyVar i _ _) = case (lookup i as) of
                                      Nothing -> tv
-                                     Just k' -> TyVar i n k'
+                                     Just k' -> setTyVarKind tv k'
         tvs' = map adjKind tvs
     in  convCQTypeVars r tvs' ct
 
@@ -1438,7 +1438,7 @@ findClass r i = do
 
 -- Turn free kind variables into *
 groundT :: K.KSubst -> Type -> Type
-groundT s (TVar (TyVar i n k)) = TVar (TyVar i n (K.groundK (K.apKSu s k)))
+groundT s (TVar v@(TyVar _ _ k)) = TVar (setTyVarKind v (K.groundK (K.apKSu s k)))
 groundT s c@(TCon _) = c
 groundT s (TAp l r) = TAp (groundT s l) (groundT s r)
 groundT _ _ = internalError "MakeSymTab.groundT"

@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE BangPatterns #-}
 module SpeedyString(SString, toString, fromString, fromEnumName,
+                    noteGenName,
                     (++), concat, filter,
                     InternSnapshot(..), snapshotInternState, validSnapshot,
                     renderInternTable, internCount, internedSince,
@@ -10,11 +11,14 @@ import Prelude hiding((++), concat, filter)
 import qualified Prelude((++), filter)
 import System.IO.Unsafe(unsafePerformIO)
 import Control.Exception(evaluate)
-import Control.Monad(forM_)
+import Control.Monad(forM_, when)
 import Data.Array.Base(unsafeRead, unsafeWrite)
 import Data.Array.IO(IOArray, IOUArray, newArray)
 import Data.Bits((.&.), shiftL, shiftR)
+import Data.Int(Int32)
 import Data.IORef(IORef, newIORef, readIORef, writeIORef)
+import qualified Data.IntMap.Strict as IM
+import qualified Data.IntSet as IS
 import qualified Data.Set as Set
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Builder as BB
@@ -29,7 +33,7 @@ import qualified Data.Generics as Generic
 data SString = SString !Int -- unique id
    deriving (Generic.Data, Generic.Typeable)
 
--- The string's id, in [0, internCount): equal ids are equal strings.
+-- The string's order key (see Reserved ids): equal ids are equal strings.
 sstringId :: SString -> Int
 sstringId (SString i) = i
 
@@ -46,8 +50,9 @@ instance Show SString where
 -- public
 
 toString :: SString -> String
-toString (SString i) = unsafePerformIO $
+toString (SString d) = unsafePerformIO $
                        do t <- readIORef table
+                          i <- indexOf d
                           if i < 0 || i >= tNext t then err else spelling t i
 
 -- s is hashed (forcing all of it) before the table is read, because
@@ -133,9 +138,11 @@ genKey _ = Nothing
 
 -- internal representation
 --
--- Ids are dense, 0 .. tNext - 1.  tKey holds 0 for a plain spelling (kept
--- in tStr) and the key of a generated one.  tSlots is an open-addressed
--- table of (hash or key, id + 1) pairs, 0 marking an empty slot.
+-- Entries are numbered 0 .. tNext - 1 in arrival order; an entry's id is
+-- not its number (see Reserved ids).  tKey holds 0 for a plain spelling
+-- (kept in tStr) and the key of a generated one.  tSlots is an
+-- open-addressed table of (hash or key, entry + 1) pairs, 0 marking an
+-- empty slot.
 
 data Table = Table
     { tNext  :: !Int
@@ -165,7 +172,7 @@ slotOf mask h =
     fromIntegral ((fromIntegral h * 0x9E3779B97F4A7C15 :: Word) `shiftR` 29)
       .&. mask
 
--- the id holding the spelling, or the empty slot where it would go
+-- the entry holding the spelling, or the empty slot where it would go
 probe :: Table -> Int -> (Int -> IO Bool) -> IO (Either Int Int)
 probe t h same = go (slotOf (tMask t) h)
   where go j = do idp <- unsafeRead (tSlots t) (2 * j + 1)
@@ -190,18 +197,22 @@ internPlain h s =
     do t <- readIORef table
        r <- findPlain t h s
        case r of
-         Right i -> return (SString i)
-         Left j -> insert t j h 0 s
+         Right i -> return (SString (idOf i))
+         Left j -> fmap (SString . idOf) (insert t j h 0 s)
 
 internGen :: Int -> IO SString
 internGen !k =
     do t <- readIORef table
        r <- findGen t k
+       v <- if k .&. 3 == 1 then reservedId (k `shiftR` 2) else return 0
        case r of
-         Right i -> return (SString i)
-         Left j -> insert t j k k []
+         Right i -> return (SString (if v /= 0 then v else idOf i))
+         Left j -> do i <- insert t j k k []
+                      if v /= 0 then do materialize v i
+                                        return (SString v)
+                                else return (SString (idOf i))
 
-insert :: Table -> Int -> Int -> Int -> String -> IO SString
+insert :: Table -> Int -> Int -> Int -> String -> IO Int
 insert t0 j h k s =
     do let i = tNext t0
        unsafeWrite (tSlots t0) (2 * j) h
@@ -212,7 +223,7 @@ insert t0 j h k s =
        let t2 = t1 { tNext = i + 1 }
        t3 <- if 2 * (i + 1) > tMask t2 then growSlots t2 else return t2
        writeIORef table t3
-       return (SString i)
+       return i
 
 growIds :: Table -> IO Table
 growIds t =
@@ -243,6 +254,126 @@ growSlots t =
        return t'
 
 
+-- Reserved ids
+--
+-- The typechecker builds the name _tctyvarN of a variable it draws only
+-- where the name is used (CType.TyVarG), and calls noteGenName N wherever
+-- forcing the name used to intern it.  The first note of a spelling not
+-- yet interned reserves the place that interning it there would have
+-- given it: after every string interned and every place reserved so far,
+-- before everything interned or reserved later.  Interning the spelling
+-- later gives it the reserved id, so Ord SString answers as if every
+-- noted name had been interned at its note.
+--
+-- So an id is an order key: entry i has id i * 2^32, and the q-th place,
+-- reserved while the table held k entries, has id (k - 1) * 2^32 + 1 + q.
+-- rMat maps a reserved id whose spelling is interned to its entry.
+
+data Reserves = Reserves
+    { rNum   :: !(IOUArray Int Int32)  -- N -> q + 1, inTable or 0
+    , rCap   :: !Int
+    , rSpill :: !(IM.IntMap Int)       -- N -> q + 1, for N >= rCap
+    , rPlace :: !(IOUArray Int Int32)  -- q -> k
+    , rPCap  :: !Int
+    , rSeq   :: !Int                   -- places reserved so far
+    , rMat   :: !(IM.IntMap Int)
+    }
+
+{-# NOINLINE reserves #-}
+reserves :: IORef Reserves
+reserves = unsafePerformIO $
+           do a <- newArray (0, -1) 0
+              p <- newArray (0, -1) 0
+              newIORef (Reserves a 0 IM.empty p 0 0 IM.empty)
+
+idOf :: Int -> Int
+idOf i = i `shiftL` 32
+
+-- the entry with id d, or -1
+indexOf :: Int -> IO Int
+indexOf d
+    | d .&. 0xFFFFFFFF == 0 = return (d `shiftR` 32)
+    | otherwise = do r <- readIORef reserves
+                     return (IM.findWithDefault (-1) d (rMat r))
+
+-- noted while _tctyvarN was already interned, so later notes need no probe
+inTable :: Int
+inTable = -1
+
+-- q and k must fit rNum and rPlace
+maxReserve :: Int
+maxReserve = 0x7FFFFFFE
+
+lookupRes :: Reserves -> Int -> IO Int
+lookupRes r n
+    | n < rCap r = fmap fromIntegral (unsafeRead (rNum r) n)
+    | otherwise  = return (IM.findWithDefault 0 n (rSpill r))
+
+-- the id reserved for _tctyvarN, or 0
+reservedId :: Int -> IO Int
+reservedId n =
+    do r <- readIORef reserves
+       v <- lookupRes r n
+       if v <= 0 then return 0 else do
+         let q = v - 1
+         k <- unsafeRead (rPlace r) q
+         return (idOf (fromIntegral k - 1) + 1 + q)
+
+-- | Where forcing enumId "tctyvar" _ n used to intern its spelling: mark
+-- that point without interning it (see Reserved ids).
+noteGenName :: Int -> IO ()
+noteGenName n
+    | n < 0 || n >= genLimit = evaluate (fromEnumName "tctyvar" n) >> return ()
+    | otherwise =
+        do r <- readIORef reserves
+           v <- lookupRes r n
+           when (v == 0) $ do
+             t <- readIORef table
+             f <- findGen t (packGen 1 n)
+             case f of
+               Right _ -> when (n < rCap r) $
+                            unsafeWrite (rNum r) n (fromIntegral inTable)
+               Left _
+                 | rSeq r >= maxReserve || tNext t >= maxReserve ->
+                     internGen (packGen 1 n) >> return ()
+                 | otherwise -> reserve r n (tNext t) >>= writeIORef reserves
+
+reserve :: Reserves -> Int -> Int -> IO Reserves
+reserve r0 n k =
+    do let q = rSeq r0
+       r1 <- if q < rPCap r0 then return r0 else
+               do let c = max 1024 (2 * rPCap r0)
+                  a <- newArray (0, c - 1) 0
+                  forM_ [0 .. rPCap r0 - 1] $ \i ->
+                      unsafeRead (rPlace r0) i >>= unsafeWrite a i
+                  return r0 { rPlace = a, rPCap = c }
+       unsafeWrite (rPlace r1) q (fromIntegral k)
+       setNum r1 { rSeq = q + 1 } n (q + 1)
+
+-- rNum covers 0 .. rCap - 1.  It grows by half, to cover N, when it would
+-- then hold a reservation in every 16 entries: its 4-byte entries, which
+-- the GC does not scan, then cost at most 64 bytes a reservation, about an
+-- IntMap entry.  Other reservations go to rSpill.
+setNum :: Reserves -> Int -> Int -> IO Reserves
+setNum r n v
+    | n < rCap r =
+        do unsafeWrite (rNum r) n (fromIntegral v)
+           return r
+    | 16 * rSeq r >= cap' =
+        do a <- newArray (0, cap' - 1) 0
+           forM_ [0 .. rCap r - 1] $ \i -> unsafeRead (rNum r) i >>= unsafeWrite a i
+           let (lo, hi) = IM.partitionWithKey (\m _ -> m < cap') (rSpill r)
+           forM_ (IM.toList lo) $ \(m, w) -> unsafeWrite a m (fromIntegral w)
+           unsafeWrite a n (fromIntegral v)
+           return r { rNum = a, rCap = cap', rSpill = hi }
+    | otherwise = return r { rSpill = IM.insert n v (rSpill r) }
+  where cap' = 4096 * ((max (n + 1) (rCap r + rCap r `div` 2) + 4095) `div` 4096)
+
+materialize :: Int -> Int -> IO ()
+materialize v i = do r <- readIORef reserves
+                     writeIORef reserves r { rMat = IM.insert v i (rMat r) }
+
+
 -- string hash function, stolen from FString
 
 hashStr :: String -> Int
@@ -251,39 +382,58 @@ hashStr s = f s 0
               f (c:cs) r = f cs (r*16+r+fromEnum c)
 
 
--- Whether s has been interned so far (interning nothing).
+-- Whether s has been interned so far (interning nothing); a noted
+-- _tctyvarN counts as interned.
 isInterned :: String -> IO Bool
 isInterned s =
     do h <- evaluate (hashStr s)
        t <- readIORef table
-       r <- case genKey s of
-              Just k  -> findGen t k
-              Nothing -> findPlain t h s
-       return (either (const False) (const True) r)
+       case genKey s of
+         Just k -> do v <- if k .&. 3 == 1 then reservedId (k `shiftR` 2)
+                                           else return 0
+                      if v /= 0 then return True else found (findGen t k)
+         Nothing -> found (findPlain t h s)
+  where found = fmap (either (const False) (const True))
 
 -- The number of strings interned so far.
 internCount :: IO Int
 internCount = fmap tNext (readIORef table)
 
--- The strings interned with ids >= n, in id order (for the same
--- witness: naming what an operation interned).
+-- The strings interned since internCount returned n, in arrival order
+-- (for the same witness: naming what an operation interned).
 internedSince :: Int -> IO [String]
 internedSince n = do t <- readIORef table
                      spellingsFrom t (max 0 n)
 
--- Spellings of ids lo .. tNext - 1, in id order.  Built back to front in
--- constant stack: the dump runs in an exit handler under the default -K10m,
--- where a stack overflow cannot be delivered.
+-- Spellings of entries lo .. tNext - 1.  Built back to front in constant
+-- stack: the dump runs in an exit handler under the default -K10m, where a
+-- stack overflow cannot be delivered.
 spellingsFrom :: Table -> Int -> IO [String]
 spellingsFrom t lo = go (tNext t - 1) []
   where go i acc | i < lo = return acc
                  | otherwise = do s <- spelling t i
                                   go (i - 1) (s : acc)
 
+-- Every spelling in id order: the entries in arrival order, each interned
+-- reserved id moved to its place.  Built back to front in constant stack.
+spellingsById :: Table -> Reserves -> IO [String]
+spellingsById t r = go (tNext t - 1) (IM.toDescList (rMat r)) []
+  where moved = IS.fromList (IM.elems (rMat r))
+        go i ms acc
+          | i >= 0 && IS.member i moved = go (i - 1) ms acc
+          | otherwise =
+              case ms of
+                (d, m) : ms' | i < 0 || d > idOf i ->
+                  do s <- spelling t m
+                     go i ms' (s : acc)
+                _ | i < 0 -> return acc
+                  | otherwise -> do s <- spelling t i
+                                    go (i - 1) ms (s : acc)
+
 
 -- A capture contains every spelling, including entries no longer reachable
--- from the scheduled package. Numeric IDs must be preserved: SString's Ord
--- instance compares interned IDs, not string contents.
+-- from the scheduled package, numbered in id order: SString's Ord instance
+-- compares interned IDs, not string contents.
 data InternSnapshot = InternSnapshot
     { internNextId :: Int
     , internEntries :: [(Int, String)]
@@ -294,9 +444,9 @@ data InternSnapshot = InternSnapshot
 snapshotInternState :: IO InternSnapshot
 snapshotInternState = do
     t <- readIORef table
-    let n = tNext t
-    ss <- spellingsFrom t 0
-    return (InternSnapshot n (zip [0 ..] ss))
+    r <- readIORef reserves
+    ss <- spellingsById t r
+    return (InternSnapshot (tNext t) (zip [0 ..] ss))
 
 validSnapshot :: InternSnapshot -> Bool
 validSnapshot (InternSnapshot n entries) =

@@ -1,11 +1,11 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving, PatternGuards, DeriveDataTypeable #-}
-{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE PatternSynonyms, ViewPatterns #-}
 -- | The CType package defines the concrete representation of types and kinds.
 module CType(
   -- * Types
   Type(TVar, TCon, TAp, TGen, TDefMonad),
-  CType, TyVar(..), TyCon(..), TISort(..), StructSubType(..),
+  CType, TyVar(TyVar, tv_name, tv_num, tv_kind), TyCon(..), TISort(..), StructSubType(..),
 
   -- ** Canonical identity
   typeCanonWord, typeCanonWordNode,
@@ -27,7 +27,7 @@ module CType(
   isTypeActionValue, isTypeActionValue_,
   isTypePolyBit, bitWidth,
   isTypeUnit,
-  noTyVarNo, isGeneratedTVar,
+  noTyVarNo, isGeneratedTVar, isBadTyVar,
   getArrows,  getRes,
   seqCType,
   -- if the above are not sufficient, use these:
@@ -38,6 +38,7 @@ module CType(
   -- ** Constructing Types
   noType, tVar, tVarKind, cTVar, cTVarKind, cTVarNum, cTCon, cTNum, cTStr,
   cTApplys, setTypePosition,
+  mkGenTyVar, loadedTyVar, setTyVarKind,
 
   -- * Kinds
   Kind(..), PartialKind(..),
@@ -92,7 +93,8 @@ import Pragma(IfcPragma)
 import TypeOps
 import PVPrint(PVPrint(..))
 import FStringCompat
-import SpeedyString(internCount, internedSince)
+import SpeedyString(internCount, internedSince, noteGenName)
+import Control.Exception(evaluate)
 import IOUtil(progArgs)
 
 -- Data structures
@@ -138,11 +140,91 @@ instance Show Type where
         showString "TDefMonad " . showsPrec 11 p
 
 -- | Representation of a type variable
-data TyVar = TyVar { tv_name :: Id    -- ^ name of the type variable
-                   , tv_num  :: Int   -- ^ number for a generated type variable
-                   , tv_kind :: Kind  -- ^ kind of the type variable
-                   }
-    deriving (Show, Generic.Data, Generic.Typeable)
+--
+-- TyVarG is a variable the typechecker drew (TIMonad.newTVar), or one
+-- read from a .bo under that spelling: its name is _tctyvarN for its
+-- number N, and the last field holds that Id lazily.  Two TyVarGs are
+-- compared by number alone, so the Id is built, and its spelling
+-- interned, only where it is asked for (the TyVar pattern, tv_name):
+-- printing, or conversion to ISyntax.  TyVarU is every other variable.
+-- Elsewhere TyVar is a record pattern synonym with the old field names.
+data TyVar = TyVarU Id Int Kind
+           | TyVarG Position {-# UNPACK #-} !Int Kind Id
+    deriving (Generic.Data, Generic.Typeable)
+
+pattern TyVar :: Id -> Int -> Kind -> TyVar
+pattern TyVar {tv_name, tv_num, tv_kind} <- (tyVarView -> (tv_name, tv_num, tv_kind))
+  where TyVar i n k = TyVarU i n k
+
+{-# COMPLETE TyVar #-}
+
+{-# INLINE tyVarView #-}
+tyVarView :: TyVar -> (Id, Int, Kind)
+tyVarView (TyVarU i n k) = (i, n, k)
+tyVarView (TyVarG _ n k i) = (i, n, k)
+
+instance Show TyVar where
+    showsPrec d (TyVar i n k) = showParen (d >= 11) $
+        showString "TyVar {tv_name = " . showsPrec 0 i .
+        showString ", tv_num = " . showsPrec 0 n .
+        showString ", tv_kind = " . showsPrec 0 k . showString "}"
+
+-- | A variable drawn by the typechecker, numbered n.
+mkGenTyVar :: Position -> Int -> Kind -> TyVar
+mkGenTyVar pos n k = TyVarG pos n k (genTyVarName pos n)
+
+-- The Id newTVar gave the variable before TyVarG existed, forced as
+-- that Id was: the spelling _tctyvarN is interned, then the position
+-- forced (newTVar's position is lazy, and forcing it can intern the
+-- value binder's _tctempN).
+genTyVarName :: Position -> Int -> Id
+genTyVarName pos n = unsafeDupablePerformIO $
+    do _ <- evaluate (enumFString "tctyvar" n)
+       _ <- evaluate pos
+       evaluate (enumId "tctyvar" pos n)
+
+-- Where the Id used to be forced without its spelling being needed: the
+-- spelling is noted (SpeedyString.noteGenName) where it used to be
+-- interned, then the position forced, in genTyVarName's order.
+forceGenName :: Position -> Int -> IO ()
+forceGenName pos n = do noteGenName n
+                        _ <- evaluate pos
+                        return ()
+
+{-# NOINLINE genForced #-}
+genForced :: Position -> Int -> ()
+genForced pos n = unsafeDupablePerformIO (forceGenName pos n)
+
+-- Comparing two variables numbered n forced the left Id, then the right,
+-- whose spelling was then interned.
+{-# NOINLINE genForcedPair #-}
+genForcedPair :: Position -> Position -> Int -> ()
+genForcedPair pos pos' n =
+    unsafeDupablePerformIO (forceGenName pos n >> evaluate pos' >> return ())
+
+-- | A variable decoded from a .bo: a generated spelling with its own
+-- number and newTVar's properties becomes a TyVarG holding the decoded Id.
+loadedTyVar :: Id -> Int -> Kind -> TyVar
+loadedTyVar i n k
+    | n /= noTyVarNo, isUnqualId i, getIdProps i == [IdP_bad_name],
+      getIdBaseString i == "_tctyvar" ++ itos n = TyVarG (getIdPosition i) n k i
+    | otherwise = TyVarU i n k
+
+setTyVarKind :: TyVar -> Kind -> TyVar
+setTyVarKind (TyVarU i n _) k = TyVarU i n k
+setTyVarKind (TyVarG p n _ i) k = TyVarG p n k i
+
+-- setIdPosition pos on the Id forced the old Id, then pos.
+setTyVarPosition :: Position -> TyVar -> TyVar
+setTyVarPosition pos (TyVarU i n k) = TyVarU (setIdPosition pos i) n k
+setTyVarPosition pos (TyVarG p n k i) =
+    TyVarG (unsafeDupablePerformIO (forceGenName p n >> evaluate pos))
+           n k (setIdPosition pos i)
+
+-- | Whether the variable's Id is a generated (bad) name; TIMonad.isNewTVar.
+isBadTyVar :: TyVar -> Bool
+isBadTyVar (TyVarU i _ _) = isBadId i
+isBadTyVar (TyVarG p n _ _) = case genForced p n of () -> True
 
 
 -- | Representation of a type constructor
@@ -265,8 +347,13 @@ instance Eq Type where
       where i = typeCanonWordNode x
             j = typeCanonWordNode y
 
+-- Two generated variables are equal iff their numbers are (equal numbers
+-- mean equal spellings); every other pair compares (number, Id) as
+-- before, building a generated side's name.
 instance Eq TyVar where
-    TyVar i n _ == TyVar i' n' _  =  (n, i) == (n', i')
+    TyVarG p n _ _ == TyVarG p' n' _ _  =
+        n == n' && (case genForcedPair p p' n of () -> True)
+    a == b  =  (tv_num a, tv_name a) == (tv_num b, tv_name b)
 
 -- TyCon comparison and the one-tycon-per-qualified-name invariant
 --
@@ -307,11 +394,15 @@ instance Ord Type where
     compare x y = cmp x y
 
 instance Ord TyVar where
-    TyVar i n _ <= TyVar i' n' _  =  (n, i) <= (n', i')
-    TyVar i n _ <  TyVar i' n' _  =  (n, i) <  (n', i')
-    TyVar i n _ >= TyVar i' n' _  =  (n, i) >= (n', i')
-    TyVar i n _ >  TyVar i' n' _  =  (n, i) >  (n', i')
-    TyVar i n _ `compare` TyVar i' n' _  =  (n, i) `compare` (n', i')
+    a <= b  =  compare a b /= GT
+    a <  b  =  compare a b == LT
+    a >= b  =  compare a b /= LT
+    a >  b  =  compare a b == GT
+    compare (TyVarG p n _ _) (TyVarG p' n' _ _) =
+        case compare n n' of
+          EQ -> case genForcedPair p p' n of () -> EQ
+          o -> o
+    compare a b  =  (tv_num a, tv_name a) `compare` (tv_num b, tv_name b)
 
 instance Ord TyCon where
     -- lexicographic on (base, qual); within a (base, qual) bucket either
@@ -397,12 +488,13 @@ instance Ord TyCon where
 -- interned by a word computation.  Forcing a child thunk can still run
 -- typechecker code earlier than the thunk's consumer would (a
 -- substitution's TyVar comparisons, say), and that code interns two
--- kinds of generated name: a fresh _tctyvarN, since Eq TyVar forces the
--- Ids of two variables with equal numbers, and the _tctempN that a
--- newTVar's lazy position retains (TIMonad: pos = getPosition x with x
--- the value binder; id_pos is strict, so forcing the TyVar's Id forces
--- the binder's Id and interns its name).  The witness that no output
--- can have moved with them has three parts, under -trace-ctype-stats:
+-- kinds of generated name: a fresh _tctyvarN (noted, not interned, by
+-- a comparison of two variables with equal numbers; see TyVarG), and
+-- the _tctempN that a newTVar's lazy position retains
+-- (TIMonad: pos = getPosition x with x the value binder; forcing the
+-- position forces the binder's Id and interns its name).  The witness
+-- that no output can have moved with them has three parts, under
+-- -trace-ctype-stats:
 --
 --   intern_other = 0: every string interned while a word was computed
 --     is exactly _tctyvarN or _tctempN (withInternDelta prints anything
@@ -840,10 +932,12 @@ instance HasPosition Type where
     getPosition (TDefMonad pos) = pos
 
 instance NFData TyVar where
-    rnf (TyVar i n k) = rnf3 i n k
+    rnf (TyVarU i n k) = rnf3 i n k
+    rnf (TyVarG p n k _) = case genForced p n of () -> rnf k
 
 instance HasPosition TyVar where
-    getPosition (TyVar name _ _) = getPosition name
+    getPosition (TyVarU name _ _) = getPosition name
+    getPosition (TyVarG p n _ _) = case genForced p n of () -> p
 
 getTyVarId :: TyVar -> Id
 getTyVarId = tv_name
@@ -1248,7 +1342,7 @@ seqCType t@(TDefMonad _) = t
 
 ----
 setTypePosition :: Position -> Type -> Type
-setTypePosition pos (TVar (TyVar id n k)) = (TVar (TyVar (setIdPosition pos id) n k))
+setTypePosition pos (TVar v) = TVar (setTyVarPosition pos v)
 setTypePosition pos (TCon (TyCon id k s)) = (TCon (TyCon (setIdPosition pos id) k s))
 setTypePosition pos (TCon (TyNum n _)) = (TCon (TyNum n pos))
 setTypePosition pos (TCon (TyStr s _)) = (TCon (TyStr s pos))
