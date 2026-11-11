@@ -110,7 +110,8 @@ jobs:
 
           if [ "${{ inputs.bluehs }}" = true ]; then
               if [ -f util/bluehs/mk-dist.sh ]; then
-                  make install-bluehs
+                  # Capped like install-src, as in bluehs.yml: mk-dist.sh builds the libraries again
+                  make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-bluehs
               else
                   echo "::warning::bluehs requested, but this tree has no util/bluehs/mk-dist.sh"
               fi
