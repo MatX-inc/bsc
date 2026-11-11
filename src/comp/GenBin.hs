@@ -1,8 +1,10 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module GenBin(genBinFile, readBinFile, readBinFileStrict, readBinPackage) where
+module GenBin(genBinFile, readBinFile, readBinFileStrict, readBinPackage,
+              CPackageBin(..), stripImpSigs, checkRoundTrip, sortSched) where
 
 import Control.Monad(when)
+import qualified Data.Set as S
 import Control.Exception(evaluate)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -18,8 +20,8 @@ import CSyntax
 import Undefined(UndefKind(UNoMatch))
 import Prim(PrimOp(PrimPoisonedDef))
 import BinData
+import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import FileIOUtil(writeBinaryFileCatch)
-import PFPrint
 
 import Debug.Trace
 import IOUtil(progArgs)
@@ -144,7 +146,9 @@ instance Bin CDefn where
     writeBytes (CIValueSign i cqt) = do putI 9; toBin i; toBin cqt
     writeBytes (CItype ik is poss) = do putI 10; toBin ik; toBin is; toBin poss
     writeBytes (CPragma p) = do putI 11; toBin p
-    writeBytes def = internalError $ "GenBin.Bin(CDefn) not supported " ++ ppReadable def
+    writeBytes (Cinstance qt ds) = do putI 12; toBin qt; toBin ds
+    writeBytes (CValue i cs) = do putI 13; toBin i; toBin cs
+    writeBytes (CValueSign d) = do putI 14; toBin d
     readBytes = do when doTrace $ traceM ("read CDefn")
                    tag <- getI
                    case tag of
@@ -207,6 +211,9 @@ instance Bin CDefn where
                               ik <- fromBin; is <- fromBin; poss <- fromBin
                               return (CItype ik is poss)
                      11 -> do p <- fromBin; return (CPragma p)
+                     12 -> do qt <- fromBin; ds <- fromBin; return (Cinstance qt ds)
+                     13 -> do i <- fromBin; cs <- fromBin; return (CValue i cs)
+                     14 -> do d <- fromBin; return (CValueSign d)
                      n  -> internalError $ "GenBin.Bin(CDefn).readBytes: " ++ show n
 
 -- ----------
@@ -215,14 +222,29 @@ instance Bin CDefn where
 instance Bin IdK where
     writeBytes (IdK i)       = do putI 0; toBin i
     writeBytes (IdKind i k)  = do putI 1; toBin i; toBin k
-    writeBytes (IdPKind i k) =
-        internalError $ "GenBin.Bin(IdK).writeBytes: IdPKind"
+    writeBytes (IdPKind i k) = do putI 2; toBin i; toBin k
     readBytes = do when doTrace $ traceM ("read IdK")
                    tag <- getI;
                    case tag of
                      0 -> do i <- fromBin; return (IdK i)
                      1 -> do i <- fromBin; k <- fromBin; return (IdKind i k)
+                     2 -> do i <- fromBin; k <- fromBin; return (IdPKind i k)
                      n -> internalError $ "GenBin.Bin(IdK).readBytes: " ++ show n
+
+instance Bin PartialKind where
+    writeBytes PKNoInfo      = putI 0
+    writeBytes PKStar        = putI 1
+    writeBytes PKNum         = putI 2
+    writeBytes PKStr         = putI 3
+    writeBytes (PKfun k1 k2) = do putI 4; toBin k1; toBin k2
+    readBytes = do tag <- getI
+                   case tag of
+                     0 -> return PKNoInfo
+                     1 -> return PKStar
+                     2 -> return PKNum
+                     3 -> return PKStr
+                     4 -> do k1 <- fromBin; k2 <- fromBin; return (PKfun k1 k2)
+                     n -> internalError $ "GenBin.Bin(PartialKind).readBytes: " ++ show n
 
 -- ----------
 -- Bin CInternalSummand
@@ -397,7 +419,7 @@ instance Bin CExpr where
     writeBytes (CStructT t ies) = do putI 34; toBin t; toBin ies
     writeBytes (CSelectT i1 i2) = do putI 35; toBin i1; toBin i2
     writeBytes (CLitT t l) = do putI 36; toBin t; toBin l
-    writeBytes (CAnyT pos uk t) = do putI 37; toBin pos; toBin uk
+    writeBytes (CAnyT pos uk t) = do putI 37; toBin pos; toBin uk; toBin t
     writeBytes (CmoduleVerilogT t e b vc vr va vf vs vp) =
         do putI 38; toBin t; toBin e; toBin b; toBin vc; toBin vr; toBin va;
            toBin vf; toBin vs; toBin vp
@@ -523,7 +545,7 @@ instance Bin CStmt where
             1 -> do p <- fromBin; me <- fromBin; ps <- fromBin; e <- fromBin;
                     return (CSBind p me ps e)
             2 -> do ds <- fromBin; return (CSletseq ds)
-            3 -> do ds <- fromBin; return (CSletseq ds)
+            3 -> do ds <- fromBin; return (CSletrec ds)
             4 -> do me <- fromBin; e <- fromBin; return (CSExpr me e)
             n -> internalError $ "GenBin.Bin(CStmt).readBytes: " ++ show n
 
@@ -756,3 +778,214 @@ instance Bin (IConInfo a) where
                      18 -> do pos <- fromBin; return (ICPosition t pos)
                      19 -> do it <- fromBin; return (ICType t it)
                      n  -> internalError $ "GenBin.Bin(IConInfo).readBytes: " ++ show n
+
+-- ----------
+-- The package as the front end leaves it
+
+-- A package as the .bo signature encoding cannot hold it: with every
+-- CDefn's derivings, and with each imported signature reduced to a
+-- reference (qualified, package name), since the signatures belong to
+-- the imported packages' files.  The file a signature was read from is
+-- left out (read back as ""), so that the encoding does not depend on
+-- where the imports were found.
+newtype CPackageBin = CPackageBin CPackage
+
+-- The package as CPackageBin reads it back
+stripImpSigs :: CPackage -> CPackage
+stripImpSigs (CPackage i es is sigs fs ds incs) =
+    CPackage i es is (map strip sigs) fs ds incs
+  where strip (CImpSign _ q (CSignature n _ _ _)) =
+            CImpSign "" q (CSignature n [] [] [])
+
+instance Bin CPackageBin where
+    writeBytes (CPackageBin (CPackage i es is sigs fs ds incs)) =
+        section "CPackage" $
+        do toBin i; toBin es; toBin is
+           toBin [ (q, n) | CImpSign _ q (CSignature n _ _ _) <- sigs ]
+           toBin fs; toBin (map FullCDefn ds); toBin incs
+    readBytes = do i <- fromBin; es <- fromBin; is <- fromBin
+                   refs <- fromBin
+                   fs <- fromBin; ds <- fromBin; incs <- fromBin
+                   let sigs = [ CImpSign "" q (CSignature n [] [] [])
+                              | (q, n) <- refs ]
+                   return $ CPackageBin $
+                       CPackage i es is sigs fs [ d | FullCDefn d <- ds ] incs
+
+newtype FullCDefn = FullCDefn CDefn
+
+instance Bin FullCDefn where
+    writeBytes (FullCDefn d) = do toBin d; toBin (derivs d)
+      where derivs (Cdata { cd_derivings = ds }) = ds
+            derivs (Cstruct _ _ _ _ _ ds) = ds
+            derivs _ = []
+    readBytes = do d <- fromBin
+                   ds <- fromBin
+                   return $ FullCDefn $
+                       case d of
+                         Cdata {} -> d { cd_derivings = ds }
+                         Cstruct vis st ik is fs _ -> Cstruct vis st ik is fs ds
+                         _ -> d
+
+instance Bin CDeriving where
+    writeBytes (CStock tcs) = do putI 0; toBin tcs
+    writeBytes (CVia tc i)  = do putI 1; toBin tc; toBin i
+    readBytes = do tag <- getI
+                   case tag of
+                     0 -> do tcs <- fromBin; return (CStock tcs)
+                     1 -> do tc <- fromBin; i <- fromBin; return (CVia tc i)
+                     n -> internalError $ "GenBin.Bin(CDeriving).readBytes: " ++ show n
+
+instance Bin CExport where
+    writeBytes (CExpVar i)    = do putI 0; toBin i
+    writeBytes (CExpCon i)    = do putI 1; toBin i
+    writeBytes (CExpConAll i) = do putI 2; toBin i
+    writeBytes (CExpPkg i)    = do putI 3; toBin i
+    readBytes = do tag <- getI
+                   i <- fromBin
+                   case tag of
+                     0 -> return (CExpVar i)
+                     1 -> return (CExpCon i)
+                     2 -> return (CExpConAll i)
+                     3 -> return (CExpPkg i)
+                     n -> internalError $ "GenBin.Bin(CExport).readBytes: " ++ show n
+
+instance Bin CImport where
+    writeBytes (CImpId q i) = do toBin q; toBin i
+    readBytes = do q <- fromBin; i <- fromBin; return (CImpId q i)
+
+instance Bin CInclude where
+    writeBytes (CInclude s) = toBin s
+    readBytes = CInclude <$> fromBin
+
+-- ----------
+-- Round trips (the hidden flag -check-bin-roundtrip)
+
+-- Encode in format 2, decode strictly and encode again: the encodings
+-- must agree byte for byte and the decoded value must equal the
+-- original (CSyntax equality, which ignores positions).
+checkRoundTrip :: (Bin w, Eq a) => String -> (a -> w) -> (w -> a) -> a -> IO ()
+checkRoundTrip what wrap unwrap x = do
+    bs <- BL.toStrict <$> encodeV2 (wrap x)
+    let y = unwrap (decodeStrict bs)
+    bs' <- BL.toStrict <$> encodeV2 (wrap y)
+    when (bs' /= bs) $
+        internalError ("GenBin.checkRoundTrip: " ++ what ++ " re-encodes differently")
+    when (y /= x) $
+        internalError ("GenBin.checkRoundTrip: " ++ what ++ " decodes differently")
+
+-- The scheduling annotations of an imported Verilog module are encoded as
+-- bit matrices (BinData's MethodConflictInfo), which keep each conflict
+-- list as a set, so packages are compared with those lists sorted.
+class SortSched a where
+    sortSched :: a -> a
+
+instance (SortSched a) => SortSched [a] where
+    sortSched = map sortSched
+
+instance (SortSched a) => SortSched (Maybe a) where
+    sortSched = fmap sortSched
+
+instance SortSched CPackage where
+    sortSched (CPackage i es is sigs fs ds incs) =
+        CPackage i es is sigs fs (sortSched ds) incs
+
+instance SortSched CDefn where
+    sortSched (Cclass incoh ps ik is deps ats fs) =
+        Cclass incoh ps ik is deps ats (sortSched fs)
+    sortSched (Cstruct vis st ik is fs ds) = Cstruct vis st ik is (sortSched fs) ds
+    sortSched (Cinstance qt ds) = Cinstance qt (sortSched ds)
+    sortSched (CValue i cs) = CValue i (sortSched cs)
+    sortSched (CValueSign d) = CValueSign (sortSched d)
+    sortSched d = d
+
+instance SortSched CField where
+    sortSched f = f { cf_default = sortSched (cf_default f) }
+
+instance SortSched CDef where
+    sortSched (CDef i qt cs) = CDef i qt (sortSched cs)
+    sortSched (CDefT i vs qt cs) = CDefT i vs qt (sortSched cs)
+
+instance SortSched CClause where
+    sortSched (CClause ps qs e) = CClause ps (sortSched qs) (sortSched e)
+
+instance SortSched CQual where
+    sortSched (CQGen t p e) = CQGen t p (sortSched e)
+    sortSched (CQFilter e) = CQFilter (sortSched e)
+
+instance SortSched CDefl where
+    sortSched (CLValueSign d qs) = CLValueSign (sortSched d) (sortSched qs)
+    sortSched (CLValue i cs qs) = CLValue i (sortSched cs) (sortSched qs)
+    sortSched (CLMatch p e) = CLMatch p (sortSched e)
+
+instance SortSched CCaseArm where
+    sortSched (CCaseArm p qs e) = CCaseArm p (sortSched qs) (sortSched e)
+
+instance SortSched CStmt where
+    sortSched (CSBindT p me ps qt e) = CSBindT p (sortSched me) ps qt (sortSched e)
+    sortSched (CSBind p me ps e) = CSBind p (sortSched me) ps (sortSched e)
+    sortSched (CSletseq ds) = CSletseq (sortSched ds)
+    sortSched (CSletrec ds) = CSletrec (sortSched ds)
+    sortSched (CSExpr me e) = CSExpr (sortSched me) (sortSched e)
+
+instance SortSched CMStmt where
+    sortSched (CMStmt s) = CMStmt (sortSched s)
+    sortSched (CMrules e) = CMrules (sortSched e)
+    sortSched (CMinterface e) = CMinterface (sortSched e)
+    sortSched (CMTupleInterface pos es) = CMTupleInterface pos (sortSched es)
+
+instance SortSched CRule where
+    sortSched (CRule ps me qs e) = CRule ps (sortSched me) (sortSched qs) (sortSched e)
+    sortSched (CRuleNest ps me qs rs) =
+        CRuleNest ps (sortSched me) (sortSched qs) (sortSched rs)
+
+instance SortSched COp where
+    sortSched (CRand e) = CRand (sortSched e)
+    sortSched o = o
+
+instance SortSched CExpr where
+    sortSched e =
+      case e of
+        CLam i b -> CLam i (sortSched b)
+        CLamT i t b -> CLamT i t (sortSched b)
+        Cletseq ds b -> Cletseq (sortSched ds) (sortSched b)
+        Cletrec ds b -> Cletrec (sortSched ds) (sortSched b)
+        CSelect b i -> CSelect (sortSched b) i
+        CCon i es -> CCon i (sortSched es)
+        Ccase pos b arms -> Ccase pos (sortSched b) (sortSched arms)
+        CStruct mb i fs -> CStruct mb i (onSnd fs)
+        CStructUpd b fs -> CStructUpd (sortSched b) (onSnd fs)
+        Cwrite pos a b -> Cwrite pos (sortSched a) (sortSched b)
+        CApply f es -> CApply (sortSched f) (sortSched es)
+        CTaskApply f es -> CTaskApply (sortSched f) (sortSched es)
+        CTaskApplyT f t es -> CTaskApplyT (sortSched f) t (sortSched es)
+        CBinOp a i b -> CBinOp (sortSched a) i (sortSched b)
+        CHasType b qt -> CHasType (sortSched b) qt
+        Cif pos a b c -> Cif pos (sortSched a) (sortSched b) (sortSched c)
+        CSub pos a b -> CSub pos (sortSched a) (sortSched b)
+        CSub2 a b c -> CSub2 (sortSched a) (sortSched b) (sortSched c)
+        CSubUpdate pos a (h, l) b ->
+            CSubUpdate pos (sortSched a) (sortSched h, sortSched l) (sortSched b)
+        Cmodule pos ss -> Cmodule pos (sortSched ss)
+        Cinterface pos mi ds -> Cinterface pos mi (sortSched ds)
+        CmoduleVerilog m ui c r as fs sch ps ->
+            CmoduleVerilog (sortSched m) ui c r (onSnd as) fs (sortSchedInfo sch) ps
+        Cdo b ss -> Cdo b (sortSched ss)
+        Caction pos ss -> Caction pos (sortSched ss)
+        Crules ps rs -> Crules ps (sortSched rs)
+        COper ops -> COper (sortSched ops)
+        CCon1 i1 i2 b -> CCon1 i1 i2 (sortSched b)
+        CSelectTT i1 b i2 -> CSelectTT i1 (sortSched b) i2
+        CConT i1 i2 es -> CConT i1 i2 (sortSched es)
+        CStructT t fs -> CStructT t (onSnd fs)
+        CmoduleVerilogT t m ui c r as fs sch ps ->
+            CmoduleVerilogT t (sortSched m) ui c r (onSnd as) fs (sortSchedInfo sch) ps
+        CTApply f ts -> CTApply (sortSched f) ts
+        -- the rest hold no expressions
+        _ -> e
+      where onSnd xs = [ (a, sortSched x) | (a, x) <- xs ]
+            sortSchedInfo (SchedInfo mci rms rbm ccm) =
+                SchedInfo (sortMCI mci) rms rbm ccm
+            sortMCI (MethodConflictInfo cfs sbs mes ps sbrs cs exts) =
+                MethodConflictInfo (asSet cfs) (asSet sbs) mes (asSet ps)
+                                   (asSet sbrs) (asSet cs) exts
+            asSet = S.toAscList . S.fromList

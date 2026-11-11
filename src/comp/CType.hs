@@ -439,8 +439,8 @@ instance Ord TyCon where
 -- caller's TyCon untouched, so positions, kinds, sort payloads and Id
 -- properties stay exactly where the caller put them.  The word is a pure
 -- function of the node's structure under the structural Eq Type, so its
--- only uses are an equality shortcut (equal words => Eq-equal) and the
--- two flags:
+-- only uses are an equality shortcut (equal words => Eq-equal; BinData's
+-- format 2 writer also finds memo candidates by it) and the two flags:
 --
 --   ground: w >= 0.  No TVar, TGen or TDefMonad anywhere inside.
 --   normal: ground and odd w.  Additionally no type synonym (TItype) or

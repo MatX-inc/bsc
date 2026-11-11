@@ -497,6 +497,7 @@ describeFlags showHidden =
 
 traceflags :: [String]
 traceflags = [
+          "check-bin-roundtrip",
           "check-csubst-shortcut",
           "check-ctype-ids",
           "debug-eval-free-vars",
