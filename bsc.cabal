@@ -1,7 +1,7 @@
 cabal-version: 3.16
 
 -- Bluespec compiler package: one library (src/comp, vendored Parsec, and Tcl
--- and solver bindings) plus eight executables under src/comp/app (doc/cabal.md).
+-- and solver bindings) plus twelve executables under src/comp/app (doc/cabal.md).
 name: bsc
 version: 2026.7
 synopsis: Bluespec Compiler (BSC)
@@ -161,6 +161,7 @@ library
     CtxRed
     DOT
     DPIWrappers
+    DefProp
     Depend
     Deriving
     DisjointTest
@@ -205,6 +206,7 @@ library
     IOMutVar
     IOUtil
     IPrims
+    ISimpDicts
     ISimplify
     ISplitIf
     IStateLoc
@@ -231,6 +233,7 @@ library
     LambdaCalc
     LambdaCalcUtil
     Lex
+    LiftDicts
     ListMap
     ListUtil
     Literal
@@ -333,6 +336,8 @@ library
     Verilog
     Version
     Warmup
+    WaveCheck
+    WireAnalysis
     Wires
     Yices
     YicesFFI
@@ -384,3 +389,39 @@ executable vcdcheck
   import: common_exes
   ghc-options: -main-is Main_vcdcheck
   main-is: vcdcheck.hs
+
+-- MatX production tools. bo2bloogle and tconcheck use only the library;
+-- fstcheck and fstscopes also compile libfst (the src/vendor/libfst
+-- submodule) and link libz, so those stay out of the library and bsc.
+executable bo2bloogle
+  import: common_exes
+  ghc-options: -main-is Main_bo2bloogle
+  main-is: bo2bloogle.hs
+
+executable tconcheck
+  import: common_exes
+  ghc-options: -main-is Main_tconcheck
+  main-is: tconcheck.hs
+
+common fst
+  c-sources:
+    src/comp/fstscopes_hier.c,
+    src/vendor/libfst/src/fstapi.c,
+    src/vendor/libfst/src/fastlz.c,
+    src/vendor/libfst/src/lz4.c,
+  -- fstapi.c includes <config.h>, supplied from src/libfst_config.
+  include-dirs:
+    src/vendor/libfst/src
+    src/libfst_config
+  extra-libraries: z
+
+executable fstcheck
+  import: common_exes, fst
+  ghc-options: -main-is Main_fstcheck
+  main-is: fstcheck.hs
+  other-modules: FSTRead
+
+executable fstscopes
+  import: common_exes, fst
+  ghc-options: -main-is Main_fstscopes
+  main-is: fstscopes.hs
