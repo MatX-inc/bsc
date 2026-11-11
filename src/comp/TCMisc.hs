@@ -715,7 +715,8 @@ sat dvs ps p =
 -- taken only when the stacks have room for the solve, no given, explicit
 -- given or outer stack entry could meet a nested goal of the solve
 -- (lookfor's equality on undetermined positions, decided on keys without
--- forcing), no such entry or last-resort variable holds an output
+-- forcing, where a position without a key is no witness that they
+-- differ), no such entry or last-resort variable holds an output
 -- variable, and the output variables unify with the recorded types;
 -- otherwise the predicate is solved as without the pool (and after
 -- refuseLimit refusals by the context guard the key is not looked up
@@ -960,17 +961,19 @@ applyKeyUpdates ups0 gks0 = go 0 (reverse ups0) gks0
     go _ _ [] = internalError "applyKeyUpdates"
 
 -- One given or stack entry of class c, whose types have keys pks, can
--- meet no nested goal of the solve (see goalsClear).
+-- meet no nested goal of the solve (see goalsClear).  A row clears on a
+-- witness that the positions differ: a type variable, or keys that no
+-- nested goal had.  A position without a key is no witness: it can hold
+-- an output variable (a given with flexible variables, such as a
+-- polymorphic field's proviso), which varsOK sees only in a PVar key.
 predClear :: [Int] -> Int -> Class -> IM.IntMap (S.Set [Int], Bool) -> [PK] -> Bool
 predClear outNums c0 c rows pks = varsOK && all rowClear (IM.toList rows)
   where
     varsOK = and [ n < c0 && n `notElem` outNums | PVar ns <- pks, n <- ns ]
     rowClear (r, (set, unknown)) =
       let und = [ k | (False, k) <- zip (funDeps c !! r) pks ]
-      in  if any isPVar und then True
-          else if all isPKey und
-               then not unknown && not (S.member [ k | PKey k <- und ] set)
-               else S.null set && not unknown
+      in  any isPVar und ||
+          (all isPKey und && not unknown && not (S.member [ k | PKey k <- und ] set))
 
 isPVar :: PK -> Bool
 isPVar (PVar _) = True
