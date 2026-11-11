@@ -126,6 +126,7 @@ import Data.Word
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Unsafe as BSU
 import qualified Data.ByteString.Short as SBS
+import qualified Data.ByteString.Short.Internal as SBSI(copyToPtr)
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Text as TS
 import qualified Data.Text.Encoding as TSE
@@ -372,6 +373,18 @@ wbString b s
       let !u = TSE.encodeUtf8 (TS.pack s)
       wbIdx b (BS.length u)
       wbBS b u
+
+-- The Bin String encoding of an FString's spelling, copying its stored
+-- bytes when they are what wbString writes (see SpeedyString's UTF-8)
+wbFString :: WBuf -> FString -> IO ()
+wbFString b f =
+  case fstringUtf8 f of
+    Just p -> do let n = SBS.length p
+                 wbIdx b n
+                 (d, len) <- wbReserve b n
+                 SBSI.copyToPtr p 0 (d `plusPtr` len) n
+                 wbSetLen b (len + n)
+    Nothing -> wbString b (getFString f)
 
 -- A u32, least significant byte first
 wbU32 :: WBuf -> Int -> IO ()
@@ -1042,8 +1055,8 @@ instance (Ord a, Bin a) => Bin (S.Set a) where
 -- Bin Ids, Positions, etc.
 
 instance Bin FString where
-  writeBytes = writeBytes . getFString
-  readBytes = mkFString <$> readBytes
+  writeBytes f = Out $ \w -> do { b <- curBuf w; wbFString b f }
+  readBytes = readFString
   -- FStrings are shared
   toBin s = Out $ \w -> stringIdx w s >>= putIdx w
   fromBin = readShared
@@ -1054,6 +1067,17 @@ instance {-# OVERLAPPABLE #-} Bin String where
                        bs <- getBS len
                        let !t = TSE.decodeUtf8 bs
                        return (TS.unpack t)
+
+-- mkFString of a Bin String, unforced.  The bytes are checked now, as the
+-- String reader decodes them now; well-formed UTF-8 is interned from its
+-- bytes (see SpeedyString's UTF-8), anything else as before.
+readFString :: In FString
+readFString = do len <- fromBin
+                 bs <- getBS len
+                 case mkFStringUtf8 bs of
+                   Just f -> return f
+                   Nothing -> do let !t = TSE.decodeUtf8 bs
+                                 return (mkFString (TS.unpack t))
 
 instance Bin Position where
     writeBytes (Position fs l c is_stdlib) = section "Position" $ do
@@ -2018,7 +2042,7 @@ finishContainer fmt w finishTables = do
   when (length strs /= nStr) $ internalError "BinData.finishW: string table"
   sb <- wbNew 65536
   wbU32 sb nStr
-  mapM_ (wbString sb . getFString) strs
+  mapM_ (wbFString sb) strs
   strBytes <- wbFreeze sb
   chunks <- readIORef (wChunks w)
   nChunks <- readIORef (wNChunks w)
@@ -2527,9 +2551,9 @@ readStrTable walk s ft =
       internalError "BinData.decode: malformed container (string count)"
     let loop i acc
           | i >= n    = return (reverse acc)
-          | otherwise = do str <- readBytes
-                           fs <- if walk then return (mkFString str)
-                                 else In (\_ -> evaluateST (mkFString str))
+          | otherwise = do f <- readFString
+                           fs <- if walk then return f
+                                 else In (\_ -> evaluateST f)
                            loop (i + 1) (fs : acc)
     loop (0 :: Int) []
 

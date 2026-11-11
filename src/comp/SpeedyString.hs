@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE BangPatterns #-}
 module SpeedyString(SString, toString, fromString, fromEnumName,
-                    noteGenName,
+                    noteGenName, utf8Bytes, fromUtf8,
                     (++), concat, filter,
                     InternSnapshot(..), snapshotInternState, validSnapshot,
                     snapshotProblem, restoreInternState,
@@ -23,6 +23,8 @@ import Data.IORef(IORef, newIORef, readIORef, writeIORef)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
 import qualified Data.Set as Set
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Unsafe as BSU
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Short as SBS
@@ -441,6 +443,67 @@ internBytes h p =
        case r of
          Right i -> return (SString (idOf i))
          Left j -> fmap (SString . idOf) (insert t j h 0 p)
+
+
+-- UTF-8
+--
+-- BinData stores a string as Data.Text's UTF-8 encoding of it.  A packed
+-- spelling is that encoding unless it holds a surrogate, which Data.Text
+-- replaces with U+FFFD.  Well-formed UTF-8 holds no surrogate, so it is
+-- the packed spelling of the String decodeUtf8 makes of it, and interning
+-- it as concat does gives what fromString of that String gives.
+
+-- | encodeUtf8 (pack (toString s)), when that is s's packed spelling.
+utf8Bytes :: SString -> Maybe SBS.ShortByteString
+utf8Bytes (SString d) = unsafePerformIO $
+                        do t <- readIORef table
+                           i <- indexOf d
+                           p <- if i < 0 || i >= tNext t then err else bytesOf t i
+                           return (if hasSurrogate p then Nothing else Just p)
+
+-- | fromString (unpack (decodeUtf8 b)), when b is well-formed UTF-8: b is
+-- checked now and interned when the SString is forced.
+fromUtf8 :: BS.ByteString -> Maybe SString
+fromUtf8 b
+    | wellFormedUtf8 b = let !p = SBS.toShort b in Just (internUtf8 p)
+    | otherwise = Nothing
+
+internUtf8 :: SBS.ShortByteString -> SString
+internUtf8 p = unsafePerformIO $
+               case genKeyBytes p of
+                 Just k  -> internGen k
+                 Nothing -> internBytes (hashBytes p) p
+
+-- 0xED is only ever a lead byte, and a surrogate's next byte is 0xA0 .. 0xBF
+hasSurrogate :: SBS.ShortByteString -> Bool
+hasSurrogate p = go 0
+  where n = SBS.length p
+        go i | i + 1 >= n = False
+             | byteAt p i == 0xED && byteAt p (i + 1) >= 0xA0 = True
+             | otherwise = go (i + 1)
+
+-- The Unicode Standard's Table 3-7: the shortest form of each code point
+-- other than a surrogate.
+wellFormedUtf8 :: BS.ByteString -> Bool
+wellFormedUtf8 b = go 0
+  where
+    n = BS.length b
+    at i = BSU.unsafeIndex b i
+    cont i lo hi = i < n && at i >= lo && at i <= hi
+    tail2 i = cont i 0x80 0xBF && cont (i + 1) 0x80 0xBF
+    go i
+      | i >= n = True
+      | c < 0x80 = go (i + 1)
+      | c < 0xC2 = False
+      | c < 0xE0 = cont (i + 1) 0x80 0xBF && go (i + 2)
+      | c == 0xE0 = cont (i + 1) 0xA0 0xBF && cont (i + 2) 0x80 0xBF && go (i + 3)
+      | c == 0xED = cont (i + 1) 0x80 0x9F && cont (i + 2) 0x80 0xBF && go (i + 3)
+      | c < 0xF0 = tail2 (i + 1) && go (i + 3)
+      | c == 0xF0 = cont (i + 1) 0x90 0xBF && tail2 (i + 2) && go (i + 4)
+      | c < 0xF4 = cont (i + 1) 0x80 0xBF && tail2 (i + 2) && go (i + 4)
+      | c == 0xF4 = cont (i + 1) 0x80 0x8F && tail2 (i + 2) && go (i + 4)
+      | otherwise = False
+      where c = at i
 
 
 -- Reserved ids
