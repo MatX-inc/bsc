@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleInstances, TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE PatternSynonyms #-}
 module IExpandUtils(
         HPred, PExpr(..), pExprToHExpr, predToIExpr, pConj, pConjs,
         pAtom, pIf, pSel, normPConj,
@@ -65,8 +66,10 @@ module IExpandUtils(
 ) where
 
 import Control.Monad(when, liftM)
-import Control.Monad.State.Strict(StateT(..), evalStateT, lift, liftIO)
+import Control.Monad.Fix(MonadFix(..))
+import Control.Monad.State.Strict(StateT, evalStateT, lift, MonadIO(..))
 import qualified Control.Monad.State.Strict as St
+import GHC.Exts(oneShot)
 import Data.IORef
 import System.IO.Unsafe
 import Data.List
@@ -490,7 +493,67 @@ type RulesBlobs = [(Bool, (HClock, HReset), IStateLoc, HPred, HExpr)]
 -- a writer monad for expanding rules lazily (for PrimModuleFix)
 -- it has a state monad (for result state)
 -- layered on top of IO for IORefs and errors/warnings/progress messages
-type G = StateT GS IO
+--
+-- G is StateT GS IO from Control.Monad.State.Strict, method for method,
+-- except that every G is built through the pattern G, which marks the state
+-- lambda one-shot, so GHC can eta-expand a function returning G over the
+-- state as it does over IO's own state, instead of building a closure per
+-- call that waits for it (Note [The one-shot state monad trick] in
+-- GHC.Utils.Monad).  The hint is not checked: a G value that is run more than
+-- once redoes the pure work in front of its first use of the state.
+newtype G a = G' (GS -> IO (a, GS))
+
+pattern G :: (GS -> IO (a, GS)) -> G a
+pattern G m <- G' m
+  where G m = G' (oneShot m)
+{-# COMPLETE G #-}
+
+unG :: G a -> GS -> IO (a, GS)
+unG (G' m) = m
+{-# INLINE unG #-}
+
+instance Functor G where
+  fmap f m = G $ \ s -> fmap (\ (a, s') -> (f a, s')) (unG m s)
+  {-# INLINE fmap #-}
+
+instance Applicative G where
+  pure a = G $ \ s -> return (a, s)
+  {-# INLINE pure #-}
+  mf <*> mx = G $ \ s -> do
+      (f, s') <- unG mf s
+      (x, s'') <- unG mx s'
+      return (f x, s'')
+  {-# INLINE (<*>) #-}
+  m *> k = m >>= \ _ -> k
+  {-# INLINE (*>) #-}
+
+instance Monad G where
+  m >>= k = G $ \ s -> do
+      (a, s') <- unG m s
+      unG (k a) s'
+  {-# INLINE (>>=) #-}
+
+instance MonadFail G where
+  fail str = G $ \ _ -> fail str
+  {-# INLINE fail #-}
+
+instance MonadFix G where
+  mfix f = G $ \ s -> mfix (\ ~(a, _) -> unG (f a) s)
+  {-# INLINE mfix #-}
+
+instance MonadIO G where
+  liftIO m = G $ \ s -> do
+      a <- m
+      return (a, s)
+  {-# INLINE liftIO #-}
+
+instance St.MonadState GS G where
+  state f = G (return . f)
+  {-# INLINE state #-}
+  get = St.state (\ s -> (s, s))
+  {-# INLINE get #-}
+  put s = St.state (\ _ -> ((), s))
+  {-# INLINE put #-}
 
 -- G's state: the counters, which are reached without forcing GState, and
 -- GState, which get, gets, put and modify read and replace without
@@ -499,23 +562,23 @@ data GS = GS !GRefs GState
 
 {-# INLINE get #-}
 get :: G GState
-get = StateT $ \ st@(GS _ s) -> return (s, st)
+get = G $ \ st@(GS _ s) -> return (s, st)
 
 {-# INLINE gets #-}
 gets :: (GState -> a) -> G a
-gets f = StateT $ \ st@(GS _ s) -> return (f s, st)
+gets f = G $ \ st@(GS _ s) -> return (f s, st)
 
 {-# INLINE put #-}
 put :: GState -> G ()
-put s = StateT $ \ (GS r _) -> return ((), GS r s)
+put s = G $ \ (GS r _) -> return ((), GS r s)
 
 {-# INLINE modify #-}
 modify :: (GState -> GState) -> G ()
-modify f = StateT $ \ (GS r s) -> return ((), GS r (f s))
+modify f = G $ \ (GS r s) -> return ((), GS r (f s))
 
 {-# INLINE getRefs #-}
 getRefs :: G GRefs
-getRefs = StateT $ \ st@(GS r _) -> return (r, st)
+getRefs = G $ \ st@(GS r _) -> return (r, st)
 
 -- The evaluator's counters.  Each value is returned as "s `seq` n", s the
 -- GState at the call, so that forcing it forces that GState, as forcing a
@@ -556,14 +619,14 @@ newGRefs flags = do
 -- a counter's value (see GRefs)
 {-# INLINE readCounter #-}
 readCounter :: (GRefs -> IORef a) -> G a
-readCounter field = StateT $ \ st@(GS r s) -> do
+readCounter field = G $ \ st@(GS r s) -> do
   n <- readIORef (field r)
   return (s `seq` n, st)
 
 -- a counter's value (see GRefs), advancing the counter to "next" of it
 {-# INLINE takeCounter #-}
 takeCounter :: (GRefs -> IORef a) -> (a -> a) -> G a
-takeCounter field next = StateT $ \ st@(GS r s) -> do
+takeCounter field next = G $ \ st@(GS r s) -> do
   let ref = field r
   n <- readIORef ref
   writeIORef ref $! next n
@@ -751,7 +814,7 @@ runG :: ErrorHandle -> Flags ->
 runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
   do refs <- newGRefs flags
      let gs = initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps
-     (retval, GS _ gs') <- runStateT gFn (GS refs gs)
+     (retval, GS _ gs') <- unG gFn (GS refs gs)
      final_steps <- readIORef (stepNo refs)
      final_hp <- readIORef (hp refs)
      final_ffcallNo <- readIORef (ffcallNo refs)
