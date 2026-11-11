@@ -91,12 +91,14 @@ add_pkg() {
 	PKG_COPYR=`"${GHCPKG}" field --ipid ${PKG_ID} copyright --simple-output`
 	PKG_DEPS=`"${GHCPKG}" field --ipid ${PKG_ID} depends --simple-output`
 
-	if [ "${PKG_LIC}" != "BSD-3-Clause" ] ; then
-	    if [ "${PKG_LIC}" != "BSD-2-Clause" ] ; then
+	# Only permissive licenses, which ask that their notices be kept
+	case "${PKG_LIC}" in
+	    BSD-3-Clause | BSD-2-Clause | MIT | ISC) ;;
+	    *)
 		echo "Unexpected license for ${PKG_ID}: ${PKG_LIC}"
 		exit 1
-	    fi
-	fi
+		;;
+	esac
 
 	aset arr_name ${PKG_KEY} "${PKG_NAME}"
 	aset arr_ver ${PKG_KEY} "${PKG_VER}"
