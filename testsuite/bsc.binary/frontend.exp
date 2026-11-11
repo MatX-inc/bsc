@@ -124,6 +124,134 @@ string_does_not_occur [make_bsc_output_name FrontEndUsesBdpi.bs] "up to date"
 front_end_pass FrontEndUsesBdpi.bs -check-only
 string_does_not_occur [make_bsc_output_name FrontEndUsesBdpi.bs] "FrontEndBdpi.bsv"
 
+# Whether two files hold the same bytes
+proc compare_bytes { file1 file2 } {
+    global srcdir
+    global subdir
+    incr_stat "compare_bytes"
+    set dir [file join [absolute $srcdir] $subdir]
+    set data {}
+    foreach f [list $file1 $file2] {
+        if { ! [file exists [file join $dir $f]] } {
+            fail "`$f' does not exist"
+            return
+        }
+        set in [open [file join $dir $f] r]
+        fconfigure $in -translation binary
+        lappend data [read $in]
+        close $in
+    }
+    if { [lindex $data 0] eq [lindex $data 1] } {
+        pass "`$file1' has the bytes of `$file2'"
+    } else {
+        fail "`$file1' should have the bytes of `$file2'"
+    }
+}
+
+# Whether the file has lines holding each of the strings once, in order
+proc find_lines_in_order { filename strings } {
+    set re ""
+    foreach s $strings {
+        find_n_strings $filename $s 1
+        regsub -all {[][\\.*+?(){}^$|]} $s {\\&} esc
+        if { $re ne "" } {
+            append re {\n(.*\n)*}
+        }
+        append re ".*$esc.*"
+    }
+    find_regexp $filename $re
+}
+
+# -u -check-only gives each import it recompiles a -signature-only pass,
+# which writes the .bi that later packages read, and then a check; the
+# named package is only checked.  A chain FrontEndChainA <- FrontEndChainB
+# <- FrontEndChainC, from scratch:
+set chain_passes {
+    "compiling ./FrontEndChainA.bs"
+    "Interface file created: FrontEndChainA.bi"
+    "Typecheck input file created: FrontEndChainA.tci"
+    "Check file created: FrontEndChainA.chk"
+    "compiling ./FrontEndChainB.bs"
+    "Interface file created: FrontEndChainB.bi"
+    "Typecheck input file created: FrontEndChainB.tci"
+    "Check file created: FrontEndChainB.chk"
+    "compiling FrontEndChainC.bs"
+    "Check file created: FrontEndChainC.chk"
+    "All packages checked."
+}
+foreach p {FrontEndChainA FrontEndChainB FrontEndChainC} {
+    foreach s {bi tci chk bo} {
+        erase $p.$s
+    }
+}
+front_end_pass FrontEndChainC.bs -check-only "-v"
+find_lines_in_order [make_bsc_output_name FrontEndChainC.bs] $chain_passes
+# each pass reports FrontEndChainA's warnings, as the standalone compiles do
+find_n_strings [make_bsc_output_name FrontEndChainC.bs] "(P0223)" 2
+find_n_strings [make_bsc_output_name FrontEndChainC.bs] "(T0160)" 2
+string_does_not_occur [make_bsc_output_name FrontEndChainC.bs] "FrontEndChainC.bi"
+string_does_not_occur [make_bsc_output_name FrontEndChainC.bs] "FrontEndChainC.tci"
+foreach f {FrontEndChainA.bi FrontEndChainA.chk FrontEndChainB.bi FrontEndChainB.chk \
+           FrontEndChainC.chk} {
+    copy $f $f.u-out
+}
+
+# then checks only the named package again
+front_end_pass FrontEndChainC.bs -check-only
+string_does_not_occur [make_bsc_output_name FrontEndChainC.bs] "FrontEndChainA"
+string_does_not_occur [make_bsc_output_name FrontEndChainC.bs] "FrontEndChainB"
+find_n_strings [make_bsc_output_name FrontEndChainC.bs] "compiling FrontEndChainC.bs" 1
+
+# The imports' .bi and every .chk (which records the package's warnings)
+# are those of standalone -signature-only and -check-only compiles
+foreach p {FrontEndChainA FrontEndChainB} {
+    front_end_pass $p.bs -signature-only "" 1
+    compare_bytes $p.bi.u-out $p.bi
+}
+foreach p {FrontEndChainA FrontEndChainB FrontEndChainC} {
+    front_end_pass $p.bs -check-only "" 1
+    compare_bytes $p.chk.u-out $p.chk
+}
+
+# A changed import gets both passes again, and what imports it is checked
+# again
+touch FrontEndChainA.bs
+front_end_pass FrontEndChainC.bs -check-only "-v"
+find_lines_in_order [make_bsc_output_name FrontEndChainC.bs] $chain_passes
+
+# and so does an import missing only its .chk, or only its .bi
+foreach s {chk bi} {
+    erase FrontEndChainA.$s
+    front_end_pass FrontEndChainC.bs -check-only "-v"
+    find_lines_in_order [make_bsc_output_name FrontEndChainC.bs] $chain_passes
+}
+
+# A body error in the bottom package of a chain is reported by its check,
+# after its signature pass has written its .bi
+foreach p {FrontEndBodyErr FrontEndUsesBodyErr FrontEndChainBodyErr} {
+    foreach s {bi tci chk} {
+        erase $p.$s
+    }
+}
+front_end_fail FrontEndChainBodyErr.bs -check-only
+find_lines_in_order [make_bsc_output_name FrontEndChainBodyErr.bs] \
+    {"compiling ./FrontEndBodyErr.bs" "(T0080)"}
+string_does_not_occur [make_bsc_output_name FrontEndChainBodyErr.bs] "FrontEndUsesBodyErr"
+files_exist {FrontEndBodyErr.bi FrontEndBodyErr.tci}
+
+# and, continuing after errors, the first check that reads its .bi warns
+# that its check failed: the middle package's check, not a signature pass
+foreach p {FrontEndBodyErr FrontEndUsesBodyErr FrontEndChainBodyErr} {
+    foreach s {bi tci chk} {
+        erase $p.$s
+    }
+}
+front_end_fail FrontEndChainBodyErr.bs -check-only "-continue-after-errors"
+find_lines_in_order [make_bsc_output_name FrontEndChainBodyErr.bs] \
+    {"compiling ./FrontEndBodyErr.bs" "(T0080)" "compiling ./FrontEndUsesBodyErr.bs"
+     "(G0088)" "compiling FrontEndChainBodyErr.bs"
+     "All packages checked (some with errors)."}
+
 # The .chk does not depend on where the imported .bi files were found:
 # two copies of the import closure, at different paths
 nukedir frontend_paths
