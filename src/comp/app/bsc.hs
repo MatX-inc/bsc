@@ -40,6 +40,7 @@ import ParseOp
 import PFPrint
 import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
 import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, remapPath, storedPath,
+                    remapEncodedPath,
                     mkAName, mkVName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
@@ -710,7 +711,7 @@ compilePackage
 
     -- Generate binary version of the internal tree .bo file
     let bin_filename = putInDir (bdir flags) name binSuffix
-    let remapP = remapPositionFile (remapPathPrefix flags)
+    let remapP = remapPositionFile pwd (remapPathPrefix flags)
     genBinFile errh remapP bin_filename bi_sig bo_sig imodr
 
     -- Print one message for the two files
@@ -1084,8 +1085,8 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                   Nothing -> "Elaborated module file created: "
                   Just be ->
                       "Elaborated " ++ ppString be ++ " module file created: "
-           remapP = remapPositionFile (remapPathPrefix flags)
-           remapS = remapPath (remapPathPrefix flags)
+           remapP = remapPositionFile pwd (remapPathPrefix flags)
+           remapS = remapEncodedPath pwd (remapPathPrefix flags)
            modinfo = ABinModInfo {
                           abmi_path = remapS prefix,
                           abmi_src_name = remapS srcName,
@@ -1123,8 +1124,8 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
            afilename = mkAName (bdir flags) prefix modstr
            afilename_rel = getRelativeFilePath afilename
            abinPrintPrefix = "Elaborated error module file created: "
-           remapP = remapPositionFile (remapPathPrefix flags)
-           remapS = remapPath (remapPathPrefix flags)
+           remapP = remapPositionFile pwd (remapPathPrefix flags)
+           remapS = remapEncodedPath pwd (remapPathPrefix flags)
            modinfo = ABinModSchedErrInfo {
                           abmsei_path          = remapS prefix,
                           abmsei_src_name      = remapS srcName,
