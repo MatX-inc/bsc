@@ -98,8 +98,9 @@ data LState a = LState {
   -- id the interned pool would have chosen, without converting the
   -- evidence at all.  This restores the O(1)-per-occurrence cost for
   -- repeated dictionaries (the common case), which otherwise paid a
-  -- full iConvT+iConvExpr per occurrence.
-  dictPoolC :: M.Map CType [(CExpr, Id)],
+  -- full iConvT+iConvExpr per occurrence.  Each entry also carries the
+  -- chosen dictionary's converted evidence (see handleDict).
+  dictPoolC :: M.Map CType [(CExpr, Id, IExpr a)],
   -- The lifted definitions, most recent first (reversed at the end, so
   -- the emitted order is lifting order and thus deterministic)
   liftedDefs :: [IDef a],
@@ -316,7 +317,11 @@ handleDict incoherent p t e = do
     CApply (CVar i') [] -> return $ Right i'
     _ -> do
       poolC <- gets dictPoolC
-      case [ i0 | (e0, i0) <- M.findWithDefault [] t poolC, e0 == e' ] of
+      -- "ie0 == ie0" forces the hit's evidence where the interned pool's
+      -- "ie0 == ie" did, so what conversion first interns (IConv's
+      -- primSplitFst/primSplitSnd guards) keeps its intern order.
+      case [ i0 | (e0, i0, ie0) <- M.findWithDefault [] t poolC,
+                  e0 == e', ie0 == ie0 ] of
        (i0:_) -> do
         when trace_lift_dicts $ traceM $ "dictPool hit: " ++ ppReadable (i0, t)
         return $ Right i0
@@ -331,17 +336,17 @@ handleDict incoherent p t e = do
         let rev = renderEvidence (flags s0) (symt s0) e'
         -- future occurrences of this (type, evidence) hit the
         -- pre-conversion pool and skip convDict
-        let recordC i0 = case rev of
+        let recordC i0 ie0 = case rev of
                 Nothing -> return ()
                 Just _ -> modify (\s -> s {
                     dictPoolC = M.insertWith (\new old -> old ++ new) t
-                                    [(e', i0)] (dictPoolC s) })
+                                    [(e', i0, ie0)] (dictPoolC s) })
         pool <- gets dictPool
         let cands = M.findWithDefault [] it pool
-        case [ i0 | (i0, ie0) <- cands, ie0 == ie ] of
-          (i0:_) -> do
+        case [ c | c@(_, ie0) <- cands, ie0 == ie ] of
+          ((i0, ie0):_) -> do
             when trace_lift_dicts $ traceM $ "dictPool hit: " ++ ppReadable (i0, t)
-            recordC i0
+            recordC i0 ie0
             return $ Right i0
           [] -> do
             when (trace_lift_dicts && not (null cands)) $ traceM $
@@ -370,7 +375,7 @@ handleDict incoherent p t e = do
                 liftedDefs = IDef lift_i it ie props : liftedDefs s,
                 liftedTypes = M.insert lift_i t (liftedTypes s),
                 convEnv = M.insert lift_i ref (convEnv s) })
-            recordC lift_i
+            recordC lift_i ie
             return $ Right lift_i
 
 handleDictExpr :: BoundDicts -> CType -> CExpr -> L a (CExpr, Bool)
