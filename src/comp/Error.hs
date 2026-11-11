@@ -1133,6 +1133,7 @@ data ErrMsg =
         | EOpenOutputDirFailure String String String -- flag, dir, msg
 
         | ENoBackendCodeGen [String]
+        | EFrontEndOnlyBackend
         | ENoBackendLinking
         | ETooManyBackends
         | EDollarNoVerilog
@@ -4187,6 +4188,10 @@ getErrorText (ETwoArgFlag flag) =
 
 getErrorText (ENoBackendCodeGen mods) =
     (System 14, empty, s2par ("You must specify -sim or -verilog to generate code for " ++ unwordsAnd (map ishow mods)))
+getErrorText (EFrontEndOnlyBackend) =
+    (System 100, empty, s2par ("The flag -signature-only stops before code " ++
+                               "generation, so it cannot be combined with " ++
+                               "-verilog, -sim or -systemc."))
 
 -- This should be obsoleted
 getErrorText (EGeneric s) =

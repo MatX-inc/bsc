@@ -1,0 +1,24 @@
+package FrontEndA where
+
+-- An imported package for the -signature-only and -check-only tests
+-- (see frontend.exp)
+
+data Color = Red | Green | Blue
+    deriving (Eq, Bits)
+
+struct Point = { x :: Int 16; y :: Int 16 }
+    deriving (Eq, Bits)
+
+class Named a where
+    name :: a -> String
+
+instance Named Color where
+    name Red = "red"
+    name Green = "green"
+    name Blue = "blue"
+
+isRed :: Color -> Bool
+isRed c = c == Red
+
+next :: Integer -> Integer
+next n = n + 1

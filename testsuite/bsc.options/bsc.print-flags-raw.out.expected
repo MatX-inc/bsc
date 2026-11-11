@@ -29,6 +29,7 @@ Flags {
 	extraVerbose = False,
 	fdir = Nothing,
 	finalcleanup = 1,
+	frontEndMode = FullCompile,
 	genABin = False,
 	genABinVerilog = False,
 	genName = [],

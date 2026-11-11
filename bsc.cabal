@@ -186,6 +186,7 @@ library
     ForeignFunctions
     GHCPretty
     GenABin
+    GenBi
     GenBin
     GenForeign
     GenFuncWrap

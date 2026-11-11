@@ -1,0 +1,6 @@
+package FrontEndUsesLib where
+
+import FrontEndLib
+
+four :: Integer
+four = three + 1

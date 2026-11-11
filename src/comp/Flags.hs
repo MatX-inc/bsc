@@ -1,5 +1,6 @@
 module Flags(
              Flags(..),
+             FrontEndMode(..),
              remapFlagsPaths,
              storedFlagsPaths,
              redSteps,
@@ -168,10 +169,19 @@ data Flags = Flags {
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
         warnMethodUrgency :: Bool,
-        warnUndetPred :: Bool
+        warnUndetPred :: Bool,
+        -- last, and not stored in .ba files (GenABin): no .ba is
+        -- written in these modes
+        frontEndMode :: FrontEndMode
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)
+
+-- What a source compile produces: everything (the default), or only the
+-- package's interface, a .bi file written after context reduction from
+-- the imported packages' .bi files (-signature-only).
+data FrontEndMode = FullCompile | SignatureOnly
+    deriving (Eq, Show)
 
 data Verbosity = Quiet | Normal | Verbose | ExtraVerbose
    deriving(Eq, Show, Ord, Enum)
