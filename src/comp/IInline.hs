@@ -1,8 +1,9 @@
 module IInline(iInline, iSortDs) where
-import Data.List(group, sort, nub)
+import Data.List(group, sort, nub, foldl')
 import Util
 import qualified Data.Set as S
 import qualified Data.Map as M
+import Data.Array(listArray, (!))
 import SCC(tsort)
 import PPrint
 import ErrorUtil
@@ -104,9 +105,19 @@ iInlineUseLimit use_limit
              ++ [ i | (IDef i _ _ _) <- ds, keepEvenUnused i]
         keepEvenUnused :: Id -> Bool
         keepEvenUnused i = hasIdProp i IdP_keepEvenUnused
-        defids = S.fromList [ i | IDef i _ _ _ <- ds ]
-        dm = M.fromList ([(i, e) | IDef i _ e _ <- ds ] ++
-                         [ (i, e) | (IEFace i _ (Just (e,_)) _ _ _) <- ifc ])
+        -- Each def Id's last place in ds, as M.fromList keeps; an interface
+        -- entry in dm replaces a def's.  `sort is` forces every key before
+        -- these maps are used, so their shapes force nothing.
+        dpos = M.fromList [ (i, k) | (k, IDef i _ _ _) <- zip [0 :: Int ..] ds ]
+        nds = length ds
+        dsArr = listArray (0, nds - 1) ds
+        ds'Arr = listArray (0, nds - 1) ds'
+        defExpr (IDef _ _ e _) = e
+        defids = M.keysSet dpos
+        dm0 = M.map (\ k -> defExpr (dsArr ! k)) dpos
+        dm = dm0 `seq`
+             foldl' (\ m (i, e) -> M.insert i e m) dm0
+                    [ (i, e) | (IEFace i _ (Just (e,_)) _ _ _) <- ifc ]
         get i = case M.lookup i dm of (Just e) -> e; _-> internalError ("iInlineUseLimit " ++ ppString use_limit ++ ": " ++ ppReadable i)
         step allIds done [] = allIds
         step allIds done (i:pend) =
@@ -131,7 +142,7 @@ iInlineUseLimit use_limit
                         let uses = getc i in
                         (keepEvenUnused i || uses > 0 && isKeepId i)
                         || uses > use_limit) ds'
-        dmap = M.fromList [(i, e) | IDef i t e _ <- ds']
+        dmap = M.map (\ k -> defExpr (ds'Arr ! k)) dpos
         state_vars' = [ (name, sv { isv_iargs = es' })
                       | (name, sv@(IStateVar { isv_iargs = es }))
                             <- imod_state_insts imod,
