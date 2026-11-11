@@ -15,8 +15,8 @@ import BinData(encodeV2, encodeV2Strip)
 import Util(hashInit, nextHashByte, showHash)
 import GenBin
 import GenBi(BiFile(..), readBiFileStrict)
-import GenChk(ChkFile(..), readChkFileStrict)
-import GenTci(TciFile(..), readTciFile)
+import GenBtp(BtpFile(..), readBtpFileStrict)
+import GenBup(BupFile(..), readBupFile)
 import ISyntax
 import Error(initErrorHandle, Diagnostic(..))
 import System.IO
@@ -32,7 +32,7 @@ main = do
           ["-bi", mi]             -> return (True, False, mi)
           ["-canon", mi]          -> return (False, True, mi)
           [mi@(c:_)] | (c /= '-') -> return (False, False, mi)
-          _ -> do putStr ("Usage: dumpbo [-bi | -canon] file.bo|file.bi|file.chk|file.tci\n")
+          _ -> do putStr ("Usage: dumpbo [-bi | -canon] file.bo|file.bi|file.btp|file.bup\n")
                   exitWith (ExitFailure 1)
     file <- BS.readFile fname
     hSetEncoding stdout utf8
@@ -44,8 +44,8 @@ main = do
                          putStrLn ("Imports: " ++ unwords [ getIdString i | (i, _) <- imps ])
                          putStr (ppReadable sig)
                          putStrLn ("Hash: " ++ hash)
-      else if ".chk" `isSuffixOf` fname then do
-        ChkFile name imps ok diags (CPackageBin pkg) <- readChkFileStrict errh fname file
+      else if ".btp" `isSuffixOf` fname then do
+        BtpFile name imps ok diags (CPackageBin pkg) <- readBtpFileStrict errh fname file
         putStrLn ("Package: " ++ getIdString name)
         putStrLn ("Imports: " ++ unwords [ getIdString i | (i, _) <- imps ])
         putStrLn ("Status: " ++ (if ok then "ok" else "failed"))
@@ -54,11 +54,11 @@ main = do
             -- hashes of the package as encoded, of the whole file without
             -- its imports record, and of the package with the positions
             -- outside the package's own file reduced to their file (as a
-            -- .tci stores imported positions)
+            -- .bup stores imported positions)
             let hashOf bs = showHash (BL.foldl' nextHashByte hashInit bs)
                 own = pos_file (getIdPosition name)
                 sel p = not (pos_is_stdlib p) && pos_line p >= 0 && pos_file p /= own
-            whole <- encodeV2 (ChkFile name [] ok diags (CPackageBin pkg))
+            whole <- encodeV2 (BtpFile name [] ok diags (CPackageBin pkg))
             pk <- encodeV2 (CPackageBin pkg)
             (pks, _) <- encodeV2Strip (Just sel) (CPackageBin pkg)
             putStrLn ("Package encoding: " ++ hashOf pk)
@@ -70,19 +70,19 @@ main = do
           else do
             mapM_ (putStr . diag_text) diags
             putStr (ppReadable pkg)
-      else if ".tci" `isSuffixOf` fname then do
-        (tci, hash) <- readTciFile errh fname file
-        let pkg@(CPackage name _ _ sigs _ ds _) = tci_package tci
+      else if ".bup" `isSuffixOf` fname then do
+        (bup, hash) <- readBupFile errh fname file
+        let pkg@(CPackage name _ _ sigs _ ds _) = bup_package bup
             showSet s = unwords (map getIdString (S.toList s))
         putStrLn ("Package: " ++ getIdString name)
-        putStrLn ("Source: " ++ tci_source tci)
-        putStrLn ("Flags: " ++ tci_flags tci)
+        putStrLn ("Source: " ++ bup_source bup)
+        putStrLn ("Flags: " ++ bup_flags bup)
         putStrLn ("Hash: " ++ hash)
         putStrLn ("Definitions: " ++ show (length ds))
-        putStrLn ("Used in types: " ++ showSet (tci_used_types tci))
-        putStrLn ("Used in context reduction: " ++ showSet (tci_used_ctx tci))
-        putStrLn ("Used in exports: " ++ showSet (tci_used_exports tci))
-        putStrLn ("ATF cache entries: " ++ show (M.size (tci_atf tci)))
+        putStrLn ("Used in types: " ++ showSet (bup_used_types bup))
+        putStrLn ("Used in context reduction: " ++ showSet (bup_used_ctx bup))
+        putStrLn ("Used in exports: " ++ showSet (bup_used_exports bup))
+        putStrLn ("ATF cache entries: " ++ show (M.size (bup_atf bup)))
         putStrLn "Signatures:"
         mapM_ (\(lib, CImpSign _ q (CSignature n _ fs es)) ->
                    putStrLn ("  " ++ getIdString n ++ (if q then " qualified" else "") ++
@@ -90,12 +90,12 @@ main = do
                                Just h -> ": library, .bi hash " ++ h
                                Nothing -> ": " ++ show (length es) ++ " entries, " ++
                                           show (length fs) ++ " fixities"))
-              (zip (tci_libs tci) sigs)
+              (zip (bup_libs bup) sigs)
         -- -bi: the non-library signatures as kept; otherwise the package
         if isBI
           then mapM_ (\(lib, CImpSign _ _ sig) ->
                           maybe (putStr (ppReadable sig)) (const (return ())) lib)
-                     (zip (tci_libs tci) sigs)
+                     (zip (bup_libs bup) sigs)
           else putStr (ppReadable pkg)
       else do
         -- everything is printed, so decode and validate the whole file at once

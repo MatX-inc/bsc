@@ -23,11 +23,11 @@ import ISyntax
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError, bsWarning)
 import PFPrint
 import SCC
-import FileNameUtil(binSuffix, biSuffix, chkSuffix, dropSuf)
+import FileNameUtil(binSuffix, biSuffix, btpSuffix, dropSuf)
 import FileIOUtil(readBinFilePath)
 import GenBin(readBinPackage)
 import GenBi(BiFile(..), readBiFile)
-import GenChk(readChkStatus)
+import GenBtp(readBtpStatus)
 import Util(fromJustOrErr, fromMaybeM,
             map_insertManyWith, map_insertManyWithKeyM)
 
@@ -259,8 +259,8 @@ type BiMap = M.Map String (String, BiFile, String)
 -- hashes recorded by each importer must agree.  Also returns the
 -- closure with each package's .bi hash, in imported-signature order.
 -- A .bi records no poison-pill status (it is written before typecheck).
--- Under -u -check-only, whose dependency check has made each .chk current
--- with its .bi, a .chk beside the .bi that records a failed check is
+-- Under -u -check-only, whose dependency check has made each .btp current
+-- with its .bi, a .btp beside the .bi that records a failed check is
 -- reported as readImports reports a .bo with poisoned definitions, the
 -- first time a signature pass of the run reads the package.  seen0 is
 -- Just the packages read by its earlier signature passes, returned
@@ -328,10 +328,10 @@ readBi errh flags pkgName bimap0 hashmap0 seen0 p0 = go bimap0 hashmap0 seen0 [p
               bsError errh [(noPosition, EBinFilePkgNameMismatch name
                                              (pfpString p) (pfpString (bi_name bi)))]
           when (firstRead p seen) $ do
-              status <- readChkStatus (dropSuf name ++ "." ++ chkSuffix)
+              status <- readBtpStatus (dropSuf name ++ "." ++ btpSuffix)
               when (status == Just False) $
                   pillMsg [(getIdPosition (bi_name bi),
-                            WPoisonedDefFile (getIdString p ++ "." ++ chkSuffix))]
+                            WPoisonedDefFile (getIdString p ++ "." ++ btpSuffix))]
           hashmap' <- mergeHashes errh biSuffix hashmap (bi_name bi) hash (bi_imports bi)
           let bimap' = M.insert (getIdBaseString p) (name, bi, hash) bimap
           go bimap' hashmap' (S.insert (getIdString p) <$> seen)

@@ -189,8 +189,8 @@ library
     GenABin
     GenBi
     GenBin
-    GenChk
-    GenTci
+    GenBtp
+    GenBup
     GenForeign
     GenFuncWrap
     GenSign

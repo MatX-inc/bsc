@@ -1,29 +1,29 @@
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module GenTci(TciFile(..), TciInput(..), TciStats(..),
-              genTciFile, readTciFile, readTciLibraries) where
+module GenBup(BupFile(..), BupInput(..), BupStats(..),
+              genBupFile, readBupFile, readBupLibraries) where
 
--- The .tci file: the typecheck input that -signature-only hands to
+-- The .bup file: the untyped package that -signature-only hands to
 -- -check-only.  It holds the package after context reduction (mctx), its
 -- imported MatX signatures pruned to what a lookup from the package can
 -- reach, a reference to each library signature, and the values that the
 -- check cannot compute without the steps before context reduction.
--- -check-only X.tci reads nothing else but the referenced library .bi
--- files of the installation (see bsc.hs, checkTci).  It carries no hashes
+-- -check-only X.bup reads nothing else but the referenced library .bi
+-- files of the installation (see bsc.hs, checkBup).  It carries no hashes
 -- of the MatX import closure, so it changes only when what the check
 -- reads changes.  Library signatures are whole (the check inserts
 -- references to library names) and never change under a MatX edit.
 --
 -- The file is the tag and two format 2 containers, the first preceded by
 -- its length (u64, little-endian):
---   1. TciLocal: mctx (imported signatures as references), the hash of
+--   1. BupLocal: mctx (imported signatures as references), the hash of
 --      each library's .bi, and the rest;
 --   2. the imported MatX signatures, pruned, in closure order.
 -- As in every other format, a container's string table holds only the
 -- strings its contents use.  The check interns those as it reads the
 -- file and then the library .bi files, and any other string as it makes
--- it, so its intern order is a function of the .tci and the
--- installation, not the writer's (see bsc.hs, checkTci).
--- Imported positions are stored with only their file (see genTciFile),
+-- it, so its intern order is a function of the .bup and the
+-- installation, not the writer's (see bsc.hs, checkBup).
+-- Imported positions are stored with only their file (see genBupFile),
 -- except in imported class and field default bodies, which the check
 -- typechecks in the package's scope.
 
@@ -61,98 +61,98 @@ import Util(hashInit, nextHashByte, showHash)
 import PreStrings(fsPolyWrapField, fs_read, fs_write, fs_if,
                   fsPrimSelectFn, fsPrimUpdateFn, fsPrimWriteFn)
 
--- .tci file tag -- change this whenever the .tci format changes
+-- .bup file tag -- change this whenever the .bup format changes
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-tci-20261110-3"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bup-20261111-1"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
 
 -- The package and the values that cross the handoff, as read back
-data TciFile = TciFile
-    { tci_source       :: String   -- the source file, as the writer encoded it
-    , tci_flags        :: String   -- fingerprint of the semantic flags
+data BupFile = BupFile
+    { bup_source       :: String   -- the source file, as the writer encoded it
+    , bup_flags        :: String   -- fingerprint of the semantic flags
       -- mctx, with the pruned signatures (file name "", no import list);
-      -- a library's has no entries until readTciLibraries reads them
-    , tci_package      :: CPackage
+      -- a library's has no entries until readBupLibraries reads them
+    , bup_package      :: CPackage
       -- per signature: Just the hash of the library .bi it refers to
-    , tci_libs         :: [Maybe String]
-    , tci_used_types   :: S.Set Id -- packages used in types (before ctxreduce)
-    , tci_used_ctx     :: S.Set Id -- packages used by context reduction
-    , tci_used_exports :: S.Set Id -- packages used by the export list
-    , tci_atf          :: M.Map (Id, [Type]) Type  -- ctxreduce's ATF cache
+    , bup_libs         :: [Maybe String]
+    , bup_used_types   :: S.Set Id -- packages used in types (before ctxreduce)
+    , bup_used_ctx     :: S.Set Id -- packages used by context reduction
+    , bup_used_exports :: S.Set Id -- packages used by the export list
+    , bup_atf          :: M.Map (Id, [Type]) Type  -- ctxreduce's ATF cache
     }
 
 -- What the writer is given
-data TciInput = TciInput
-    { ti_source    :: String
-    , ti_flags     :: String
-    , ti_package   :: CPackage  -- mctx, with the full imported signatures
-    , ti_bi_hashes :: M.Map String String  -- closure package -> hash of its .bi
-    , ti_used      :: (S.Set Id, S.Set Id, S.Set Id)  -- types, ctxreduce, exports
-    , ti_atf       :: M.Map (Id, [Type]) Type
-    , ti_full      :: Bool  -- keep every imported signature whole
-    , ti_keep_pos  :: Bool  -- keep imported positions
+data BupInput = BupInput
+    { bupi_source    :: String
+    , bupi_flags     :: String
+    , bupi_package   :: CPackage  -- mctx, with the full imported signatures
+    , bupi_bi_hashes :: M.Map String String  -- closure package -> hash of its .bi
+    , bupi_used      :: (S.Set Id, S.Set Id, S.Set Id)  -- types, ctxreduce, exports
+    , bupi_atf       :: M.Map (Id, [Type]) Type
+    , bupi_full      :: Bool  -- keep every imported signature whole
+    , bupi_keep_pos  :: Bool  -- keep imported positions
     }
 
-data TciStats = TciStats
-    { ts_entries    :: (Int, Int)  -- imported non-library entries: kept, all
-    , ts_lib        :: (Int, Int)  -- library signatures, their entries
-    , ts_names      :: Int         -- names in the keep set
-    , ts_strings    :: Int         -- in the two containers' string tables
-    , ts_bytes      :: (Int, Int)  -- local part, signatures
-    , ts_stripped   :: Int         -- files whose positions were reduced
+data BupStats = BupStats
+    { bups_entries    :: (Int, Int)  -- imported non-library entries: kept, all
+    , bups_lib        :: (Int, Int)  -- library signatures, their entries
+    , bups_names      :: Int         -- names in the keep set
+    , bups_strings    :: Int         -- in the two containers' string tables
+    , bups_bytes      :: (Int, Int)  -- local part, signatures
+    , bups_stripped   :: Int         -- files whose positions were reduced
     }
 
 -- The local part of the file
-data TciLocal = TciLocal String String CPackageBin [Maybe String]
+data BupLocal = BupLocal String String CPackageBin [Maybe String]
                          [Id] [Id] [Id] [((Id, [Type]), Type)]
 
-instance Bin TciLocal where
-    writeBytes (TciLocal src fl pkg libs ut uc ue atf) = section "TciLocal" $ do
+instance Bin BupLocal where
+    writeBytes (BupLocal src fl pkg libs ut uc ue atf) = section "BupLocal" $ do
         toBin src; toBin fl; toBin pkg; toBin libs
         toBin ut; toBin uc; toBin ue; toBin atf
     readBytes = do src <- fromBin; fl <- fromBin; pkg <- fromBin; libs <- fromBin
                    ut <- fromBin; uc <- fromBin; ue <- fromBin; atf <- fromBin
-                   return (TciLocal src fl pkg libs ut uc ue atf)
+                   return (BupLocal src fl pkg libs ut uc ue atf)
 
 -- An imported signature, written as Bin CSignature writes it, except
 -- that default bodies keep their positions
-newtype TciSig = TciSig CSignature
+newtype BupSig = BupSig CSignature
 
-instance Bin TciSig where
-    writeBytes (TciSig (CSignature n is fs ds)) =
-        do toBin n; toBin is; toBin fs; toBin (map TciDefn ds)
-    readBytes = TciSig <$> fromBin
+instance Bin BupSig where
+    writeBytes (BupSig (CSignature n is fs ds)) =
+        do toBin n; toBin is; toBin fs; toBin (map BupDefn ds)
+    readBytes = BupSig <$> fromBin
 
-newtype TciDefn = TciDefn CDefn
+newtype BupDefn = BupDefn CDefn
 
-instance Bin TciDefn where
-    writeBytes (TciDefn (Cstruct vis st ik is fs _)) =
-        do putI 2; toBin vis; toBin st; toBin ik; toBin is; toBin (map TciField fs)
-    writeBytes (TciDefn (Cclass incoh ps ik is deps ats fs)) =
+instance Bin BupDefn where
+    writeBytes (BupDefn (Cstruct vis st ik is fs _)) =
+        do putI 2; toBin vis; toBin st; toBin ik; toBin is; toBin (map BupField fs)
+    writeBytes (BupDefn (Cclass incoh ps ik is deps ats fs)) =
         do putI 3; toBin incoh; toBin ps; toBin ik; toBin is; toBin deps; toBin ats
-           toBin (map TciField fs)
-    writeBytes (TciDefn d) = writeBytes d
-    readBytes = TciDefn <$> fromBin
+           toBin (map BupField fs)
+    writeBytes (BupDefn d) = writeBytes d
+    readBytes = BupDefn <$> fromBin
 
-newtype TciField = TciField CField
+newtype BupField = BupField CField
 
-instance Bin TciField where
-    writeBytes (TciField (CField n ps cqt def_cs mot)) =
+instance Bin BupField where
+    writeBytes (BupField (CField n ps cqt def_cs mot)) =
         do toBin n; toBin ps; toBin cqt; keepPositions (toBin def_cs); toBin mot
-    readBytes = TciField <$> fromBin
+    readBytes = BupField <$> fromBin
 
 -- -------------------------
 -- Writing
 
-genTciFile :: ErrorHandle -> String -> TciInput -> IO (TciStats, String)
-genTciFile errh fn ti = do
-    let CPackage pid exps imps sigs fixs ds incs = ti_package ti
+genBupFile :: ErrorHandle -> String -> BupInput -> IO (BupStats, String)
+genBupFile errh fn inp = do
+    let CPackage pid exps imps sigs fixs ds incs = bupi_package inp
         isLib = [ isLibrary sig | CImpSign _ _ sig <- sigs ]
-        biHash n = case M.lookup (getIdString n) (ti_bi_hashes ti) of
+        biHash n = case M.lookup (getIdString n) (bupi_bi_hashes inp) of
                      Just h -> h
-                     Nothing -> internalError ("genTciFile: no .bi hash: " ++ getIdString n)
+                     Nothing -> internalError ("genBupFile: no .bi hash: " ++ getIdString n)
         libs = [ if l then Just (biHash n) else Nothing
                | (l, CImpSign _ _ (CSignature n _ _ _)) <- zip isLib sigs ]
         -- the files of the closure's non-library packages: a position in
@@ -162,27 +162,27 @@ genTciFile errh fn ti = do
                                | (False, CImpSign _ _ (CSignature n _ _ _)) <- zip isLib sigs ]
         sel p = not (pos_is_stdlib p) && pos_line p >= 0 &&
                 IS.member (fstringId (pos_file p)) impFiles
-        msel = if ti_keep_pos ti then Nothing else Just sel
-        (ut, uc, ue) = ti_used ti
-        local = TciLocal (ti_source ti) (ti_flags ti)
+        msel = if bupi_keep_pos inp then Nothing else Just sel
+        (ut, uc, ue) = bupi_used inp
+        local = BupLocal (bupi_source inp) (bupi_flags inp)
                          (CPackageBin (CPackage pid exps imps sigs fixs ds incs))
                          libs (sortIds ut) (sortIds uc) (sortIds ue)
-                         (M.toList (ti_atf ti))
+                         (M.toList (bupi_atf inp))
     (bsL, strsL) <- encodeV2Strip msel local
     let exportAll = S.fromList [ getIdString p | Left es <- [exps], CExpPkg p <- es
                                                , p /= pid ]
     (sigs', stats) <-
-        if ti_full ti
+        if bupi_full inp
         then return ([ wholeSig s | (False, s) <- zip isLib sigs ], keepAllStats isLib sigs)
         else pruneSigs strsL exportAll (zip isLib sigs)
-    (bsS, strsS) <- encodeV2Strip msel [ TciSig s | s <- sigs' ]
+    (bsS, strsS) <- encodeV2Strip msel [ BupSig s | s <- sigs' ]
     let lenLE b = BB.toLazyByteString (BB.word64LE (fromIntegral (BL.length b)))
         body = [lenLE bsL, bsL, bsS]
         hash = showHash (foldl' (BL.foldl' nextHashByte) hashInit body)
     writeFileBuilderCatch errh fn (BB.byteString headerBS <> foldMap BB.lazyByteString body)
-    return (stats { ts_strings = length strsL + length strsS
-                  , ts_bytes = (bl bsL, bl bsS)
-                  , ts_stripped = if ti_keep_pos ti then 0 else IS.size impFiles },
+    return (stats { bups_strings = length strsL + length strsS
+                  , bups_bytes = (bl bsL, bl bsS)
+                  , bups_stripped = if bupi_keep_pos inp then 0 else IS.size impFiles },
             hash)
   where wholeSig (CImpSign _ _ (CSignature n _ fs ds)) = CSignature n [] fs ds
         bl = fromIntegral . BL.length
@@ -196,11 +196,11 @@ isLibrary (CSignature n _ _ _) = pos_is_stdlib (getIdPosition n)
 sortIds :: S.Set Id -> [Id]
 sortIds s = map snd (sort [ (getIdString i, i) | i <- S.toList s ])
 
-keepAllStats :: [Bool] -> [CImportedSignature] -> TciStats
+keepAllStats :: [Bool] -> [CImportedSignature] -> BupStats
 keepAllStats libs sigs =
     let n lib = sum [ length ds | (l, CImpSign _ _ (CSignature _ _ _ ds)) <- zip libs sigs
                                 , l == lib ]
-    in  TciStats (n False, n False) (length (filter id libs), n True) 0 0 (0, 0) 0
+    in  BupStats (n False, n False) (length (filter id libs), n True) 0 0 (0, 0) 0
 
 -- -------------------------
 -- The keep rule
@@ -224,7 +224,7 @@ keepAllStats libs sigs =
 -- Returns the non-library signatures, pruned.
 
 pruneSigs :: [FString] -> S.Set String -> [(Bool, CImportedSignature)] ->
-             IO ([CSignature], TciStats)
+             IO ([CSignature], BupStats)
 pruneSigs seeds exportAll lsigs = do
     let -- the non-library signatures' entries, numbered in order, with
         -- whether their package is re-exported whole
@@ -286,7 +286,7 @@ pruneSigs seeds exportAll lsigs = do
         sigs' = [ prune s | (False, s) <- lsigs ]
         nKept = length [ () | (whole, ds) <- pkgs, d <- ds, keepEntry whole d ]
     return (sigs',
-            TciStats (nKept, nEntries) (length (filter fst lsigs), length libDefs)
+            BupStats (nKept, nEntries) (length (filter fst lsigs), length libDefs)
                      (IS.size nFinal) 0 (0, 0) 0)
   where isInstance (CIinstance {}) = True
         isInstance _ = False
@@ -406,9 +406,9 @@ foldDefnNames f z0 d = defn (foldDefnBinders (\z i -> f z (getIdBase i)) z0 d)
 -- Also returns the hash of every byte after the tag.  Each container's
 -- string table is interned when its root is decoded, the local part's
 -- first; its other values are decoded on demand.  Library signatures are
--- left as references (see readTciLibraries).
-readTciFile :: ErrorHandle -> String -> B.ByteString -> IO (TciFile, String)
-readTciFile errh nm s = do
+-- left as references (see readBupLibraries).
+readBupFile :: ErrorHandle -> String -> B.ByteString -> IO (BupFile, String)
+readBupFile errh nm s = do
     let hlen = B.length headerBS
         bad = bsError errh [(noPosition, EBinFileVerMismatch nm)]
     when (B.take hlen s /= headerBS) bad
@@ -416,39 +416,39 @@ readTciFile errh nm s = do
         (bsL, bsS) = splitLen body
         hash = showHash (B.foldl' nextHashByte hashInit body)
     when (B.length body < 8) bad
-    TciLocal src fl (CPackageBin pkg) libs ut uc ue atf <- evaluate (decode bsL)
+    BupLocal src fl (CPackageBin pkg) libs ut uc ue atf <- evaluate (decode bsL)
     sigs <- evaluate (decode bsS :: [CSignature])
     let CPackage pid exps imps refs fixs ds incs = pkg
         merge (CImpSign _ q sig : rs) (Just _ : ls) ss = CImpSign "" q sig : merge rs ls ss
         merge (CImpSign _ q _ : rs) (Nothing : ls) (sig : ss) = CImpSign "" q sig : merge rs ls ss
         merge [] [] [] = []
-        merge _ _ _ = internalError "readTciFile: signatures"
+        merge _ _ _ = internalError "readBupFile: signatures"
     when (length libs /= length refs ||
           length sigs /= length (filter isNothing libs)) $ bad
-    return (TciFile { tci_source = src
-                    , tci_flags = fl
-                    , tci_package = CPackage pid exps imps (merge refs libs sigs) fixs ds incs
-                    , tci_libs = libs
-                    , tci_used_types = S.fromList ut
-                    , tci_used_ctx = S.fromList uc
-                    , tci_used_exports = S.fromList ue
-                    , tci_atf = M.fromList atf },
+    return (BupFile { bup_source = src
+                    , bup_flags = fl
+                    , bup_package = CPackage pid exps imps (merge refs libs sigs) fixs ds incs
+                    , bup_libs = libs
+                    , bup_used_types = S.fromList ut
+                    , bup_used_ctx = S.fromList uc
+                    , bup_used_exports = S.fromList ue
+                    , bup_atf = M.fromList atf },
             hash)
   where splitLen b = let n = fromIntegral (readW64 (B.take 8 b))
                      in  B.splitAt n (B.drop 8 b)
         readW64 :: B.ByteString -> Word64
         readW64 b = foldr (\x acc -> (acc `shiftL` 8) + fromIntegral x) 0 (B.unpack b)
 
--- Fill in each library signature of a .tci that readTciFile read, from
+-- Fill in each library signature of a .bup that readBupFile read, from
 -- the library's .bi on the search path (verbose: each copy read is
 -- reported), which must be the file -signature-only read: the first
 -- copy with the recorded hash, so other copies are no reason for a
 -- warning.  The .bi is decoded as lazily as an import is (its string
 -- table is interned when its package name is checked), and a copy passed
 -- over is not decoded.
-readTciLibraries :: ErrorHandle -> Bool -> [String] -> TciFile -> IO TciFile
-readTciLibraries errh verb path tci = do
-    let CPackage pid exps imps sigs fixs ds incs = tci_package tci
+readBupLibraries :: ErrorHandle -> Bool -> [String] -> BupFile -> IO BupFile
+readBupLibraries errh verb path bup = do
+    let CPackage pid exps imps sigs fixs ds incs = bup_package bup
         fill Nothing s = return s
         fill (Just h) (CImpSign f q (CSignature n _ _ _)) = do
             let biname = getIdString n ++ "." ++ biSuffix
@@ -475,5 +475,5 @@ readTciLibraries errh verb path tci = do
                                                (pfpString n) (pfpString (bi_name bi)))]
             let CSignature n' _ fs es = bi_sig bi
             return (CImpSign f q (CSignature n' [] fs es))
-    sigs' <- zipWithM fill (tci_libs tci) sigs
-    return (tci { tci_package = CPackage pid exps imps sigs' fixs ds incs })
+    sigs' <- zipWithM fill (bup_libs bup) sigs
+    return (bup { bup_package = CPackage pid exps imps sigs' fixs ds incs })

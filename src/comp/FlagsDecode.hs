@@ -34,7 +34,7 @@ import Data.List.Split(splitWhen)
 import Version(bluespec)
 import Backend
 import FileNameUtil(hasDotSuf, takeSuf,
-                    bscSrcSuffix, bsvSrcSuffix, tciSuffix,
+                    bscSrcSuffix, bsvSrcSuffix, bupSuffix,
                     cSuffix, cxxSuffix, cppSuffix, ccSuffix,
                     objSuffix, arSuffix,
                     verSuffix, verSuffix2, verSuffix3, verSuffix4, verSuffix5,
@@ -185,11 +185,11 @@ decodeArgs prog args cdir =
                                        else (warnings, DUsage)
                       else case (partition isBlueSrcFile anames) of
                              ([name], []) -> (warnings, checkBSrcFlags flags name)
-                             -- the typecheck input that -signature-only wrote
-                             ([], [name]) | hasDotSuf tciSuffix name ->
+                             -- the untyped package that -signature-only wrote
+                             ([], [name]) | hasDotSuf bupSuffix name ->
                                  if (frontEndMode flags /= CheckOnly) || updCheck flags
                                  then (warnings, DError [(cmdPosition, EGeneric
-                                          ("A .tci file is checked with -check-only " ++
+                                          ("A .bup file is checked with -check-only " ++
                                            "and without -u: " ++ name))])
                                  else (warnings, checkBSrcFlags flags name)
                              ([name], names) ->
@@ -551,9 +551,9 @@ traceflags = [
           "trace-inst-tree",
           "trace-instance-overlap",
           "trace-intern-table",
-          "trace-tci",
-          "tci-full-imports",
-          "tci-keep-positions",
+          "trace-bup",
+          "bup-full-imports",
+          "bup-keep-positions",
           "trace-sim-full-subtree",
           "legacy-inst-index",
           "legacy-defer-instances",
@@ -843,9 +843,9 @@ decodeFlags (('-':s):ss) (sets,warnings, bad, flags) =
           case flagtype of
             Toggle doflag _ -> decodeFlags ss (s:sets, perhaps_warn, bad, doflag flags True)
             NoArg dofunc _ ->
-              -- a .tci is the input of -check-only, not an argument
+              -- a .bup is the input of -check-only, not an argument
               if (null ss) || (isFlag (head ss)) || (isSrcFile (head ss)) ||
-                 (hasDotSuf tciSuffix (head ss)) then
+                 (hasDotSuf bupSuffix (head ss)) then
                 case (dofunc flags) of
                   Left flags' -> decodeFlags ss (s:sets, perhaps_warn, bad, flags')
                   Right emsg -> decodeFlags ss (sets, perhaps_warn, emsg:bad, flags)
@@ -1238,7 +1238,7 @@ externalFlags = [
         ("check-only",
          (Toggle (\f x -> f {frontEndMode = if x then CheckOnly else FullCompile})
                  (showIfTrue ((== CheckOnly) . frontEndMode)),
-          "typecheck against imported .bi files and write the result (.chk)", Hidden)),
+          "typecheck against imported .bi files and write the result (.btp)", Hidden)),
 
         ("check-assert",
          (Toggle (\f x -> f {testAssert=x}) (showIfTrue testAssert),

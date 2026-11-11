@@ -28,7 +28,7 @@ import FStringCompat
 import Lex
 import Parse
 import FileNameUtil(hasDotSuf, dropSuf, baseName, dirName,
-                    bscSrcSuffix, bsvSrcSuffix, binSuffix, biSuffix, chkSuffix, tciSuffix,
+                    bscSrcSuffix, bsvSrcSuffix, binSuffix, biSuffix, btpSuffix, bupSuffix,
                     mkAName, mkVName, mkVPIHName, mkVPICName,
                     createEncodedFullFilePath)
 import FileIOUtil(readFilesPath, readBinFilePath, readFileCatch, writeFileCatch,
@@ -182,12 +182,12 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
                           Nothing -> return Nothing
                           Just dir -> getModTime (mkdname dir suf)
             return (if (isJust t_bdir) then t_bdir else t_samedir)
-    -- in -check-only, a package is checked when both its .bi and its .chk
-    -- are current, and in -signature-only when both its .bi and its .tci
+    -- in -check-only, a package is checked when both its .bi and its .btp
+    -- are current, and in -signature-only when both its .bi and its .bup
     -- are (missing is older than any date)
     tbo <- case frontEndMode flags of
-             CheckOnly -> min <$> getIfcTime biSuffix <*> getIfcTime chkSuffix
-             SignatureOnly -> min <$> getIfcTime biSuffix <*> getIfcTime tciSuffix
+             CheckOnly -> min <$> getIfcTime biSuffix <*> getIfcTime btpSuffix
+             SignatureOnly -> min <$> getIfcTime biSuffix <*> getIfcTime bupSuffix
              _ -> getIfcTime (ifcSuffix flags)
 
     -- include the prelude to avoid failures when predule was updated.

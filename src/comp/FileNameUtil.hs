@@ -22,7 +22,7 @@ import Util(rTake)
 -- Names
 
 -- various suffixes
-bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix, biSuffix, chkSuffix, tciSuffix, cSuffix,
+bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix, biSuffix, btpSuffix, bupSuffix, cSuffix,
   cxxSuffix, cppSuffix, ccSuffix, hSuffix, comodSuffix, objSuffix, arSuffix,
   soSuffix, verSuffix, verSuffix2, verSuffix3, verSuffix4, verSuffix5,
   verSuffix6, vhdlSuffix, vhdlSuffix2, useSuffix, scheduleSuffix, dotSuffix,
@@ -32,8 +32,8 @@ bsvSrcSuffix = "bsv"
 binSuffix = "bo"
 abinSuffix = "ba"
 biSuffix = "bi"
-chkSuffix = "chk"
-tciSuffix = "tci"
+btpSuffix = "btp"
+bupSuffix = "bup"
 cSuffix   = "c"
 cxxSuffix = "cxx"
 cppSuffix = "cpp"

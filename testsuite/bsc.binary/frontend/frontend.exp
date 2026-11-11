@@ -58,8 +58,8 @@ find_regexp [make_bsc_output_name FrontEndUsesLib.bs] {S0004}
 # -check-only typechecks against the .bi files
 front_end_pass FrontEndB.bs -check-only "-check-bin-roundtrip"
 if { [do_internal_checks] } {
-    dumpbo FrontEndB.chk
-    find_regexp [make_dumpbo_output_name FrontEndB.chk] {^Status: ok$}
+    dumpbo FrontEndB.btp
+    find_regexp [make_dumpbo_output_name FrontEndB.btp] {^Status: ok$}
 }
 
 # with the messages and status of a full compile
@@ -68,16 +68,16 @@ copy [make_bsc_output_name FrontEndBad.bs] FrontEndBad.bs.full-out
 front_end_fail FrontEndBad.bs -check-only
 compare_file [make_bsc_output_name FrontEndBad.bs] FrontEndBad.bs.full-out
 
-# and, continuing after the error, a .chk with the poisoned definition
+# and, continuing after the error, a .btp with the poisoned definition
 # (the final -u message says that the packages were checked)
 compile_fail FrontEndBad.bs "-continue-after-errors"
 copy_as_checked [make_bsc_output_name FrontEndBad.bs] FrontEndBad.bs.full-out
 front_end_fail FrontEndBad.bs -check-only "-continue-after-errors"
 compare_file [make_bsc_output_name FrontEndBad.bs] FrontEndBad.bs.full-out
 if { [do_internal_checks] } {
-    dumpbo FrontEndBad.chk
-    find_regexp [make_dumpbo_output_name FrontEndBad.chk] {^Status: failed$}
-    find_regexp [make_dumpbo_output_name FrontEndBad.chk] {primPoisonedDef}
+    dumpbo FrontEndBad.btp
+    find_regexp [make_dumpbo_output_name FrontEndBad.btp] {^Status: failed$}
+    find_regexp [make_dumpbo_output_name FrontEndBad.btp] {primPoisonedDef}
 }
 
 front_end_fail FrontEndUsesLib.bs -check-only "" 1
@@ -99,24 +99,24 @@ foreach {source tag} {FrontEndForeign.bsv T0091 FrontEndLetrec.bs S0066 \
 compile_fail_error FrontEndUsesBodyErr.bs T0080
 copy [make_bsc_output_name FrontEndUsesBodyErr.bs] FrontEndUsesBodyErr.bs.full-out
 erase FrontEndBodyErr.bi
-erase FrontEndBodyErr.chk
+erase FrontEndBodyErr.btp
 front_end_fail FrontEndUsesBodyErr.bs -check-only
 compare_file [make_bsc_output_name FrontEndUsesBodyErr.bs] FrontEndUsesBodyErr.bs.full-out
 
 # and, continuing after errors, warn about an import whose check failed as
 # -u warns about a .bo with poisoned definitions (G0088)
 erase FrontEndBodyErr.bi
-erase FrontEndBodyErr.chk
+erase FrontEndBodyErr.btp
 front_end_fail FrontEndUsesBodyErr.bs -check-only "-continue-after-errors"
 find_regexp [make_bsc_output_name FrontEndUsesBodyErr.bs] \
-    {G0088\)\n  File FrontEndBodyErr.chk contains definitions}
+    {G0088\)\n  File FrontEndBodyErr.btp contains definitions}
 find_n_strings [make_bsc_output_name FrontEndUsesBodyErr.bs] \
     "All packages checked (some with errors)." 1
 
 # -u -check-only says that it checked, and does not check again an import
-# whose .bi and .chk are current (a foreign import writes no .ba here)
+# whose .bi and .btp are current (a foreign import writes no .ba here)
 erase FrontEndBdpi.bi
-erase FrontEndBdpi.chk
+erase FrontEndBdpi.btp
 front_end_pass FrontEndUsesBdpi.bs -check-only
 find_n_strings [make_bsc_output_name FrontEndUsesBdpi.bs] "compiling ./FrontEndBdpi.bsv" 1
 find_n_strings [make_bsc_output_name FrontEndUsesBdpi.bs] "All packages checked." 1
@@ -164,36 +164,36 @@ proc find_lines_in_order { filename strings } {
 
 # -u -check-only gives each package it recompiles, the named one too, a
 # -signature-only pass, which writes the .bi that later packages read and
-# the .tci, and then checks the .tci, as -check-only X.tci does (-trace-tci
-# reports each .tci read).  A chain FrontEndChainA <- FrontEndChainB <-
+# the .bup, and then checks the .bup, as -check-only X.bup does (-trace-bup
+# reports each .bup read).  A chain FrontEndChainA <- FrontEndChainB <-
 # FrontEndChainC, from scratch:
 set chain_passes {
     "compiling ./FrontEndChainA.bs"
     "Interface file created: FrontEndChainA.bi"
-    "Typecheck input file created: FrontEndChainA.tci"
-    "Check file created: FrontEndChainA.chk"
+    "Untyped package file created: FrontEndChainA.bup"
+    "Typed package file created: FrontEndChainA.btp"
     "compiling ./FrontEndChainB.bs"
     "Interface file created: FrontEndChainB.bi"
-    "Typecheck input file created: FrontEndChainB.tci"
-    "Check file created: FrontEndChainB.chk"
+    "Untyped package file created: FrontEndChainB.bup"
+    "Typed package file created: FrontEndChainB.btp"
     "compiling FrontEndChainC.bs"
     "Interface file created: FrontEndChainC.bi"
-    "Typecheck input file created: FrontEndChainC.tci"
-    "Check file created: FrontEndChainC.chk"
+    "Untyped package file created: FrontEndChainC.bup"
+    "Typed package file created: FrontEndChainC.btp"
     "All packages checked."
 }
 set chain {FrontEndChainA FrontEndChainB FrontEndChainC}
 foreach p $chain {
-    foreach s {bi tci chk bo} {
+    foreach s {bi bup btp bo} {
         erase $p.$s
     }
 }
-front_end_pass FrontEndChainC.bs -check-only "-v -trace-tci"
+front_end_pass FrontEndChainC.bs -check-only "-v -trace-bup"
 find_lines_in_order [make_bsc_output_name FrontEndChainC.bs] $chain_passes
 foreach p $chain {
     find_lines_in_order [make_bsc_output_name FrontEndChainC.bs] \
-        [list "Typecheck input file created: $p.tci" "tci read $p.tci" \
-              "Check file created: $p.chk"]
+        [list "Untyped package file created: $p.bup" "bup read $p.bup" \
+              "Typed package file created: $p.btp"]
 }
 # the front end runs once per package, so FrontEndChainA's warnings are
 # reported once
@@ -202,7 +202,7 @@ find_n_strings [make_bsc_output_name FrontEndChainC.bs] "(T0160)" 1
 nukedir frontend_u
 mkdir frontend_u
 foreach p $chain {
-    foreach s {bi chk} {
+    foreach s {bi btp} {
         copy $p.$s frontend_u/$p.$s
     }
 }
@@ -213,25 +213,25 @@ string_does_not_occur [make_bsc_output_name FrontEndChainC.bs] "FrontEndChainA"
 string_does_not_occur [make_bsc_output_name FrontEndChainC.bs] "FrontEndChainB"
 find_n_strings [make_bsc_output_name FrontEndChainC.bs] "compiling FrontEndChainC.bs" 1
 
-# A .tci that -u wrote is checked by a standalone -check-only too (the
+# A .bup that -u wrote is checked by a standalone -check-only too (the
 # flags fingerprint leaves out what -u sets only for printing)
 foreach p $chain {
-    front_end_pass $p.tci -check-only "" 1
+    front_end_pass $p.bup -check-only "" 1
 }
 
 # Every .bi is that of a standalone -signature-only compile, and every
-# .chk records the messages, status and package of a standalone check of
-# the .tci that compile writes (the .tci, and so the .chk's record of it,
+# .btp records the messages, status and package of a standalone check of
+# the .bup that compile writes (the .bup, and so the .btp's record of it,
 # can differ: under -u the earlier packages have interned strings first)
 foreach p $chain {
     front_end_pass $p.bs -signature-only "" 1
     compare_bytes frontend_u/$p.bi $p.bi
-    front_end_pass $p.tci -check-only "" 1
+    front_end_pass $p.bup -check-only "" 1
     if { [do_internal_checks] } {
-        dumpbo frontend_u/$p.chk
-        dumpbo $p.chk
-        compare_file [make_dumpbo_output_name frontend_u/$p.chk] \
-            [make_dumpbo_output_name $p.chk]
+        dumpbo frontend_u/$p.btp
+        dumpbo $p.btp
+        compare_file [make_dumpbo_output_name frontend_u/$p.btp] \
+            [make_dumpbo_output_name $p.btp]
     }
 }
 
@@ -241,17 +241,17 @@ touch FrontEndChainA.bs
 front_end_pass FrontEndChainC.bs -check-only "-v"
 find_lines_in_order [make_bsc_output_name FrontEndChainC.bs] $chain_passes
 
-# and so does an import missing only its .chk, or only its .bi
-foreach s {chk bi} {
+# and so does an import missing only its .btp, or only its .bi
+foreach s {btp bi} {
     erase FrontEndChainA.$s
     front_end_pass FrontEndChainC.bs -check-only "-v"
     find_lines_in_order [make_bsc_output_name FrontEndChainC.bs] $chain_passes
 }
 
 # A body error in the bottom package of a chain is reported by the check
-# of its .tci, after its signature pass has written its .bi
+# of its .bup, after its signature pass has written its .bi
 foreach p {FrontEndBodyErr FrontEndUsesBodyErr FrontEndChainBodyErr} {
-    foreach s {bi tci chk} {
+    foreach s {bi bup btp} {
         erase $p.$s
     }
 }
@@ -259,12 +259,12 @@ front_end_fail FrontEndChainBodyErr.bs -check-only
 find_lines_in_order [make_bsc_output_name FrontEndChainBodyErr.bs] \
     {"compiling ./FrontEndBodyErr.bs" "(T0080)"}
 string_does_not_occur [make_bsc_output_name FrontEndChainBodyErr.bs] "FrontEndUsesBodyErr"
-files_exist {FrontEndBodyErr.bi FrontEndBodyErr.tci}
+files_exist {FrontEndBodyErr.bi FrontEndBodyErr.bup}
 
 # and, continuing after errors, the first signature pass that reads its
 # .bi warns that its check failed: the middle package's
 foreach p {FrontEndBodyErr FrontEndUsesBodyErr FrontEndChainBodyErr} {
-    foreach s {bi tci chk} {
+    foreach s {bi bup btp} {
         erase $p.$s
     }
 }
@@ -274,7 +274,7 @@ find_lines_in_order [make_bsc_output_name FrontEndChainBodyErr.bs] \
      "(G0088)" "compiling FrontEndChainBodyErr.bs"
      "All packages checked (some with errors)."}
 
-# The .chk does not depend on where the imported .bi files were found:
+# The .btp does not depend on where the imported .bi files were found:
 # two copies of the import closure, at different paths
 nukedir frontend_paths
 foreach d {frontend_paths/a frontend_paths/b/c frontend_paths/out_a frontend_paths/out_b} {
@@ -288,10 +288,10 @@ foreach d {frontend_paths/a frontend_paths/b/c} {
 }
 front_end_pass FrontEndB.bs -check-only "-p frontend_paths/a -bdir frontend_paths/out_a" 1
 front_end_pass FrontEndB.bs -check-only "-p frontend_paths/b/c -bdir frontend_paths/out_b" 1
-compare_file frontend_paths/out_a/FrontEndB.chk frontend_paths/out_b/FrontEndB.chk
+compare_file frontend_paths/out_a/FrontEndB.btp frontend_paths/out_b/FrontEndB.btp
 
 # -warn-redundant-provisos needs the package before context reduction,
-# which the check of a .tci does not have, so it needs -check-only
+# which the check of a .bup does not have, so it needs -check-only
 # without -u
 front_end_fail FrontEndB.bs -check-only "-warn-redundant-provisos"
 find_regexp [make_bsc_output_name FrontEndB.bs] \

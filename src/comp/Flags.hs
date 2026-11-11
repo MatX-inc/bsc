@@ -186,11 +186,11 @@ data Flags = Flags {
 
 -- What a source compile produces: everything (the default); only the
 -- package's interface, a .bi file written after context reduction
--- (-signature-only); or only the typecheck result, a .chk file
+-- (-signature-only); or only the typechecked package, a .btp file
 -- (-check-only).  The front-end-only modes read imported packages from
 -- .bi files.  -u -check-only gives each package it recompiles a
--- SignatureOnly pass, which writes the .bi and the .tci, and then checks
--- the .tci.
+-- SignatureOnly pass, which writes the .bi and the .bup, and then checks
+-- the .bup.
 data FrontEndMode = FullCompile | SignatureOnly | CheckOnly
     deriving (Eq, Show)
 
@@ -253,6 +253,9 @@ data DumpFlag
         | DFisimpdicts
         | DFisimplify
         | DFwriteBin
+        | DFwriteSig
+        | DFwriteUntyped
+        | DFwriteTyped
 
         -- module generation
         | DFexpanded
