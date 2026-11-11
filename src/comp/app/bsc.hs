@@ -62,8 +62,8 @@ import TopUtils
 import SystemCheck(doSystemCheck)
 import BuildSystem
 import IOUtil(getEnvDef, progArgs)
-import SpeedyString(snapshotInternState, renderInternTable, internedSince)
-import FStringCompat(mkFString)
+import SpeedyString(snapshotInternState, renderInternTable)
+import FStringCompat(FString, internedFStringsSince)
 
 -- compiler libs
 --import FStringCompat
@@ -639,7 +639,7 @@ compilePackage
 
     when (frontEndMode flags == SignatureOnly) $ do
         -- what a check of this package would have interned by now
-        handoffStrings <- internedSince 0
+        handoffStrings <- internedFStringsSince 0
         (ok, pkgsUsedInExports) <-
             writeSignature errh flags t dumpnames name pwd biClosure symt mctx
         when ok $
@@ -1006,9 +1006,9 @@ writeSignature errh flags t dumpnames name pwd closure symt
 
 -- -signature-only: also write the package's .tci, the input of
 -- -check-only X.tci (see GenTci).  closure is every imported package with
--- the hash of the .bi read for it; handoffStrings are the spellings
+-- the hash of the .bi read for it; handoffStrings are the strings
 -- interned when the package reached the handoff, in arrival order.
-writeTci :: ErrorHandle -> Flags -> String -> [(Id, String)] -> [String] -> CPackage ->
+writeTci :: ErrorHandle -> Flags -> String -> [(Id, String)] -> [FString] -> CPackage ->
             CATFCache -> (S.Set Id, S.Set Id, S.Set Id) -> IO ()
 writeTci errh flags name closure handoffStrings mctx atfCache usedSets = do
     let tci_filename = putInDir (bdir flags) name tciSuffix
@@ -1018,7 +1018,7 @@ writeTci errh flags name closure handoffStrings mctx atfCache usedSets = do
                       , ti_bi_hashes = M.fromList [ (getIdString i, h) | (i, h) <- closure ]
                       , ti_used = usedSets
                       , ti_atf = atfCache
-                      , ti_handoff_strings = map mkFString handoffStrings
+                      , ti_handoff_strings = handoffStrings
                       , ti_full = "-tci-full-imports" `elem` progArgs
                       , ti_keep_pos = "-tci-keep-positions" `elem` progArgs }
     (stats, hash) <- genTciFile errh tci_filename ti
