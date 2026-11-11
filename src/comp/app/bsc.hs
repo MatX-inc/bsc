@@ -107,7 +107,7 @@ import FixupDefs(fixupDefs, updDef, mkDictBuckets, mkDictRedirects)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
-import GenBin(genBinFile)
+import GenBin(genBinFile, CPackageBin(..), stripImpSigs, checkRoundTrip, sortSched)
 import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap)
 import GenForeign(genForeign)
@@ -209,6 +209,11 @@ dumpInternTable = when ("-trace-intern-table" `elem` progArgs) $ do
             stale <- doesFileExist file
             when stale (removeFile file)
             CE.throwIO (ExitFailure 1)
+
+-- Hidden flag -check-bin-roundtrip: round-trip the signatures and the
+-- typechecked package through the format 2 encoding (GenBin.checkRoundTrip).
+checkBinRoundTrip :: Bool
+checkBinRoundTrip = "-check-bin-roundtrip" `elem` progArgs
 
 {-# NOINLINE internDumpFile #-}
 internDumpFile :: IORef (Maybe FilePath)
@@ -490,6 +495,9 @@ compilePackage
     (mod, tcErrors, pkgsUsedInCode, ctypeATFCache) <- cTypeCheck errh flags symt minst
     --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
+    when checkBinRoundTrip $
+        checkRoundTrip "typechecked package" CPackageBin
+                       (\(CPackageBin p) -> sortSched p) (sortSched (stripImpSigs mod))
 
     --when (early flags) $ return ()
     let prefix = dirName name ++ "/"
@@ -739,6 +747,9 @@ compilePackage
     (bi_sig, pkgsUsedInExports) <- genUserSign errh symt mctx
     -- Generate a type signature where everything is visible
     bo_sig <- genEverythingSign errh symt mctx
+    when checkBinRoundTrip $ do
+        checkRoundTrip "user signature" id id bi_sig
+        checkRoundTrip "full signature" id id bo_sig
 
     -- Check for unused imports by combining packages from all three sources
     let (CPackage _ _ imports _ _ _ _) = mctx

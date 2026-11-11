@@ -11,7 +11,8 @@ module BinData ( Byte
                , Bin(..)
                , section
                , Lazy(..), toBinLazy, fromBinLazy
-               , encodeWithIO, decode, decodeStrict, decodeWithHash
+               , encodeWithIO, encodeV2, encodeV2With
+               , decode, decodeStrict, decodeWithHash
                ) where
 
 {- Routines for converting structures to/from byte strings.
@@ -62,6 +63,20 @@ module BinData ( Byte
    The writer builds every region in memory before the container is
    written out.
 
+   FORMAT 2 (encodeV2With; footer magic BSCBIN02) has the same regions
+   plus a fifth table, of TISort.  Its Type and TISort entries are
+   assigned in post-order and keyed by their payload bytes, in which
+   every nested shared value is already an index: a TAp entry is the tag
+   and its children's indices, and a TyCon's sort is an index into the
+   TISort table, so a key is a few bytes and each node costs one lookup.
+   (Format 1 keys a Type by a structural key rebuilt at every nesting
+   level, with each TyCon's whole sort inside it.)  Ids, Positions and
+   ITypes are keyed exactly as in format 1, except that a Position key
+   includes pos_is_stdlib.  The output is still a pure function of the
+   content.  The reader detects the format from the footer magic.
+   Format 1 is what .bo and .ba files hold; format 2 serves the
+   artifacts that have no compatibility to keep.
+
    When reconstructing a data structure from its byte stream, we do
    not yet meet the goal of bounded space.  Care must be taken to make
    all of the reader routines sufficiently strict to avoid building
@@ -109,6 +124,7 @@ import Data.Bits
 import Data.Word
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Unsafe as BSU
+import qualified Data.ByteString.Short as SBS
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Text as TS
 import qualified Data.Text.Encoding as TSE
@@ -134,11 +150,17 @@ type Byte = Word8
 
 -- The kinds of shared value that live in offset-indexed tables
 -- (strings have the eager string table instead)
-data TableKind = KId | KPosition | KType | KIType
+data TableKind = KId | KPosition | KType | KIType | KSort
   deriving (Eq, Ord, Show, Enum, Bounded)
 
-allKinds :: [TableKind]
-allKinds = [minBound .. maxBound]
+-- The container formats (see FORMAT 2 above) and their tables, in
+-- region and footer order
+data Format = Format1 | Format2
+  deriving (Eq, Show)
+
+formatKinds :: Format -> [TableKind]
+formatKinds Format1 = [KId, KPosition, KType, KIType]
+formatKinds Format2 = [KId, KPosition, KType, KIType, KSort]
 
 -- -------------------------------------------------------------
 -- Sharing keys
@@ -451,13 +473,17 @@ data W = W
   , wITypes    :: !WTable
   , wChunks   :: !(IORef (IM.IntMap (Int, Int)))  -- closed chunks: offset, length
   , wNChunks  :: !(IORef Int)
+  , wV2       :: !(Maybe W2)  -- format 2 (see encodeV2With)
   }
 
 newWTable :: IO WTable
 newWTable = WTable <$> wbNew 65536 <*> wbNew 4096 <*> newIORef 0
 
 newW :: (Bool -> FString -> FString) -> IO W
-newW remapF = do
+newW remapF = newWWith remapF Nothing
+
+newWWith :: (Bool -> FString -> FString) -> Maybe W2 -> IO W
+newWWith remapF v2 = do
   body <- wbNew 65536
   let WBuf h = body
   cur <- mallocBytes 8
@@ -468,7 +494,7 @@ newW remapF = do
     <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty
     <*> newIORef IM.empty
     <*> newWTable <*> newWTable <*> newWTable <*> newWTable
-    <*> newIORef IM.empty <*> newIORef 0
+    <*> newIORef IM.empty <*> newIORef 0 <*> pure v2
 
 {-# INLINE curBuf #-}
 curBuf :: W -> IO WBuf
@@ -526,7 +552,19 @@ newIndex t = do
 
 -- Write a payload as entry n of a table
 inEntry :: W -> WTable -> Int -> Out () -> IO ()
-inEntry w t n payload = do
+inEntry w t n payload = inBuffer w payload $ \b -> do
+  off <- wbLen (wtBytes t)
+  len <- wbLen b
+  src <- wbPtr b
+  wbCopy (wtBytes t) src len
+  spans <- wbPtr (wtSpans t)
+  pokeByteOff spans (16 * n) off
+  pokeByteOff spans (16 * n + 8) len
+
+-- Write a payload to a buffer of its own (as an open table entry), and
+-- pass the buffer to k
+inBuffer :: W -> Out () -> (WBuf -> IO a) -> IO a
+inBuffer w payload k = do
   spare <- readIORef (wSpare w)
   b@(WBuf h) <- case spare of
                   (x : xs) -> do { writeIORef (wSpare w) xs; return x }
@@ -538,15 +576,10 @@ inEntry w t n payload = do
   runOut payload w
   writeIORef (wDepth w) depth
   poke (wCur w) prev
-  off <- wbLen (wtBytes t)
-  len <- wbLen b
-  src <- wbPtr b
-  wbCopy (wtBytes t) src len
-  spans <- wbPtr (wtSpans t)
-  pokeByteOff spans (16 * n) off
-  pokeByteOff spans (16 * n + 8) len
+  r <- k b
   wbSetLen b 0
   modifyIORef' (wSpare w) (b :)
+  return r
 
 stringIdx :: W -> FString -> IO Int
 stringIdx w s = do
@@ -568,17 +601,30 @@ stringIdx w s = do
 -- first one interned.
 writePosition :: W -> Position -> IO ()
 writePosition w p@(Position f l c lib) = do
-  (fs0, fs1) <- readIORef (wFiles w)
-  let kf = fstringId f
-  f' <- case IM.lookup kf (if lib then fs1 else fs0) of
-          Just g -> return g
-          Nothing -> do
-            let g = wRemap w lib f
-            writeIORef (wFiles w) $!
-              (if lib then (fs0, IM.insert kf g fs1) else (IM.insert kf g fs0, fs1))
-            return g
+  f' <- remapFile w lib f
   let p' = if f' == f then p else Position f' l c lib
   runOut (shared wPosKeys wPositions (pos_key p') (writeBytes p')) w
+
+remapFile :: W -> Bool -> FString -> IO FString
+remapFile w lib f = do
+  (fs0, fs1) <- readIORef (wFiles w)
+  let kf = fstringId f
+  case IM.lookup kf (if lib then fs1 else fs0) of
+    Just g -> return g
+    Nothing -> do
+      let g = wRemap w lib f
+      writeIORef (wFiles w) $!
+        (if lib then (fs0, IM.insert kf g fs1) else (IM.insert kf g fs0, fs1))
+      return g
+
+-- An occurrence of an Id, Position, Type or IType: format 1's sharing,
+-- or the format 2 resolver's index
+{-# INLINE orFormat2 #-}
+orFormat2 :: (W -> W2 -> IO Int) -> Out () -> Out ()
+orFormat2 resolve2 out1 = Out $ \w ->
+  case wV2 w of
+    Nothing -> runOut out1 w
+    Just st -> resolve2 w st >>= putIdx w
 
 -- Write a sub-value as a lazy chunk: the reader skips its bytes and
 -- decodes them on first force of the returned value (see fromBinLazy).
@@ -617,6 +663,7 @@ data Tables = Tables { tBytes      :: !BS.ByteString
                      , tPositions  :: Array Int Position
                      , tTypes      :: Array Int Type
                      , tITypes     :: Array Int IType
+                     , tSorts      :: Array Int TISort  -- format 2 only
                      , tChunks     :: !(UArray Int Int) -- offset, length pairs
                      , tChunkCount :: !Int
                      , tWalk       :: !Bool
@@ -764,6 +811,9 @@ instance Shared Type where
 
 instance Shared IType where
   lookupIdx = mkLookupIdx "IType" tITypes
+
+lookupSort :: Int -> In TISort
+lookupSort = mkLookupIdx "TISort" tSorts
 
 -- ------------------------------------------------------------------
 -- Lazy chunks
@@ -1018,7 +1068,7 @@ instance Bin Position where
         return (mkPositionFull fs l c is_stdlib)
 
     -- Positions are shared
-    toBin p = Out $ \w -> writePosition w p
+    toBin p = orFormat2 (\w st -> pos2 w st p) (Out $ \w -> writePosition w p)
     fromBin = readShared
 
 instance Bin Id where
@@ -1035,7 +1085,7 @@ instance Bin Id where
                    return (setIdProps (mkQId pos mfs fs) props)
 
     -- Ids are shared
-    toBin i = shared wIdKeys wIds (id_key i) (writeBytes i)
+    toBin i = orFormat2 (\w st -> id2 w st i) (shared wIdKeys wIds (id_key i) (writeBytes i))
     fromBin = readShared
 
 instance Bin IdProp where
@@ -1646,8 +1696,27 @@ instance Bin Type where
              n -> internalError $ "BinData.Bin(Type).readBytes: " ++ show n
 
     -- Type is shared
-    toBin t = shared wTypeKeys wTypes (type_key t) (writeBytes t)
+    toBin t = orFormat2 (\w st -> type2 w st t)
+                        (shared wTypeKeys wTypes (type_key t) (writeBytes t))
     fromBin = readShared
+
+-- A format 2 Type table entry: the format 1 payload, except that a
+-- TyCon's sort is an index into the TISort table (see type2)
+readTypeF2 :: In Type
+readTypeF2 =
+    do i <- getI
+       case i of
+         0 -> do tvar <- fromBin; return (TVar tvar)
+         1 -> do c <- getI
+                 case c of
+                   0 -> do i <- fromBin; mk <- fromBin; s <- readBytes >>= lookupSort
+                           return (TCon (TyCon i mk s))
+                   1 -> do n <- fromBin; pos <- fromBin; return (TCon (TyNum n pos))
+                   2 -> do s <- fromBin; pos <- fromBin; return (TCon (TyStr s pos))
+                   n -> internalError $ "BinData.readTypeF2: TyCon " ++ show n
+         2 -> do t1 <- fromBin; t2 <- fromBin; return (TAp t1 t2)
+         3 -> do pos <- fromBin; i <- fromBin; return (TGen pos i)
+         n -> internalError $ "BinData.readTypeF2: " ++ show n
 
 instance Bin TyVar where
     writeBytes (TyVar i n k) = do toBin i; toBin n; toBin k
@@ -1753,7 +1822,7 @@ instance Bin IType where
                      n -> internalError $ "BinData.Bin(IType).readBytes: " ++ show n
 
     -- IType is shared
-    toBin t = Out $ \w ->
+    toBin t = orFormat2 (\w st -> itype2 w st t) $ Out $ \w ->
               case t of
                 ITForAll _ _ _ -> interior w
                 ITAp _ _ -> interior w
@@ -1824,7 +1893,8 @@ readU64 = readUnsigned 8
 
 -- Where the regions are.  Every field is derivable from the regions'
 -- sizes, which lets the reader cross-check the whole layout at load.
-data Footer = Footer { fBodiesEnd  :: !Int
+data Footer = Footer { fFormat     :: !Format
+                     , fBodiesEnd  :: !Int
                      , fTables     :: ![(Int, Int, Int)] -- per Kind: entries start, index start, count
                      , fStrStart   :: !Int
                      , fStrCount   :: !Int
@@ -1832,29 +1902,38 @@ data Footer = Footer { fBodiesEnd  :: !Int
                      , fChunkCount :: !Int
                      }
 
-footerMagic :: [Byte]
-footerMagic = map (fromIntegral . fromEnum) "BSCBIN01"
+footerMagic :: Format -> [Byte]
+footerMagic fmt = map (fromIntegral . fromEnum) $
+                  case fmt of
+                    Format1 -> "BSCBIN01"
+                    Format2 -> "BSCBIN02"
 
-footerFields :: Int
-footerFields = 1 + 3 * length allKinds + 4
+footerFields :: Format -> Int
+footerFields fmt = 1 + 3 * length (formatKinds fmt) + 4
 
-footerSize :: Int
-footerSize = 8 * footerFields + length footerMagic
+footerSize :: Format -> Int
+footerSize fmt = 8 * footerFields fmt + length (footerMagic fmt)
 
 footerBytes :: Footer -> [Byte]
 footerBytes ft =
     concatMap u64Bytes ([fBodiesEnd ft] ++
                         concat [ [a, b, c] | (a, b, c) <- fTables ft ] ++
                         [fStrStart ft, fStrCount ft, fChunkStart ft, fChunkCount ft])
-    ++ footerMagic
+    ++ footerMagic (fFormat ft)
 
 parseFooter :: BS.ByteString -> Footer
 parseFooter s =
     let len  = BS.length s
-        base = len - footerSize
+        -- every format's magic has the same length
+        magic = BS.unpack (BS.drop (len - length (footerMagic Format1)) s)
+        fmt = case [ f | f <- [Format1, Format2], footerMagic f == magic ] of
+                [f] -> f
+                _ -> bad "footer"
+        base = len - footerSize fmt
         field i = readU64 s (base + 8 * i)
-        nk = length allKinds
-        ft = Footer { fBodiesEnd  = field 0
+        nk = length (formatKinds fmt)
+        ft = Footer { fFormat     = fmt
+                    , fBodiesEnd  = field 0
                     , fTables     = [ (field (1 + 3*k), field (2 + 3*k), field (3 + 3*k))
                                     | k <- [0 .. nk - 1] ]
                     , fStrStart   = field (1 + 3*nk)
@@ -1868,7 +1947,7 @@ parseFooter s =
         checkTables start ((es, xs, n) : rest)
           | es /= start || xs < es || n < 0 = bad "table"
           | otherwise = checkTables (xs + 4 * (n + 1)) rest
-    in if len < footerSize || BS.unpack (BS.drop (len - length footerMagic) s) /= footerMagic
+    in if len < footerSize fmt
        then bad "footer"
        else if fBodiesEnd ft < 0
             then bad "bodies"
@@ -1916,16 +1995,23 @@ finishTable k t = do
 -- The bodies region is complete: add the tables, the string table, the
 -- chunk index and the footer.
 finishW :: W -> IO B.ByteString
-finishW w = do
+finishW w = finishContainer Format1 w $
+  -- in formatKinds Format1 order
+  sequence [ finishTable KId (wIds w), finishTable KPosition (wPositions w)
+           , finishTable KType (wTypes w), finishTable KIType (wITypes w) ]
+
+-- The rest of finishing a container in a format, given the action that
+-- finishes its table regions
+finishContainer :: Format -> W -> IO [(BS.ByteString, BS.ByteString, Int)] ->
+                   IO B.ByteString
+finishContainer fmt w finishTables = do
   depth <- readIORef (wDepth w)
   when (depth /= 0) $ internalError "BinData.finishW: unclosed table entry"
   bodiesEnd <- wbLen (wBody w)
   bodies <- wbFreeze (wBody w)
   readIORef (wSpare w) >>= mapM_ wbFree
   free (wCur w)
-  -- in allKinds order
-  tables <- sequence [ finishTable KId (wIds w), finishTable KPosition (wPositions w)
-                     , finishTable KType (wTypes w), finishTable KIType (wITypes w) ]
+  tables <- finishTables
   strs <- reverse <$> readIORef (wStrs w)
   nStr <- readIORef (wNStr w)
   when (length strs /= nStr) $ internalError "BinData.finishW: string table"
@@ -1944,7 +2030,8 @@ finishW w = do
         let xs = start + BS.length es
         in (xs + BS.length os, (start, xs, n))
       (strStart, tableFields) = mapAccumL place bodiesEnd tables
-      ft = Footer { fBodiesEnd = bodiesEnd, fTables = tableFields
+      ft = Footer { fFormat = fmt
+                  , fBodiesEnd = bodiesEnd, fTables = tableFields
                   , fStrStart = strStart, fStrCount = nStr
                   , fChunkStart = strStart + BS.length strBytes
                   , fChunkCount = nChunks }
@@ -1958,6 +2045,339 @@ encodeWithIO remapF x = do
   w <- newW remapF
   runOut (toBin x) w
   finishW w
+
+-- ------------------------------------------------------------------
+-- The format 2 writer (see FORMAT 2 at the top)
+--
+-- The walk of Out, on a W that carries the format 2 state (wV2): the
+-- bodies region, strings and lazy chunks are written as in format 1,
+-- and an Id, Position, Type or IType occurrence is resolved by the
+-- functions below, into growable byte buffers (see WBuf) for each
+-- table's entries and offsets.  A shared value is looked up by a key
+-- made of numbers (FString ids, table indices, line and column numbers)
+-- and resolved to its index where it occurs, after its entry and its
+-- children's entries are written.  The keys identify exactly the
+-- values that format 1's keys identify (id_key; a Position key adds
+-- pos_is_stdlib), and a Type or TISort entry is keyed by its payload,
+-- whose children are already indices.
+
+encodeV2 :: (Bin a) => a -> IO B.ByteString
+encodeV2 = encodeV2With (const id)
+
+-- format 2, with the -remap-path-prefix transform of encodeWithIO
+encodeV2With :: (Bin a) => (Bool -> FString -> FString) -> a -> IO B.ByteString
+encodeV2With remapF x = do
+  st <- newW2
+  w <- newWWith remapF (Just st)
+  runOut (toBin x) w
+  finishW2 w st
+
+apKey2 :: Int -> Int -> Int
+apKey2 na nb
+  | na < 0 || nb < 0 || na > 0x7fffffff || nb > 0x7fffffff =
+      internalError "BinData.apKey2: index out of range"
+  | otherwise = (na `shiftL` 32) .|. nb
+
+-- The Bin Integer encoding of an index, in Int arithmetic
+intBytes :: Int -> [Byte]
+intBytes n0 | n0 < 0 = internalError ("BinData.intBytes: " ++ show n0)
+            | otherwise = go n0 [endPos]
+  where go 0 acc = acc
+        go n acc = go (n `quot` 254) (fromIntegral (n `rem` 254) : acc)
+
+-- A table: its entries, their start offsets (u32, so far), and the
+-- next index
+data Table2 = Table2 { t2Entries :: !WBuf, t2Offsets :: !WBuf, t2Next :: !(IORef Int) }
+
+newTable2 :: IO Table2
+newTable2 = do e <- wbNew 4096; o <- wbNew 4096; n <- newIORef 0
+               return (Table2 e o n)
+
+-- Append an entry: its index
+addEntry2 :: Table2 -> BS.ByteString -> IO Int
+addEntry2 t bytes = do
+  off <- wbLen (t2Entries t)
+  wbU32 (t2Offsets t) off
+  wbBS (t2Entries t) bytes
+  n <- readIORef (t2Next t)
+  writeIORef (t2Next t) $! n + 1
+  return n
+
+-- The table region: the entries, then count+1 offsets
+finishTable2 :: Table2 -> IO (BS.ByteString, BS.ByteString, Int)
+finishTable2 t = do
+  len <- wbLen (t2Entries t)
+  wbU32 (t2Offsets t) len
+  n <- readIORef (t2Next t)
+  es <- wbFreeze (t2Entries t)
+  os <- wbFreeze (t2Offsets t)
+  return (es, os, n)
+
+-- The rest of an Id key: qualifier, position (file, line, column, as
+-- Position's Eq compares) and properties
+data IdRest = IdRest {-# UNPACK #-} !Int {-# UNPACK #-} !Int {-# UNPACK #-} !Int
+                     {-# UNPACK #-} !Int [IdProp]
+  deriving (Eq, Ord)
+
+-- A stored Position: file, line, column, pos_is_stdlib
+data PosKey2 = PosKey2 {-# UNPACK #-} !Int {-# UNPACK #-} !Int {-# UNPACK #-} !Int !Bool
+  deriving (Eq, Ord)
+
+data W2 = W2
+  { w2IdKeys   :: !(IORef (IM.IntMap (M.Map IdRest Int)))  -- by base name id
+  , w2PosKeys  :: !(IORef (M.Map PosKey2 Int))
+  , w2ApKeys   :: !(IORef (IM.IntMap Int))  -- TAp, by its children's indices
+  , w2TyKeys   :: !(IORef (M.Map SBS.ShortByteString Int))  -- other Types, by payload
+  , w2SortKeys :: !(IORef (M.Map SBS.ShortByteString Int))
+  , w2ITKeys   :: !(IORef (M.Map ITypeKey Int))
+    -- values already resolved, most recent first, found by a content
+    -- key and confirmed by exact comparison (see type2): ground types
+    -- by canonical word, TCon nodes and sorts by tycon name
+  , w2WordMemo  :: !(IORef (IM.IntMap [(Type, Int)]))
+  , w2TyConMemo :: !(IORef (M.Map (Int, Int) [(TyCon, Int)]))
+  , w2SortMemo  :: !(IORef (M.Map (Int, Int) [(TISort, Int)]))
+  , w2LeafKeys  :: !(IORef (M.Map LeafKey Int))  -- TyNum and TyStr nodes
+  , w2Ids      :: !Table2
+  , w2Pos      :: !Table2
+  , w2Types    :: !Table2
+  , w2ITypes   :: !Table2
+  , w2Sorts    :: !Table2
+  }
+
+newW2 :: IO W2
+newW2 =
+  W2 <$> newIORef IM.empty <*> newIORef M.empty <*> newIORef IM.empty
+     <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty
+     <*> newIORef IM.empty <*> newIORef M.empty <*> newIORef M.empty
+     <*> newIORef M.empty
+     <*> newTable2 <*> newTable2 <*> newTable2 <*> newTable2 <*> newTable2
+
+-- The bodies region is complete: add the five tables, the string table,
+-- the chunk index and the footer.  W's format 1 tables are not used.
+finishW2 :: W -> W2 -> IO B.ByteString
+finishW2 w st = finishContainer Format2 w $ do
+  mapM_ (\t -> wbFree (wtBytes t) >> wbFree (wtSpans t))
+        [wIds w, wPositions w, wTypes w, wITypes w]
+  -- in formatKinds Format2 order
+  mapM finishTable2 [w2Ids st, w2Pos st, w2Types st, w2ITypes st, w2Sorts st]
+
+-- The payload of a shared value: its writeBytes, with each nested
+-- shared value as its index (resolved, and so entered in its table,
+-- first)
+payload2 :: W -> Out () -> IO BS.ByteString
+payload2 w payload = inBuffer w payload $ \b -> do
+  len <- wbLen b
+  src <- wbPtr b
+  BS.packCStringLen (castPtr src, len)
+
+id2 :: W -> W2 -> Id -> IO Int
+id2 w st i = do
+  let Position f l c _ = getIdPosition i
+      props = getIdProps i
+      kb = fstringId (getIdBase i)
+      kr = IdRest (fstringId (getIdQual i)) (fstringId f) l c props
+  m <- readIORef (w2IdKeys st)
+  case IM.lookup kb m >>= M.lookup kr of
+    Just n -> return n
+    Nothing -> do
+      -- the payload of writeBytes: position, qualifier, base, properties
+      b <- if null props
+           then do np <- pos2 w st (getIdPosition i)
+                   nq <- stringIdx w (getIdQual i)
+                   nb <- stringIdx w (getIdBase i)
+                   return (BS.pack (intBytes np ++ intBytes nq ++ intBytes nb ++ [0]))
+           else payload2 w (writeBytes i)
+      n <- addEntry2 (w2Ids st) b
+      modifyIORef' (w2IdKeys st) (IM.insertWith M.union kb (M.singleton kr n))
+      return n
+
+-- The file name is remapped as in format 1; the key is the stored
+-- (remapped) position.
+pos2 :: W -> W2 -> Position -> IO Int
+pos2 w st p@(Position f l c lib) = do
+  f' <- remapFile w lib f
+  let k = PosKey2 (fstringId f') l c lib
+      p' = if f' == f then p else Position f' l c lib
+  m <- readIORef (w2PosKeys st)
+  case M.lookup k m of
+    Just n -> return n
+    Nothing -> do
+      n <- payload2 w (writeBytes p') >>= addEntry2 (w2Pos st)
+      modifyIORef' (w2PosKeys st) (M.insert k n)
+      return n
+
+itype2 :: W -> W2 -> IType -> IO Int
+itype2 w st t = do
+  let k = itype_key t
+  m <- readIORef (w2ITKeys st)
+  case M.lookup k m of
+    Just n -> return n
+    Nothing -> do
+      n <- payload2 w (writeBytes t) >>= addEntry2 (w2ITypes st)
+      modifyIORef' (w2ITKeys st) (M.insert k n)
+      return n
+
+-- A Type is resolved children first, so that a node's key holds their
+-- indices (the layout readTypeF2 reads).  The memos only skip work: each
+-- finds candidates by a content key and takes one only if it is the same
+-- value in every field the payload writes (sameType; Eq Type ignores
+-- positions, kinds and sorts), so a hit returns the index that resolving
+-- the value again would find and adds no entries.  A ground subtree is
+-- found by its canonical word (typeCanonWordNode: equal words mean
+-- Eq-equal types), so a repeated occurrence costs one comparison walk
+-- instead of a lookup per node; a TCon node and a sort by their tycon's
+-- name; and a TyNum or TyStr node, which carries no word when the parser
+-- built it, by all the fields its payload holds.
+type2 :: W -> W2 -> Type -> IO Int
+type2 w st t =
+  let wd = typeCanonWordNode t
+  in if wd < 0 then type2' w st t
+     else do
+       memoM <- readIORef (w2WordMemo st)
+       let memo = IM.findWithDefault [] wd memoM
+       case [ n | (t', n) <- memo, sameType t t' ] of
+         (n : _) -> return n
+         [] -> do n <- type2' w st t
+                  modifyIORef' (w2WordMemo st) (IM.insert wd (take 4 ((t, n) : memo)))
+                  return n
+
+type2' :: W -> W2 -> Type -> IO Int
+type2' w st t =
+  case t of
+    TAp a b -> do
+      na <- type2 w st a
+      nb <- type2 w st b
+      let k = apKey2 na nb
+      m <- readIORef (w2ApKeys st)
+      case IM.lookup k m of
+        Just n -> return n
+        Nothing -> do
+          n <- addEntry2 (w2Types st) (BS.pack (2 : intBytes na ++ intBytes nb))
+          modifyIORef' (w2ApKeys st) (IM.insert k n)
+          return n
+    TCon tc@(TyCon i mk s) -> do
+      let name = (fstringId (getIdBase i), fstringId (getIdQual i))
+      memoM <- readIORef (w2TyConMemo st)
+      let memo = M.findWithDefault [] name memoM
+      case [ n | (tc', n) <- memo, sameTyCon tc tc' ] of
+        (n : _) -> return n
+        [] -> do
+          ni <- id2 w st i
+          ns <- sort2 w st i s
+          mkb <- payload2 w (writeBytes mk)
+          n <- typeEntry2 st (BS.concat [ BS.pack ([1, 0] ++ intBytes ni), mkb
+                                         , BS.pack (intBytes ns) ])
+          modifyIORef' (w2TyConMemo st) (M.insert name (take 4 ((tc, n) : memo)))
+          return n
+    TCon (TyNum v p) -> leaf (leafKey 1 p v)
+    TCon (TyStr x p) -> leaf (leafKey 2 p (toInteger (fstringId x)))
+    TDefMonad _ -> internalError "BinData.type2: TDefMonad"
+    _ -> payload t
+  where payload u = payload2 w (writeBytes u) >>= typeEntry2 st
+        leaf k = do
+          m <- readIORef (w2LeafKeys st)
+          case M.lookup k m of
+            Just n -> return n
+            Nothing -> do
+              n <- payload t
+              modifyIORef' (w2LeafKeys st) (M.insert k n)
+              return n
+
+-- A TyNum or TyStr node: its TyCon tag, its position (line, column, file
+-- id, pos_is_stdlib) and its value or string id
+data LeafKey = LeafKey {-# UNPACK #-} !Int {-# UNPACK #-} !Int {-# UNPACK #-} !Int
+                       {-# UNPACK #-} !Int !Bool !Integer
+  deriving (Eq, Ord)
+
+leafKey :: Int -> Position -> Integer -> LeafKey
+leafKey tag (Position f l c lib) v = LeafKey tag l c (fstringId f) lib v
+
+-- The index of a Type entry with this payload (other than a TAp)
+typeEntry2 :: W2 -> BS.ByteString -> IO Int
+typeEntry2 st b = do
+  let k = SBS.toShort b
+  m <- readIORef (w2TyKeys st)
+  case M.lookup k m of
+    Just n -> return n
+    Nothing -> do
+      n <- addEntry2 (w2Types st) b
+      modifyIORef' (w2TyKeys st) (M.insert k n)
+      return n
+
+sort2 :: W -> W2 -> Id -> TISort -> IO Int
+sort2 w st i s = do
+  let name = (fstringId (getIdBase i), fstringId (getIdQual i))
+  memoM <- readIORef (w2SortMemo st)
+  let memo = M.findWithDefault [] name memoM
+  case [ n | (s', n) <- memo, sameSort s s' ] of
+    (n : _) -> return n
+    [] -> do
+      b <- payload2 w (writeBytes s)
+      let k = SBS.toShort b
+      m <- readIORef (w2SortKeys st)
+      n <- case M.lookup k m of
+             Just n -> return n
+             Nothing -> do
+               n <- addEntry2 (w2Sorts st) b
+               modifyIORef' (w2SortKeys st) (M.insert k n)
+               return n
+      modifyIORef' (w2SortMemo st) (M.insert name (take 4 ((s, n) : memo)))
+      return n
+
+-- Equality in every field that the writer stores (positions with
+-- pos_is_stdlib, Id properties, kinds and sorts included), so it implies
+-- that the two values have the same payload.
+sameType :: Type -> Type -> Bool
+sameType (TAp f a) (TAp f' a') = sameType f f' && sameType a a'
+sameType (TCon c) (TCon c') = sameTyCon c c'
+sameType (TVar (TyVar i n k)) (TVar (TyVar i' n' k')) = n == n' && k == k' && sameId i i'
+sameType (TGen p n) (TGen p' n') = n == n' && samePos p p'
+sameType _ _ = False
+
+sameTyCon :: TyCon -> TyCon -> Bool
+sameTyCon (TyCon i k s) (TyCon i' k' s') = sameId i i' && k == k' && sameSort s s'
+sameTyCon (TyNum n p) (TyNum n' p') = n == n' && samePos p p'
+sameTyCon (TyStr x p) (TyStr x' p') = x == x' && samePos p p'
+sameTyCon _ _ = False
+
+sameSort :: TISort -> TISort -> Bool
+sameSort (TItype n t) (TItype n' t') = n == n' && sameType t t'
+sameSort (TIdata cs e) (TIdata cs' e') = e == e' && sameList sameId cs cs'
+sameSort (TIstruct su fs) (TIstruct su' fs') = sameSub su su' && sameList sameId fs fs'
+sameSort TIabstract TIabstract = True
+sameSort (TIatf c ps r) (TIatf c' ps' r') = ps == ps' && r == r' && sameId c c'
+sameSort _ _ = False
+
+sameSub :: StructSubType -> StructSubType -> Bool
+sameSub SStruct SStruct = True
+sameSub SClass SClass = True
+sameSub (SDataCon i nf) (SDataCon i' nf') = nf == nf' && sameId i i'
+sameSub (SInterface ps) (SInterface ps') = sameList samePragma ps ps'
+sameSub (SPolyWrap i c f) (SPolyWrap i' c' f') =
+  sameId i i' && sameId f f' &&
+  (case (c, c') of
+     (Nothing, Nothing) -> True
+     (Just x, Just x') -> sameId x x'
+     _ -> False)
+sameSub _ _ = False
+
+-- the other pragmas hold only strings
+samePragma :: IfcPragma -> IfcPragma -> Bool
+samePragma (PIArgNames is) (PIArgNames is') = sameList sameId is is'
+samePragma p p' = p == p'
+
+sameId :: Id -> Id -> Bool
+sameId i i' = getIdBase i == getIdBase i' && getIdQual i == getIdQual i' &&
+              samePos (getIdPosition i) (getIdPosition i') &&
+              getIdProps i == getIdProps i'
+
+samePos :: Position -> Position -> Bool
+samePos (Position f l c b) (Position f' l' c' b') = l == l' && c == c' && b == b' && f == f'
+
+sameList :: (a -> a -> Bool) -> [a] -> [a] -> Bool
+sameList eq (x : xs) (y : ys) = eq x y && sameList eq xs ys
+sameList _ [] [] = True
+sameList _ _ _ = False
 
 -- ------------------------------------------------------------------
 -- Reading the container
@@ -1984,7 +2404,8 @@ mkTables walk s ft = do
                             in if o < prev then bad (show k ++ " table offsets")
                                else go (i + 1) o
         in go (0 :: Int) 0
-  mapM_ (\(k, t) -> checkTable k t) (zip allKinds (fTables ft))
+  let fmt = fFormat ft
+  mapM_ (\(k, t) -> checkTable k t) (zip (formatKinds fmt) (fTables ft))
   let emptyBoxed :: Array Int v
       emptyBoxed = listArray (0, -1) []
       emptyChunks :: UArray Int Int
@@ -1992,6 +2413,7 @@ mkTables walk s ft = do
       tbl0 = Tables { tBytes = s, tStrings = emptyBoxed
                     , tIds = emptyBoxed, tPositions = emptyBoxed
                     , tTypes = emptyBoxed, tITypes = emptyBoxed
+                    , tSorts = emptyBoxed
                     , tChunks = emptyChunks, tChunkCount = 0
                     , tWalk = False }
   -- the string table, interned now (unless walking) and in table
@@ -2010,7 +2432,7 @@ mkTables walk s ft = do
             loop (0 :: Int) []
   let strArr = listArray (0, fStrCount ft - 1) strs :: Array Int FString
   -- the chunk index: every chunk lies within the bodies region
-  chunks <- runAt tbl0 False (fChunkStart ft) (BS.length s - footerSize) "chunk index" $ do
+  chunks <- runAt tbl0 False (fChunkStart ft) (BS.length s - footerSize fmt) "chunk index" $ do
               n <- getU32
               when (n /= fChunkCount ft) $ bad "chunk count"
               let loop i acc
@@ -2023,15 +2445,24 @@ mkTables walk s ft = do
   let nChunks = fChunkCount ft
       chunkArr = listArray (0, 2 * nChunks - 1) chunks :: UArray Int Int
       entryBounds (es, xs, _) i = (es + readU32 s (xs + 4 * i), es + readU32 s (xs + 4 * (i + 1)))
-      lazyTable :: (Bin v) => TableKind -> Array Int v
-      lazyTable k =
+      -- the tables are in formatKinds (= TableKind) order
+      lazyTableWith :: In v -> TableKind -> Array Int v
+      lazyTableWith rd k =
         let t@(_, _, n) = fTables ft !! fromEnum k
             entry i = let (a, b) = entryBounds t i
-                      in runST (runAt tables False a b (show k ++ " entry " ++ show i) readBytes)
+                      in runST (runAt tables False a b (show k ++ " entry " ++ show i) rd)
         in listArray (0, n - 1) [ entry i | i <- [0 .. n - 1] ]
+      lazyTable :: (Bin v) => TableKind -> Array Int v
+      lazyTable = lazyTableWith readBytes
       tables = Tables { tBytes = s, tStrings = strArr
                       , tIds = lazyTable KId, tPositions = lazyTable KPosition
-                      , tTypes = lazyTable KType, tITypes = lazyTable KIType
+                      , tTypes = case fmt of
+                                   Format1 -> lazyTable KType
+                                   Format2 -> lazyTableWith readTypeF2 KType
+                      , tITypes = lazyTable KIType
+                      , tSorts = case fmt of
+                                   Format1 -> emptyBoxed
+                                   Format2 -> lazyTable KSort
                       , tChunks = chunkArr, tChunkCount = nChunks
                       , tWalk = walk }
   return tables
@@ -2048,6 +2479,7 @@ decodeContainer strict s = runST $ do
     force (tPositions tbl)
     force (tTypes tbl)
     force (tITypes tbl)
+    force (tSorts tbl)
   return x
 
 -- Decode a container.  The root is read now; shared table entries and
