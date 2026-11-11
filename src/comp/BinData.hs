@@ -12,9 +12,8 @@ module BinData ( Byte
                , section
                , Lazy(..), toBinLazy, fromBinLazy
                , encodeWithIO, encodeV2, encodeV2With
-               , encodeV2Strip, encodeV2Strings, keepPositions
+               , encodeV2Strip, keepPositions
                , decode, decodeStrict, decodeWithHash
-               , maxFooterSize, strTableRegion, decodeStringTable
                ) where
 
 {- Routines for converting structures to/from byte strings.
@@ -108,7 +107,6 @@ import Prim hiding(PrimArg(..))
 import Util(hashInit, nextHashByte, showHash)
 
 import Data.List(mapAccumL)
-import Data.Coerce(coerce)
 import Control.Monad(liftM, ap, when)
 import Control.Monad.ST(ST, runST)
 import GHC.ST(ST(..))
@@ -604,18 +602,11 @@ stringIdx w s = do
   case IM.lookup k m of
     Just n -> return n
     Nothing -> do
-      n <- newString w s
+      n <- readIORef (wNStr w)
+      writeIORef (wNStr w) $! n + 1
       writeIORef (wStrIdx w) $! IM.insert k n m
+      modifyIORef' (wStrs w) (s :)
       return n
-
--- The next string index, for a string not written before; wStrIdx is
--- left to the caller
-newString :: W -> FString -> IO Int
-newString w s = do
-  n <- readIORef (wNStr w)
-  writeIORef (wNStr w) $! n + 1
-  modifyIORef' (wStrs w) (s :)
-  return n
 
 -- The file-name transform (-remap-path-prefix) is applied before
 -- sharing, so the key is the stored (remapped) value: positions that
@@ -1955,24 +1946,19 @@ footerBytes ft =
                         [fStrStart ft, fStrCount ft, fChunkStart ft, fChunkCount ft])
     ++ footerMagic (fFormat ft)
 
-parseFooter :: BS.ByteString -> Footer
-parseFooter s = parseFooterOf (BS.length s) s
-
--- The footer of a container of len bytes, read from t, the container's
--- last bytes: all of them, or at least maxFooterSize.
 -- Out of line: inlined into decodeContainer, it makes every container
 -- read allocate more
-{-# NOINLINE parseFooterOf #-}
-parseFooterOf :: Int -> BS.ByteString -> Footer
-parseFooterOf len t =
-    let tlen = BS.length t
+{-# NOINLINE parseFooter #-}
+parseFooter :: BS.ByteString -> Footer
+parseFooter s =
+    let len  = BS.length s
         -- every format's magic has the same length
-        magic = BS.unpack (BS.drop (tlen - length (footerMagic Format1)) t)
+        magic = BS.unpack (BS.drop (len - length (footerMagic Format1)) s)
         fmt = case [ f | f <- [Format1, Format2], footerMagic f == magic ] of
                 [f] -> f
                 _ -> bad "footer"
         base = len - footerSize fmt
-        field i = readU64 t (tlen - footerSize fmt + 8 * i)
+        field i = readU64 s (base + 8 * i)
         nk = length (formatKinds fmt)
         ft = Footer { fFormat     = fmt
                     , fBodiesEnd  = field 0
@@ -2129,25 +2115,6 @@ encodeV2Strip sel x = do
   strs <- readIORef (wStrs w)
   bs <- finishW2 w st
   return (bs, reverse strs)
-
--- What encodeV2 writes for a list of strings whose ids strictly ascend,
--- without wStrIdx: no id repeats, so no lookup there could hit
-encodeV2Strings :: [FString] -> IO B.ByteString
-encodeV2Strings strs = do
-  when (not (ascending strs)) $
-    internalError "BinData.encodeV2Strings: ids not ascending"
-  encodeV2 (coerce strs :: [NewString])
-  where ascending (s : ss@(s' : _)) = fstringId s < fstringId s' && ascending ss
-        ascending _ = True
-
--- A string written as the next string index (see encodeV2Strings)
-newtype NewString = NewString FString
-
-instance Bin NewString where
-  writeBytes (NewString s) = writeBytes s
-  readBytes = NewString <$> readBytes
-  toBin (NewString s) = Out $ \w -> newString w s >>= putIdx w
-  fromBin = NewString <$> fromBin
 
 -- Write with every position kept, under encodeV2Strip
 keepPositions :: Out () -> Out ()
@@ -2545,14 +2512,10 @@ emptyTables s =
 -- The string table in table order, each string interned as it is read
 -- (unless walking: see mkTables)
 readStrTable :: Bool -> BS.ByteString -> Footer -> ST s [FString]
-readStrTable walk s ft = readStrings walk s (fStrStart ft) (fChunkStart ft) (fStrCount ft)
-
--- The string table that holds count strings and spans start .. end of s
-readStrings :: Bool -> BS.ByteString -> Int -> Int -> Int -> ST s [FString]
-readStrings walk s start end count =
-  runAt (emptyTables s) False start end "string table" $ do
+readStrTable walk s ft =
+  runAt (emptyTables s) False (fStrStart ft) (fChunkStart ft) "string table" $ do
     n <- getU32
-    when (n /= count) $
+    when (n /= fStrCount ft) $
       internalError "BinData.decode: malformed container (string count)"
     let loop i acc
           | i >= n    = return (reverse acc)
@@ -2561,22 +2524,6 @@ readStrings walk s start end count =
                                  else In (\_ -> evaluateST f)
                            loop (i + 1) (fs : acc)
     loop (0 :: Int) []
-
--- The most bytes a container's footer takes
-maxFooterSize :: Int
-maxFooterSize = maximum (map footerSize [Format1, Format2])
-
--- A container's string table: its start and end (offsets into the
--- container) and its string count, from the container's length and last
--- bytes as parseFooterOf takes them; a bad footer fails as decode fails
-strTableRegion :: Int -> BS.ByteString -> (Int, Int, Int)
-strTableRegion len t = let ft = parseFooterOf len t
-                       in  (fStrStart ft, fChunkStart ft, fStrCount ft)
-
--- The strings of a string table (see strTableRegion) holding n strings,
--- interned in table order as decode interns them
-decodeStringTable :: Int -> BS.ByteString -> [FString]
-decodeStringTable n s = runST (readStrings False s 0 (BS.length s) n)
 
 decodeContainer :: (Bin a) => Bool -> BS.ByteString -> a
 decodeContainer strict s = runST $ do

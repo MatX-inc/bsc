@@ -7,7 +7,7 @@ module SpeedyString(SString, toString, fromString, fromEnumName,
                     InternSnapshot(..), snapshotInternState, validSnapshot,
                     snapshotProblem, restoreInternState,
                     renderInternTable, internCount, internedSince,
-                    internedIdsSince, isInterned, sstringId) where
+                    isInterned, sstringId) where
 
 import Prelude hiding((++), concat, filter)
 import qualified Prelude((++), filter)
@@ -736,21 +736,6 @@ internCount = fmap tNext (readIORef table)
 internedSince :: Int -> IO [String]
 internedSince n = do t <- readIORef table
                      spellingsFrom t (max 0 n)
-
--- What fromString of each spelling internedSince n returns gives, in the
--- same order, read from the table without spelling or hashing them
-internedIdsSince :: Int -> IO [SString]
-internedIdsSince n = do t <- readIORef table
-                        let lo = max 0 n
-                            go i acc
-                              | i < lo = return acc
-                              | otherwise =
-                                  do k <- unsafeRead (tKey t) i
-                                     v <- if k .&. 7 == 1 then reservedId (k `shiftR` 3)
-                                          else return 0
-                                     let !d = if v /= 0 then v else idOf i
-                                     go (i - 1) (SString d : acc)
-                        go (tNext t - 1) []
 
 -- Spellings of entries lo .. tNext - 1.  Built back to front in constant
 -- stack: the dump runs in an exit handler under the default -K10m, where a

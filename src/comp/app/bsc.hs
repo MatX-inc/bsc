@@ -63,7 +63,6 @@ import SystemCheck(doSystemCheck)
 import BuildSystem
 import IOUtil(getEnvDef, progArgs)
 import SpeedyString(snapshotInternState, renderInternTable)
-import FStringCompat(FString, internedFStringsSince)
 
 -- compiler libs
 --import FStringCompat
@@ -441,12 +440,10 @@ signaturePackage errh flags tStart biSeen name_orig min@(CPackage pkgId _ _ _ _ 
                              cr_atfCache = atfCacheFromCtxReduce, cr_symt = symt })
         <- ctxReducePackage errh flags tStart dumpnames
                (frontEndImports errh flags biSeen min)
-    -- what a check of this package would have interned by now
-    handoffStrings <- internedFStringsSince 0
     (ok, pkgsUsedInExports) <-
         writeSignature errh flags t dumpnames name pwd biClosure symt mctx
     when ok $
-        writeTci errh flags name biClosure handoffStrings mctx atfCacheFromCtxReduce
+        writeTci errh flags name biClosure mctx atfCacheFromCtxReduce
                  (pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInExports)
     return ok
 
@@ -480,13 +477,12 @@ checkPackage errh flags tStart name_orig min@(CPackage pkgId _ _ _ _ _ _) = do
 -- it refers to (found on the -p path).  Messages that the steps
 -- before it produce were reported by -signature-only, so the .chk holds
 -- only this run's.  The table is built once, from the pruned signatures
--- and the package, after the canonical-word gate opens: the .tci's
--- strings, interned first, are every string a type here can reach.
+-- and the package, after the canonical-word gate opens.
 -- It shares typecheckPackage and writeCheck with checkPackage.
--- -u -check-only checks each package's .tci in the process that wrote it
--- (compile_with_deps), where every string of the .tci is interned
--- already, in the run's order rather than the writer's alone, so reading
--- the .tci and the library .bi files interns nothing.
+-- Strings are interned in the order this run reads or makes them, so
+-- the .chk is a function of the .tci and the installation; -u -check-only
+-- checks each package's .tci in the process that wrote it
+-- (compile_with_deps), where the earlier packages interned strings first.
 checkTci :: ErrorHandle -> Flags -> String -> IO Bool
 checkTci errh flags name_tci = do
     tStart <- getNow
@@ -496,7 +492,7 @@ checkTci errh flags name_tci = do
 
     start flags DFimports
     bytes <- readBinaryFileCatch errh noPosition name_tci
-    (tci0, tci_hash) <- readTciFile errh name_tci bytes enableCanonIds
+    (tci0, tci_hash) <- readTciFile errh name_tci bytes
     let name = tci_source tci0
     setSyntax (if hasDotSuf bscSrcSuffix name then CLASSIC else BSV)
     writeIORef internDumpFile (Just (putInDir (bdir flags) name "intern.json"))
@@ -511,6 +507,14 @@ checkTci errh flags name_tci = do
             ("-warn-redundant-provisos needs a check of the source file " ++
              "(-check-only without -u), not of a .tci file."))]
     tci <- readTciLibraries errh (verbose flags) (ifcPath flags) tci0
+    -- Where ctxReducePackage opens it, after the imports: every string
+    -- table this run reads (the .tci's, then each library .bi's) is
+    -- interned, and no type is built yet (tables decode on demand).
+    -- The table below is built with it open, so in a fresh process its
+    -- instance ordering (MakeSymTab.cmpQInsts) first interns some
+    -- PreIds.tmpVarIds names (_aN) inside a word computation, which
+    -- -trace-ctype-stats counts in intern_other.
+    enableCanonIds
     let mctx@(CPackage pkgId _ _ impsigs _ _ _) = tci_package tci
         dumpnames = (Just (baseName (dropSuf name)), Just (getIdString (unQualId pkgId)), Nothing)
     when traceTci $
@@ -1113,11 +1117,10 @@ writeSignature errh flags t dumpnames name pwd closure symt
 
 -- -signature-only: also write the package's .tci, the input of
 -- -check-only X.tci (see GenTci).  closure is every imported package with
--- the hash of the .bi read for it; handoffStrings are the strings
--- interned when the package reached the handoff, in arrival order.
-writeTci :: ErrorHandle -> Flags -> String -> [(Id, String)] -> [FString] -> CPackage ->
+-- the hash of the .bi read for it.
+writeTci :: ErrorHandle -> Flags -> String -> [(Id, String)] -> CPackage ->
             CATFCache -> (S.Set Id, S.Set Id, S.Set Id) -> IO ()
-writeTci errh flags name closure handoffStrings mctx atfCache usedSets = do
+writeTci errh flags name closure mctx atfCache usedSets = do
     let tci_filename = putInDir (bdir flags) name tciSuffix
         ti = TciInput { ti_source = name
                       , ti_flags = flagsFingerprint flags
@@ -1125,7 +1128,6 @@ writeTci errh flags name closure handoffStrings mctx atfCache usedSets = do
                       , ti_bi_hashes = M.fromList [ (getIdString i, h) | (i, h) <- closure ]
                       , ti_used = usedSets
                       , ti_atf = atfCache
-                      , ti_handoff_strings = handoffStrings
                       , ti_full = "-tci-full-imports" `elem` progArgs
                       , ti_keep_pos = "-tci-keep-positions" `elem` progArgs }
     (stats, hash) <- genTciFile errh tci_filename ti
@@ -1140,13 +1142,13 @@ traceTci = "-trace-tci" `elem` progArgs
 showTciStats :: String -> String -> TciStats -> String
 showTciStats fn hash st =
     let (kept, entries) = ts_entries st
-        (bs, bl, bsig) = ts_bytes st
+        (bl, bsig) = ts_bytes st
     in  unwords [ "tci write", getRelativeFilePath fn, "hash", hash
                 , "entries", show kept ++ "/" ++ show entries
                 , "lib", show (fst (ts_lib st)) ++ "/" ++ show (snd (ts_lib st))
                 , "names", show (ts_names st)
                 , "strings", show (ts_strings st)
-                , "bytes", show bs ++ "+" ++ show bl ++ "+" ++ show bsig
+                , "bytes", show bl ++ "+" ++ show bsig
                 , "stripped-files", show (ts_stripped st) ]
 
 -- A hash of the flags whose values can change what -signature-only or

@@ -10,7 +10,6 @@ module FileIOUtil
     ,readFileCatch
     ,readBinaryFileMaybe
     ,readBinaryFileCatch
-    ,withFileRangesCatch
     ,writeFileCatch
     ,writeFileBuilderCatch
     ,writeBinaryFileCatch
@@ -55,9 +54,6 @@ import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Internal as BSI
-import qualified GHC.IO.FD as FD
-import qualified GHC.IO.Device as Dev
 import qualified Data.ByteString.Lazy as B
 import qualified Data.ByteString.Builder as BB
 
@@ -246,27 +242,6 @@ readBinaryFileMaybe fname =
 readBinaryFileCatch :: ErrorHandle -> Position -> FilePath -> IO BS.ByteString
 readBinaryFileCatch errh pos fname =
     catchIO (BS.readFile fname) (fileReadError errh emptyContext pos fname)
-
--- Run an action on a binary file opened for reading, given the file's
--- size and a reader of byte ranges (offset, length; shorter at the end of
--- the file).  It reads through a bare file descriptor: a Handle would
--- allocate its buffers on every open.  A failure is reported as
--- readBinaryFileCatch reports it.
-withFileRangesCatch :: ErrorHandle -> Position -> FilePath ->
-                       (Int -> (Int -> Int -> IO BS.ByteString) -> IO a) -> IO a
-withFileRangesCatch errh pos fname act =
-    catchIO (CE.bracket (fst <$> FD.openFile fname ReadMode False) Dev.close $ \fd -> do
-               size <- fromIntegral <$> Dev.getSize fd
-               let range off n = do
-                     _ <- Dev.seek fd AbsoluteSeek (fromIntegral off)
-                     BSI.createAndTrim n $ \p -> readAll fd p n 0
-               act size range)
-            (fileReadError errh emptyContext pos fname)
-  where readAll fd p n k
-          | k >= n = return k
-          | otherwise = do
-              r <- FD.readRawBufferPtr "withFileRangesCatch" fd p k (fromIntegral (n - k))
-              if r <= 0 then return k else readAll fd p n (k + r)
 
 -- If the file writing fails, a BSC error message is reported
 writeFileCatch :: ErrorHandle -> FilePath -> String -> IO ()

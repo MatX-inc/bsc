@@ -5,8 +5,7 @@ module FStringCompat(FString, getFString,
                      filterFString, fstringId,
                      fstringUtf8, mkFStringUtf8,
                      foldrFString, headFString, takeFString, allFString,
-                     eqFString, isSuffixOfFString, lookupFString,
-                     internedFStringsSince
+                     eqFString, isSuffixOfFString, lookupFString
                     ) where
 
 -- wrapper to make SStrings look like FStrings
@@ -26,11 +25,6 @@ newtype FString = FString S.SString deriving (Eq,Ord,Generic.Data, Generic.Typea
 -- The string's id (SpeedyString.sstringId): equal ids are equal strings.
 fstringId :: FString -> Int
 fstringId (FString s) = S.sstringId s
-
--- The strings interned since SpeedyString.internCount returned n, in
--- arrival order (see SpeedyString.internedIdsSince)
-internedFStringsSince :: Int -> IO [FString]
-internedFStringsSince n = map FString <$> S.internedIdsSince n
 
 fromString :: String -> FString
 fromString = FString . S.fromString
