@@ -1,0 +1,38 @@
+package FieldAssoc where
+
+-- Selecting or constructing a field whose declared type names an
+-- associated type needs the proviso that resolves it, though its
+-- dictionary is unused: no warning.
+
+struct Packed a =
+    raw :: Bit (SizeOf a)
+
+copyPacked :: (Bits a n) => Packed a -> Packed a
+copyPacked p = Packed { raw = p.raw }
+
+getRaw :: (Bits a 8) => Packed a -> Bit 8
+getRaw p = p.raw
+
+class Kind k t | k -> t where
+  type Tag k = t
+  kindName :: k -> String
+
+struct Box k =
+    tag :: Tag k
+
+data A = A
+
+instance Kind A (Bit 4) where
+  kindName _ = "A"
+
+retag :: (Kind k t) => Box k -> Box k
+retag b = Box { tag = b.tag }
+
+class (Eq t) => Kind2 k t | k -> t where
+  type Tag2 k = t
+
+struct Box2 k =
+    tag2 :: Tag2 k
+
+retag2 :: (Kind2 k t) => Box2 k -> Box2 k
+retag2 b = Box2 { tag2 = b.tag2 }

@@ -1,0 +1,8 @@
+package MethodAssocImport where
+
+-- a method of an imported class: no warning
+
+import MethodAssocLib
+
+toByte :: (Shape a, Bits a 8) => a -> Bit 8
+toByte x = shapeBits x

@@ -94,6 +94,7 @@ import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
                   getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck, CATFCache, mergeCATFCaches)
 import Eval(rnf)
+import RedundantProvisos(warnRedundantProvisos, checkRedundantProvisos)
 import CType(enableCanonIds, disableCanonIds, cTypeStats)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
@@ -509,7 +510,8 @@ compilePackage
 
     -- Reduce the contexts as far as possible
     start flags DFctxreduce
-    (mctx, pkgsUsedInCtxReduce, atfCacheFromCtxReduce) <- cCtxReduceIO errh flags symt11 mder
+    (mctx, pkgsUsedInCtxReduce, atfCacheFromCtxReduce, signProvisos) <-
+        cCtxReduceIO errh flags symt11 warnRedundantProvisos mder
     t <- dump errh flags t DFctxreduce dumpnames mctx
 
     -- Rebuild the symbol table because CtxReduce has possibly changed
@@ -535,6 +537,10 @@ compilePackage
     when checkBinRoundTrip $
         checkRoundTrip "typechecked package" CPackageBin
                        (\(CPackageBin p) -> sortSched p) (sortSched (stripImpSigs mod))
+
+    -- Off by default; when off, this evaluates nothing the compile would not.
+    when (warnRedundantProvisos && not tcErrors) $
+      checkRedundantProvisos errh symt11 mder signProvisos mod
 
     when (frontEndMode flags `elem` [CheckOnly, CheckWithSignature]) $
         writeCheck errh flags t dumpnames name pwd biClosure symt
@@ -2557,7 +2563,7 @@ compileCDefToIDef errh flags dumpnames symt ipkg def =
     t <- getNow
 
     start flags DFwrapper_ctxreduce
-    (cpkg_ctx, _, _) <- cCtxReduceIO errh flags symt cpkg0
+    (cpkg_ctx, _, _, _) <- cCtxReduceIO errh flags symt False cpkg0
     t <- dump errh flags t DFwrapper_ctxreduce dumpnames cpkg_ctx
 
     start flags DFwrapper_typecheck

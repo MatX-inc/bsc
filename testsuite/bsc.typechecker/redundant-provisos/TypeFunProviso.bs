@@ -1,0 +1,10 @@
+package TypeFunProviso where
+
+class Shape a where
+  area :: a -> Integer
+
+-- The type function in the proviso becomes a fresh variable with a Bits
+-- proviso, which context reduction keeps alongside Shape; the definition
+-- uses neither dictionary.
+sizeTag :: (Shape (Bit (SizeOf a))) => a -> Integer
+sizeTag _ = 0

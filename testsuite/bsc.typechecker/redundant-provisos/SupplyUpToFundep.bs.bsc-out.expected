@@ -1,0 +1,9 @@
+checking package dependencies
+compiling SupplyUpToFundep.bs
+Warning: "SupplyUpToFundep.bs", line 15, column 22: (T0167)
+  The proviso `DefaultValue (Tag k)' on `named' is redundant: the definition
+  does not use it.
+Warning: "SupplyUpToFundep.bs", line 18, column 11: (T0167)
+  The proviso `DefaultValue (Tag k)' on `named2' is redundant: the definition
+  does not use it.
+All packages are up to date.

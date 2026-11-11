@@ -281,6 +281,7 @@ library
     ProofObligation
     RSchedule
     RealUtil
+    RedundantProvisos
     SAL
     SAT
     SATPred

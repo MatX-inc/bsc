@@ -1,0 +1,6 @@
+checking package dependencies
+compiling SuperSupply.bs
+Warning: "SuperSupply.bs", line 20, column 25: (T0167)
+  The proviso `Fancy (Box a)' on `describe' is redundant: `Labelled a'
+  supplies all that the definition uses of it.
+All packages are up to date.
