@@ -27,6 +27,7 @@ import Control.Monad(when, foldM, zipWithM, mapAndUnzipM)
 import Control.Monad.Fix(mfix)
 --import Control.Monad.Fix
 import Control.Monad.State(State, evalState, liftIO, get, put)
+import Control.Exception(evaluate)
 import Data.Graph
 import System.IO(Handle, BufferMode(..), IOMode(..), stdout, stderr,
                  hSetBuffering, hIsOpen, hIsClosed)
@@ -69,7 +70,7 @@ import Pragma
 import DefProp
 import Changed(changedOrId)
 import ISyntax
-import ISyntaxSubst(eSubst, eSubstBatch, tSubstBatch)
+import ISyntaxSubst(eSubst, eSubstBatch, eSubstClosed, tSubstBatch)
 import IConv(iConvT, iConvExpr)
 import ISyntaxUtil
 import IExpandUtils
@@ -208,6 +209,14 @@ doDebugFreeVars = elem "-debug-eval-free-vars" progArgs
 -- Trace batched substitutions in IExpand
 doTraceExpandBatchSubst :: Bool
 doTraceExpandBatchSubst = elem "-trace-expand-batch-subst" progArgs
+
+-- -hack-no-let-batch
+--   Flush the accumulated substitution at every head-position redex (one
+--   walk of the remaining body per let), instead of binding the redex's
+--   arguments within the batch.  For A/B comparison and debugging.
+{-# NOINLINE letBatchOn #-}
+letBatchOn :: Bool
+letBatchOn = not (elem "-hack-no-let-batch" progArgs)
 
 -- We need to set the buffering of stdout and stderr
 -- if any trace is on (including a trace only used in IExpandUtils)
@@ -3305,10 +3314,14 @@ mkApUH f es = do es' <- mapM evalArgUH es
 -- Accumulate substitutions when applying to a chain of ILam/ILAM
 -- This batches substitutions to avoid repeated hyper calls
 --
-evalApAccum :: String -> M.Map Id HExpr -> M.Map Id IType -> HExpr -> [Arg] -> G PExpr
+-- exprCtx holds every expression binding since the last flush.  pend holds
+-- the ones bound since the last head-position redex: the bindings the
+-- flush at the next redex would have held (see the redex clause).
+evalApAccum :: String -> M.Map Id HExpr -> M.Map Id HExpr -> M.Map Id IType
+            -> HExpr -> [Arg] -> G PExpr
 
 -- Continue accumulating for ILam with expression argument
-evalApAccum tag exprCtx typeCtx (ILam i t body) (E a : as) = do
+evalApAccum tag exprCtx pend typeCtx (ILam i t body) (E a : as) = do
   -- Apply accumulated type variable substitutions to t before allocating the heap cell.
   -- typeCtx may bind type vars that appear in t (e.g. for polymorphic functions like
   -- displayHex :: forall a sa. (Bits a sa) => a -> Action, where t = ITVar a until
@@ -3318,14 +3331,43 @@ evalApAccum tag exprCtx typeCtx (ILam i t body) (E a : as) = do
   a' <- toHeap "apply-accum" t' a (Just i)
   -- position information is clobbered by this point
   when doDebug $ traceM ("accum apply arg=" ++ ppReadable (a', a))
-  evalApAccum "ILam-accum" (M.insert i a' exprCtx) typeCtx body as
+  evalApAccum "ILam-accum" (M.insert i a' exprCtx) (M.insert i a' pend)
+              typeCtx body as
 
 -- Continue accumulating for ILAM with type argument
-evalApAccum tag exprCtx typeCtx e@(ILAM i k body) (T t : as) =
-  evalApAccum "ILAM-accum" exprCtx (M.insert i t typeCtx) body as
+evalApAccum tag exprCtx pend typeCtx e@(ILAM i k body) (T t : as) =
+  evalApAccum "ILAM-accum" exprCtx pend (M.insert i t typeCtx) body as
+
+-- A head-position redex, such as a let (typechecker dictionary bindings form
+-- long chains): bind its arguments and keep accumulating, rather than flush
+-- over the whole remaining body once per binding.  The toHeap calls match
+-- flushing then applying (evalAp' IAps, evalAp' ILam): the arguments lie
+-- outside the redex's binders, and an empty typeCtx leaves types untouched.
+-- Payloads are closed, so binding here composes as the two flushes would.
+--
+-- Forcing a payload deepseqs its binder type, which can intern strings and
+-- type nodes, so the forcing order is kept: the skipped flush would first
+-- force eSubstBatch's free-variable union over pend, in key order.  Its walk
+-- of the body forces nothing else (an earlier payload is already forced),
+-- and the final flush forces the rest of exprCtx in the same order.
+evalApAccum tag exprCtx pend typeCtx (IAps f [] es) args
+  | letBatchOn, M.null typeCtx,
+    (ILam i t body, e1 : erest) <- peelRedex f es = do
+  _ <- liftIO $ evaluate (S.unions (M.elems (M.map fVars pend)))
+  let sub = eSubstClosed exprCtx
+  a' <- toHeap "apply" t (sub e1) (Just i)
+  when (doDebugFreeVars && not (S.null (fVars a'))) $
+       internalError ("evalApAccum let-batch: fv " ++ ppReadable a')
+  when doDebug $ traceM ("let-batch apply arg=" ++ ppReadable (a', e1))
+  evalApAccum "ILam" (M.insert i a' exprCtx) (M.singleton i a') M.empty body
+              (map (E . sub) erest ++ args)
+ where
+  -- the argument stack evalAp' IAps would build, for a head that is an ILam
+  peelRedex (IAps g [] es0) es' = peelRedex g (es0 ++ es')
+  peelRedex g es' = (g, es')
 
 -- Hit something else: apply accumulated substitutions if any, then continue
-evalApAccum tag exprCtx typeCtx e args = do
+evalApAccum tag exprCtx _ typeCtx e args = do
   when (doDebug || doTraceExpandBatchSubst) $
     traceM ("applying batched subst: " ++
              show (M.size exprCtx) ++ " exprs, " ++
@@ -3388,7 +3430,7 @@ evalAp'   (ILam i t e)   (E a:as) = do
         a' <- toHeap "apply" t a (Just i)
         -- position information is clobbered by this point
         when doDebug $ traceM ("apply arg=" ++ ppReadable (a', a))
-        evalApAccum "ILam" (M.singleton i a') M.empty e as
+        evalApAccum "ILam" (M.singleton i a') (M.singleton i a') M.empty e as
 evalAp'   f@(ILam _ _ _) (T t:as) = internalError("evalAp' ILam: " ++ ppReadable (f,t))
 
 -- it's WHNF
@@ -3396,7 +3438,7 @@ evalAp' e@(ILAM _ _ _)         [] = return (pExpr e)
 -- substitute type
 -- We can put t directly into typeCtx because the simpNumT case of evalAp' took care of
 -- simplifying any unsimplified numeric types
-evalAp'   (ILAM i k e)   (T t:as) = evalApAccum "ILAM" M.empty (M.singleton i t) e as
+evalAp'   (ILAM i k e)   (T t:as) = evalApAccum "ILAM" M.empty M.empty (M.singleton i t) e as
 evalAp'   f@(ILAM _ _ _) (E e:as) = internalError ("evalAp' ILAM:" ++ ppReadable (f,e))
 -- place applications args on the stack and evaluate function
 evalAp' e@(IAps f tys es)      as =
