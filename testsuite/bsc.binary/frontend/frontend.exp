@@ -222,7 +222,7 @@ foreach p $chain {
 # Every .bi is that of a standalone -signature-only compile, and every
 # .chk records the messages, status and package of a standalone check of
 # the .tci that compile writes (the .tci, and so the .chk's record of it,
-# can differ: -u has interned the other packages' strings too)
+# can differ: under -u the earlier packages have interned strings first)
 foreach p $chain {
     front_end_pass $p.bs -signature-only "" 1
     compare_bytes frontend_u/$p.bi $p.bi

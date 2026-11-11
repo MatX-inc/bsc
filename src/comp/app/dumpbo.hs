@@ -71,7 +71,7 @@ main = do
             mapM_ (putStr . diag_text) diags
             putStr (ppReadable pkg)
       else if ".tci" `isSuffixOf` fname then do
-        (tci, hash) <- readTciFile errh fname file (return ())
+        (tci, hash) <- readTciFile errh fname file
         let pkg@(CPackage name _ _ sigs _ ds _) = tci_package tci
             showSet s = unwords (map getIdString (S.toList s))
         putStrLn ("Package: " ++ getIdString name)
