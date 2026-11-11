@@ -5,6 +5,9 @@ module AExpr2Yices(
 
        checkDisjointExpr,
        checkDisjointRulePair,
+       convertRulePair,
+       decideRulePairs,
+       YTerm,
 
        checkBiImplication,
        isConstExpr,
@@ -16,6 +19,7 @@ import Control.Monad(when)
 import Control.Monad.State(StateT, runStateT, liftIO,
                            gets, get, put, modify)
 import qualified Data.Map as M
+import qualified Data.Set as S
 import qualified Yices as Y
 import Data.Word(Word32)
 
@@ -40,6 +44,9 @@ traceTest = "-trace-smt-test" `elem` progArgs
 
 traceConv :: Bool
 traceConv = "-trace-smt-conv" `elem` progArgs
+
+traceWitness :: Bool
+traceWitness = "-trace-smt-witness" `elem` progArgs
 
 -- -------------------------
 
@@ -184,6 +191,91 @@ checkDisjointRulePairM (r1, r2) check = do
   c1 <- getRuleCond r1
   c2 <- getRuleCond r2
   checkDisjointExprM False check c1 c2
+
+type YTerm = Y.Expr
+
+-- A rule pair looked up and converted as checkDisjointRulePair does: its
+-- verdict if one is known or the verdict is not read, else (a read pair
+-- that needs a check) its two converted conditions, left Unchecked in
+-- proofMap, for decideRulePairs.  Whether the verdict is read is forced at
+-- the points where checkDisjointExprM forces it.
+convertRulePair :: YState -> (ARuleId, ARuleId) -> Bool ->
+                   IO (Either (Maybe Bool) (Y.Expr, Y.Expr), YState)
+convertRulePair s rp needed = runStateT (convertRulePairM rp needed) s
+
+convertRulePairM :: (ARuleId, ARuleId) -> Bool ->
+                    YM (Either (Maybe Bool) (Y.Expr, Y.Expr))
+convertRulePairM (r1, r2) needed = do
+  when traceTest $ traceM("comparing rules: " ++ ppString (r1,r2))
+  c1 <- getRuleCond r1
+  c2 <- getRuleCond r2
+  memRes <- lookupProofMap c1 c2
+  case memRes of
+    Just (Proved r) -> return (Left (fmap not (cvtStatus r)))
+    Just (Unchecked ye1 ye2)
+      | needed -> return (Right (ye1, ye2))
+      | otherwise -> return (Left Nothing)
+    Nothing -> do
+      (ye1, _) <- convAExpr2YExpr_Force True c1
+      (ye2, _) <- convAExpr2YExpr_Force True c2
+      addToProofMap c1 c2 (Unchecked ye1 ye2)
+      if needed then return (Right (ye1, ye2)) else return (Left Nothing)
+
+-- The verdicts of rule pairs from convertRulePair, in order, as checking
+-- each pair would give them.  When the batch has many pairs per condition
+-- and its first pairs are all satisfiable, every condition is checked at
+-- once: if they can all hold together, every pair can (none is disjoint),
+-- so one check decides the rest of the batch.  Otherwise each pair is
+-- checked as checkPushPop does.  Nothing is converted here, so the terms
+-- (and names) are those of the sweep.
+decideRulePairs :: YState -> [(Y.Expr, Y.Expr)] -> IO ([Maybe Bool], YState)
+decideRulePairs s ps = do
+  let ctx = context s
+      terms = nubTerms [ t | (y1, y2) <- ps, t <- [y1, y2] ]
+      nterms = length terms
+      npairs = length ps
+      tryAll = npairs >= allAtOnceRatio * nterms
+      (pre, rest) = if tryAll then splitAt allAtOncePreChecks ps else (ps, [])
+      checkPair (y1, y2) = do r <- checkAssertions ctx [y1, y2]
+                              return $! fmap not (cvtStatus r)
+  vpre <- mapM checkPair pre
+  let attempt = tryAll && not (null rest) && all (== Just False) vpre
+  allSat <- if attempt
+            then (== Y.Satisfiable) <$> checkAssertions ctx terms
+            else return False
+  vrest <- if allSat
+           then return (map (const (Just False)) rest)
+           else mapM checkPair rest
+  when traceWitness $
+      traceM ("decideRulePairs: pairs " ++ show npairs ++
+              ", conditions " ++ show nterms ++
+              ", all at once " ++ (if attempt then show allSat else "-") ++
+              ", pair checks " ++
+              show (length pre + (if allSat then 0 else length rest)))
+  return (vpre ++ vrest, s)
+
+-- Checking every condition at once is tried for batches with at least
+-- this many pairs per condition, after this many pairs have been checked
+-- and found satisfiable: one failing check of many conditions can cost
+-- far more than the pair checks of a small batch.
+allAtOnceRatio, allAtOncePreChecks :: Int
+allAtOnceRatio = 32
+allAtOncePreChecks = 8
+
+nubTerms :: [Y.Expr] -> [Y.Expr]
+nubTerms = go S.empty
+  where go _ [] = []
+        go seen (t:ts) | S.member t seen = go seen ts
+                       | otherwise = t : go (S.insert t seen) ts
+
+-- The satisfiability of the conjunction, in the main context (push/pop)
+checkAssertions :: Y.Context -> [Y.Expr] -> IO Y.Status
+checkAssertions ctx es = do
+    Y.ctxPush ctx
+    mapM_ (Y.assert ctx) es
+    r <- Y.ctxStatus ctx
+    Y.ctxPop ctx
+    return r
 
 isDecided :: Y.Status -> Bool
 isDecided r = r == Y.Satisfiable || r == Y.Unsatisfiable

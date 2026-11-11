@@ -580,6 +580,7 @@ traceflags = [
           "trace-type-extsubst",
           "trace-usemap",
           "trace-disjoint-tests",
+          "trace-smt-witness",
           "check-rnf-ground",
           "check-subst-bound",
           "trace-a-definitions",
