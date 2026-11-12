@@ -29,6 +29,9 @@ extern char *TclSetPreInitScript (char *string);
 // Declared here rather than through the generated Bluetcl_stub.h.
 extern int blueshell_Init_Foreign(Tcl_Interp *interp);
 
+// The export from app/bluetcl_Main.hs that flushes the Haskell stdio handles.
+extern void bluetcl_flush_stdio(void);
+
 int bluetcl_AppInit(Tcl_Interp *interp);
 int Bluespec_Init(Tcl_Interp *interp);
 
@@ -53,6 +56,7 @@ int Bluespec_Init(Tcl_Interp *interp);
 void
 run_bluetcl(int argc, char **argv)
 {
+  atexit(bluetcl_flush_stdio);
   Tcl_Main(argc, argv, bluetcl_AppInit);
 }
 

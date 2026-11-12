@@ -13,11 +13,19 @@ import Foreign.C.Types (CInt (..))
 import Foreign.Marshal.Array (newArray0)
 import Foreign.Ptr (Ptr, nullPtr)
 import System.Environment (getArgs, getProgName)
+import System.IO (hFlush, stderr, stdout)
 import TopUtils (getBluespecDir)
 import Data.Functor (void)
 
 foreign import ccall "run_bluetcl"
   c_run_bluetcl :: CInt -> Ptr CString -> IO ()
+
+-- Tcl_Main leaves through C exit(), so the RTS never flushes the Haskell
+-- handles; run_bluetcl registers this with atexit.
+foreign export ccall "bluetcl_flush_stdio" flushStdio :: IO ()
+
+flushStdio :: IO ()
+flushStdio = hFlush stdout >> hFlush stderr
 
 main :: IO ()
 main = do

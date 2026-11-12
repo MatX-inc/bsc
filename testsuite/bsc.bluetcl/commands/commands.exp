@@ -13,7 +13,7 @@ set sedCRegPosition { -e s/CReg\[0-9\]\+/CRegNNNN/g }
 # in the order they appear in tclCommands in bluetcl.hs
 
 # Test "showArg"
-# XXX No need to test, just for internal use?
+bluetcl_run_compare_pass showarg.tcl
 
 # Test "help"
 bluetcl_run_compare_pass help.tcl
