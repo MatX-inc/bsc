@@ -646,6 +646,7 @@ leafWord c = case leafKey c of
 
 -- The word of a child about to be applied: its slot, or for a leaf built
 -- before the gate the recomputed word.  Forces the child to WHNF.
+{-# INLINE childWord #-}
 childWord :: Type -> IO Int
 childWord (TAp_ w _ _ _) = return w
 childWord (TCon_ w c _) | w >= 0 = return w
@@ -660,11 +661,19 @@ childWord _ = return (-1)
 -- in intern_other, printed as it is found (see Forcing above).  A
 -- nested construction (childWord forcing a TAp thunk runs mkTAp inside
 -- the outer action) has already recorded and counted its own strings.
+-- (Inlined, with the bookkeeping out of line, so that mkTAp passes no
+-- closure.)
+{-# INLINE withInternDelta #-}
 withInternDelta :: IO a -> IO a
-withInternDelta act
-    | ctypeStatsOn = do
-        n0 <- internCount
-        r <- act
+withInternDelta act = do
+    n0 <- if ctypeStatsOn then internCount else return 0
+    r <- act
+    when ctypeStatsOn $ recordInternDelta n0
+    return r
+
+{-# NOINLINE recordInternDelta #-}
+recordInternDelta :: Int -> IO ()
+recordInternDelta n0 = do
         n1 <- internCount
         when (n1 > n0) $ do
             seen <- readIORef wordInterned
@@ -679,8 +688,6 @@ withInternDelta act
             addCTypeStat InternOther (length others)
             mapM_ (\(_, s) -> hPutStrLn stderr ("ctype-stats intern_other " ++ show s))
                   others
-        return r
-    | otherwise = act
 
 -- The strings interned while a word was computed, under
 -- -trace-ctype-stats only (empty otherwise); read by checkLetrecBinders.
@@ -748,7 +755,8 @@ mkTAp f a = unsafeDupablePerformIO $ do
       then withInternDelta $ do
         wf <- childWord f
         wa <- childWord a
-        if wf < 0 || wa < 0
+        -- (min, strict in both words, so that neither is boxed)
+        if min wf wa < 0
           then do bumpCTypeStat RefuseChild
                   return (apNode (-1) f a)
           else do w <- lookupOrInsert (CKAp wf wa) (odd wf && odd wa)
