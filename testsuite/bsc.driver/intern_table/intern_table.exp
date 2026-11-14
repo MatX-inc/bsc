@@ -1,0 +1,17 @@
+# -trace-intern-table writes the SpeedyString table when bsc exits, as
+# one JSON document with one entry per line, to the file named by
+# BSC_INTERN_DUMP or else to <package>.intern.json beside the .bo.  Two
+# compiles of one source by one bsc must leave identical tables, and the
+# table starts at id 0.
+
+erase InternTable.bo
+compile_backend_pass InternTable.bs {-trace-intern-table}
+find_regexp InternTable.intern.json {^\{"internNextId":[1-9][0-9]*,"internEntries":\[\n\[0,"}
+find_regexp InternTable.intern.json {^\]\}$}
+move InternTable.intern.json InternTable.default.intern.json
+
+erase InternTable.bo
+set ::env(BSC_INTERN_DUMP) "InternTable.env.intern.json"
+compile_backend_pass InternTable.bs {-trace-intern-table}
+unset ::env(BSC_INTERN_DUMP)
+compare_file InternTable.env.intern.json InternTable.default.intern.json
