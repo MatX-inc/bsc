@@ -103,6 +103,7 @@ module Id(
         getIdDisplayName,
         addIdDisplayName,
         getIdInlinedPositions,
+        hasIdInlinedPositions,
         addIdInlinedPositions,
         removeIdInlinedPositions
          ) where
@@ -659,6 +660,12 @@ dropReadyPrefixId idx
 mkEnableId :: Id -> Id
 mkEnableId idx =
     addIdProp (mkIdPre fsEnable idx)  IdP_enable
+
+-- Test for IdPInlinedPositions without allocating a Maybe or list.
+hasIdInlinedPositions :: Id -> Bool
+hasIdInlinedPositions i = any isIP (getIdProps i)
+  where isIP (IdPInlinedPositions _) = True
+        isIP _ = False
 
 getIdInlinedPositions :: Id -> Maybe [Position]
 getIdInlinedPositions i =
