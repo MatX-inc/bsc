@@ -7,3 +7,11 @@ compile_verilog_pass TestPIf.bsv "" "+RTS -M265M -RTS"
 # involved), so a per-path push cannot terminate, while the memoized
 # push (pushBNot in IExpand) compiles it in seconds with default limits.
 compile_verilog_pass BNotShared.bsv
+
+# A loop in ActionValue whose iterations add no actions must elaborate in
+# constant stack and bounded heap.  With one wrapper AVStruct per
+# iteration in bind, or a stack frame per static op in the evaluator,
+# this loop needs more than these limits allow.  The loop leaves the rule
+# with no actions, so bsc removes it with warning G0023.
+compile_verilog_pass_warning ActionValueLoop.bsv G0023 1 {} \
+    "+RTS -H16m -M32m -K1m -RTS"

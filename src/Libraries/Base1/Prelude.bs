@@ -886,6 +886,13 @@ __value (ActionValue av) = (av ActionWorld).avValue
 primitive primNoActions :: PrimAction
 primitive primJoinActions :: PrimAction -> PrimAction -> PrimAction
 
+-- True only for an action known during elaboration to be empty
+-- (primNoActions with no implicit condition)
+primitive primIsNoActions :: PrimAction -> Bit 1
+isNoActions :: PrimAction -> Bool
+-- eta-expanded because the compose form costs two unfolding steps per bind
+isNoActions a = primChr (primIsNoActions a)
+
 primitive primSeq :: a -> b -> b
 
 -- implicit-condition strictness
@@ -981,20 +988,25 @@ instance Monad ActionValue
                a   = x1.avAction
                v   = x1.avValue
                aw1 = x1.avWorld
-               -- Evaluating the contents of the bound AVStruct before calling the
-               -- next action helps prevent memory leaks with ActionValue loops
-               -- by ensuring that previous loop iterations have been evaluated
-               -- before future ones start executing. This is not necessarily a
-               -- complete solution because we do not deepSeq v (primSeq is enough
-               -- for PrimAction and ActionWorld, but not for arbitrary types), but
-               -- this should still be an improvement over the previous behavior.
-               y   = primSeq v $ primSeq a $ primSeq aw1 $
-                     __avFunc (f v) $ aw1
-        in  AVStruct {
-                avValue = y.avValue;
-                avAction = primJoinActions a y.avAction;
-                avWorld  = y.avWorld
-            })
+        in  -- Evaluating the contents of the bound AVStruct before calling the
+            -- next action helps prevent memory leaks with ActionValue loops
+            -- by ensuring that previous loop iterations have been evaluated
+            -- before future ones start executing. This is not necessarily a
+            -- complete solution because we do not deepSeq v (primSeq is enough
+            -- for PrimAction and ActionWorld, but not for arbitrary types), but
+            -- this should still be an improvement over the previous behavior.
+            primSeq v $ primSeq a $ primSeq aw1 $
+            -- An empty, unconditional action needs no wrapper: return the
+            -- continuation's own AVStruct by a tail call, so a loop in
+            -- ActionValue builds no wrapper per iteration.
+            if isNoActions a
+            then __avFunc (f v) aw1
+            else letseq y = __avFunc (f v) aw1
+                 in  AVStruct {
+                         avValue = y.avValue;
+                         avAction = primJoinActions a y.avAction;
+                         avWorld  = y.avWorld
+                     })
 
 --@ \begin{libverbatim}
 --@ instance MonadFix #(ActionValue);
