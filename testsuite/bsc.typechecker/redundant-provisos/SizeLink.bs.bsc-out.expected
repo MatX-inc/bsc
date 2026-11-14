@@ -1,0 +1,6 @@
+checking package dependencies
+compiling SizeLink.bs
+Warning: "SizeLink.bs", line 16, column 14: (T0167)
+  The proviso `Bits t tSz' on `sameValue' is redundant: the definition does
+  not use it.
+All packages are up to date.

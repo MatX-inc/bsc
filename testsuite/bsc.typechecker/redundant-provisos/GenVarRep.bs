@@ -1,0 +1,22 @@
+package GenVarRep where
+
+class Render a where
+  render :: a -> String
+
+class Render' r where
+  render' :: r -> String
+
+instance (Generic a r, Render' r) => Render a where
+  render x = render' (from x)
+
+instance Render (Bit n) where
+  render _ = "bits"
+
+-- Render (f n Bool) reduces to Generic (f n Bool) r and Render' r.  The body
+-- mentions Rep (f n Bool) and so relies on the Generic proviso without using
+-- its dictionary; the Render' dictionary is unused, but the proviso cannot
+-- be deleted whole, so it is not reported.
+repUse :: (Render (f n Bool)) => f n Bool -> Integer
+repUse _ = let y :: Maybe (Rep (f n Bool))
+               y = Nothing
+           in if isValid y then 1 else 0

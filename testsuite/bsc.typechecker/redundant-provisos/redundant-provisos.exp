@@ -1,0 +1,103 @@
+# Tests for -warn-redundant-provisos (warning T0167)
+
+set flag {-warn-redundant-provisos}
+
+# A class proviso whose dictionary is never used
+compile_pass_warning UnusedProviso.bs T0167 2 $flag
+compare_file UnusedProviso.bs.bsc-out
+# The warning is off by default (no -u, so the compile is not skipped)
+compile_pass_no_warning UnusedProviso.bs {} 1
+
+# A proviso implied by a superclass of another survives context reduction;
+# its dictionary is unused
+compile_pass_warning ImpliedBySuper.bs T0167 1 $flag
+compare_file ImpliedBySuper.bs.bsc-out
+
+# Provisos that context reduction removes (implied through instances,
+# satisfied by instances, or repeated): no warning
+compile_pass_no_warning ImpliedByInstance.bs $flag
+
+# A proviso used only through a superclass, or passed on: no warning
+compile_pass_no_warning UsedViaSuper.bs $flag
+
+# Provisos that determine types through functional dependencies: no warning
+compile_pass_no_warning FundepProviso.bs $flag
+
+# Functional dependencies that determine variables seen nowhere else
+compile_pass_warning FundepUnseen.bs T0167 4 $flag
+compare_file FundepUnseen.bs.bsc-out
+
+# A proviso with a type function, which context reduction expands
+compile_pass_warning TypeFunProviso.bs T0167 1 $flag
+compare_file TypeFunProviso.bs.bsc-out
+
+# A proviso a numeric proviso depends on, which is not reported: no warning
+compile_pass_no_warning NumericKeeps.bs $flag
+
+# A proviso that reduces to a class only typing needs and an unused one:
+# it cannot be deleted whole, so no warning
+compile_pass_no_warning TypingOnly.bs $flag
+
+# A proviso that reduces to a class nothing types through and an unused one
+compile_pass_warning TypingUnneeded.bs T0167 1 $flag
+compare_file TypingUnneeded.bs.bsc-out
+
+# A field whose declared type names an associated type: no warning
+compile_pass_no_warning FieldAssoc.bs $flag
+compile_pass_no_warning FieldAssocBSV.bsv $flag
+
+# A method or variable whose declared type names an associated type, also
+# through a superclass, a type synonym or an import: no warning
+compile_pass_no_warning MethodAssoc.bs $flag
+compile_pass_no_warning MethodAssocImport.bs $flag
+
+# A proviso whose typing-only part another supplies, up to the arguments a
+# functional dependency determines
+compile_pass_warning SupplyUpToFundep.bs T0167 2 $flag
+compare_file SupplyUpToFundep.bs.bsc-out
+
+# Numeric provisos: no warning
+compile_pass_no_warning NumericProviso.bs $flag
+
+# A class with no methods or superclasses: no warning
+compile_pass_no_warning MarkerClass.bs $flag
+
+# A written proviso whose own class passes no dictionary, with a type
+# function that brings an unused Bits proviso: no warning
+compile_pass_no_warning NumericAssert.bs $flag
+
+# A proviso whose fundep determines a type variable that another proviso
+# also names: not reported
+compile_pass_warning SizeLink.bs T0167 1 $flag
+compare_file SizeLink.bs.bsc-out
+
+# A superclass pair: the reports do not depend on the dictionary that the
+# typechecker selects a superclass from
+compile_pass_warning SuperPair.bs T0167 7 $flag
+compare_file SuperPair.bs.bsc-out
+
+# Unused provisos on a module, one for a class with a generic default
+# instance
+compile_pass_warning GenericInstance.bs T0167 2 $flag
+compare_file GenericInstance.bs.bsc-out
+
+# BSV syntax
+compile_pass_warning RedundantProvisosBSV.bsv T0167 2 $flag
+compare_file RedundantProvisosBSV.bsv.bsc-out
+
+# Provisos that a generic instance reduces to provisos on fresh type
+# variables
+compile_pass_warning GenVar.bs T0167 3 $flag
+compare_file GenVar.bs.bsc-out
+
+# Two provisos that reduce to a shared proviso; only one is used
+compile_pass_warning SharedGeneric.bs T0167 1 $flag
+compare_file SharedGeneric.bs.bsc-out
+
+# A proviso whose only used part another proviso supplies as a superclass
+compile_pass_warning SuperSupply.bs T0167 1 $flag
+compare_file SuperSupply.bs.bsc-out
+
+# The body names the generic representation, so it needs one of the
+# provisos the written one reduces to, but not the other: no warning
+compile_pass_no_warning GenVarRep.bs $flag

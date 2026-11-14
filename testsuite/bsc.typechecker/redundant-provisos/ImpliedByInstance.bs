@@ -1,0 +1,16 @@
+package ImpliedByInstance where
+
+-- Context reduction removes all of these provisos, so they cost nothing and
+-- are not reported.
+
+-- The instance Eq (Maybe a) needs only Eq a.
+sameJust :: (Eq (Maybe a), Eq a) => a -> a -> Bool
+sameJust x y = Just x == Just y
+
+-- Instances alone satisfy Eq Bool.
+always :: (Eq Bool) => a -> Bool
+always _ = True
+
+-- A repeated proviso.
+twice :: (Eq a, Eq a) => a -> Bool
+twice x = x == x
