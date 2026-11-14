@@ -134,6 +134,7 @@ data PrimOp =
 
         | PrimJoinActions
         | PrimNoActions
+        | PrimIsNoActions -- test if an action is known to be empty
         | PrimExpIf     -- "split shallow"
         | PrimNoExpIf   -- "nosplit shallow"
         | PrimSplitDeep
@@ -396,6 +397,7 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
 
         tp "primJoinActions" = PrimJoinActions
         tp "primNoActions" = PrimNoActions
+        tp "primIsNoActions" = PrimIsNoActions
         tp "primExpIf" = PrimExpIf
         tp "primNoExpIf" = PrimNoExpIf
         tp "primSplitDeep" = PrimSplitDeep
@@ -737,6 +739,7 @@ instance NFData PrimOp where
     rnf PrimCharChr = ()
     rnf PrimJoinActions = ()
     rnf PrimNoActions = ()
+    rnf PrimIsNoActions = ()
     rnf PrimExpIf = ()
     rnf PrimNoExpIf = ()
     rnf PrimSplitDeep = ()

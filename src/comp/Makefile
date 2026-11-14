@@ -190,7 +190,8 @@ GHCTMP = '-tmpdir $(TMPDIR)'
 # -fprof-auto adds a cost-centre frame around every closure entry,
 # which inflates peak stack usage by roughly an order of magnitude
 # on the perf regression suite.
-# If you modify this, also update rts_opts in ../vendor/htcl/haskell.c
+# If you modify this, also update rts_opts in ../vendor/htcl/haskell.c,
+# which bluetcl uses
 ifeq ($(BSC_BUILD),PROF)
 RTSFLAGS = "-with-rtsopts=-H256m -K256m -i1"
 else

@@ -3,6 +3,9 @@
 
 test_c_veri_bsv When
 
+# An implicit condition on an empty action still guards the rule
+test_c_veri_bsv WhenNoAction
+
 # -----
 # Tests for invalid conditions (Bug 1722)
 
