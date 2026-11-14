@@ -1,0 +1,363 @@
+make: Entering directory '/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra'
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Library_latency
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Library_latency/BGetPut
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Library_latency/CGetPut
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Library_latency/ClientServer
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Library_latency/GetPut
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Library_latency/RAM
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Library_latency/SRAM
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Library_latency/SyncRAM
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/MCD_library
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/MCD_library/AsyncRAM
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/MCD_library/BitSync1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/MCD_library/BitSync
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/MCD_library/FIFOSync
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/MCD_library/NullCrossing
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/MCD_library/PulseHandShakeSync
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/MCD_library/RegSync
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/MCD_library/SpecialSyncFIFO
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/MCD_library/SpecialSyncReg
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertAlways1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertAlways2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertAlwaysOnEdge1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertAlwaysOnEdge2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertAlwaysOnEdge3
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertAlwaysOnEdge4
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertAlwaysOnEdge5
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertAlwaysOnEdge6
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertChange1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertChange2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertCycleSequence1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertCycleSequence2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertDecrement1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertDecrement2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertDelta1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertDelta2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertEvenParity1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertEvenParity2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertFifoIndex1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertFifoIndex2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertFifoIndex3
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertFifoIndex4
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertFrame1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertFrame2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertFrame3
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertHandshake1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertHandshake2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertImplication1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertImplication2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertIncrement1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertIncrement2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNever1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNever2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNeverUnknown1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNeverUnknown2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNeverUnknownAsync1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNeverUnknownAsync2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNext1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNext2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNoOverflow1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNoOverflow2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNoTransition1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNoTransition2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNoUnderflow1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertNoUnderflow2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertOddParity1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertOddParity2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertOneCold1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertOneCold2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertOneHot1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertOneHot2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertProposition1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertProposition2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertQuiescent1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertQuiescent2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertRange1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertRange2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertRange3
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertTime1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertTime2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertTransition1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertTransition2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertUnchange1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertUnchange2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertWidth1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertWidth2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertWidth3
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertWinChange1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertWinChange2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertWindow1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertWindow2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertWinUnchange1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertWinUnchange2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertZeroOneHot1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/OVL/assertZeroOneHot2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Path_Analysis
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Path_Analysis/Extended_Input_Output_Path
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Path_Analysis/Imported_Modules
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Path_Analysis/Input_Output_Path
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Path_Analysis/Single_Module
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/breakOutsideFSM
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/clearOfOnce
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/continueOutsideFSM
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/continueOutsideLoop
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/CycleTest
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/cycleUsage1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/cycleUsage2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/fifoTest
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/forInRepeat
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/forInWhile
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/nestedForLoop1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/nestedRepeatLoop1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/nestedWhileLoop1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/nestedWhileLoop2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/parAuto
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/repeatInFor
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/repeatInWhile
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/repeatTest
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/ServerInServer
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/Square1
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/Square2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/Square3
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/Square4
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/Square5
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/Square6
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/whileInFor
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/whileInRepeat
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/whilePar
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/StmtFSM/whileWithinForLoop
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Urgency_Annotation
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Urgency_Annotation/Negative_Testing
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Urgency_Annotation/Semantics
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/Urgency_Annotation/Syntax
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bluesim
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bluesim/commandline_options
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bluesim/commandline_options/array
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bluesim/commandline_options/handshake_protocol
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bluesim/commandline_options/traffic_light_controller_separate
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bluesim/interactive
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bluesim/interactive/handshake_protocol
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bluesim/interactive/parity_checker
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bluesim/interactive/traffic_light_controller_hierar
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bluesim/interactive/traffic_light_controller_separate
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID133
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID142
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID149
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID153
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID154
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID156
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID159
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID161
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID169
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID198
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID231
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID235
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID238
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID239
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID263
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID265
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID277
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID278
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID279
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID298
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID299
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID313
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID334
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID336
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID340
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID355
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID363
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID364
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID383
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID403
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID413
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/bugs/bugID415
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/ArrayFile
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Array
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Assert
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/BGetPut
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/BitonicSort
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Boolify
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/CGetPut
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/ClientServer
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/CompletionBuffer
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/ConfigReg
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Connectable
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Enum
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Environment
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/EqFunction
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/FiFoF
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/FiFo
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/GetPut
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/LFSR
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/ListFIFO
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/List
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/ListN
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/ListReg
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Oint
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/PopCount
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Pull
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Push
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/RAM
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Reserved
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/RPush
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/SRAMFile
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/SRAM
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/SyncRAM
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Tabulate
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/UIntRange
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Vector
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/libraries/Wallace
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EAmbOper
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EArbitrate
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EBadExport
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EBadIfcType
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EBadLexChar
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EBadMatch
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EBadModuleInterface
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EBadStringLit
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EBadVeriType
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EBigLiteral
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EBitSel
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ECannotDerive
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EConstrAmb
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EContextReduction
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EContextReductionVar
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EDupField
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EFieldAmb
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EForeignNotBit
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EGeneric
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EHasImplicit
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EKindArg
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ELocalRec
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EMissingNL
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EModule_
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EMultipleDef
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ENoNF
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ENotAlwaysReady
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ENotAnInterface
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ENotExpr
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ENotField
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ENotStructId
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ENotStruct
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ENoTypeSign
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EPartialTypeApp
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EResources
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ERTSHeapExhausted
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ERTSOutOfMemory
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ERTSStackOverflow
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ERuleAssertion
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EStmtContext
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EStringNF
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ESyntax
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ETooGeneral
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/ETooManySteps
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EUnboundClCon
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EUnboundCon
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EUnboundField
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EUnboundTyCon
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EUnboundTyVar
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EUnboundVar
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EUnifyKind
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EUnify
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EUnknownSize
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EUntermComm
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EValueOf
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EWeakContext
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/EWrongArity
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/WCycleDrop
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/WMissingField
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/WMissingRule
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/messages/WUrgencyChoice
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/operators
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/operators/Arith
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/operators/Arith/generate
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/operators/BitSel
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/operators/BitSel/generate
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/operators/Logic
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/operators/Logic/generate
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/preprocessorTestcases
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/preprocessorTestcases/define
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/preprocessorTestcases/ifdef
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/preprocessorTestcases/include
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/preprocessorTestcases/resetall
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/preprocessorTestcases/undef
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/relax_method_urgency
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/relax_method_urgency/BypassFIFO
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/relax_method_urgency/byte_en
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/relax_method_urgency/demux
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/relax_method_urgency/LoopyFIFO
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/relax_method_urgency/prod_con
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/relax_method_urgency/RegFile
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.interra/relax_method_urgency/RWire_mult
+MAKEFLAGS= BSCTEST=1 BSC=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/bsc BSC_OPTIONS="-keep-fires -keep-inlined-boundaries" BSDIR=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/lib DUMPBO=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/dumpbo DUMPBA=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/dumpba BSC2BSV=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/bsc2bsv VCDCHECK=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/vcdcheck SHOWRULES=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/showrules FSTSCOPES=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/fstscopes FSTCHECK=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/fstcheck BLUESPECDIR=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/lib BSC_VERILOG_SIM=iverilog TEST_CONFIG_DIR=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/config BLUETCL=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/bluetcl OSTYPE=Linux MACHTYPE=x86_64 LC_ALL=en_US.UTF-8 SYSTEMC_INC= SYSTEMC_LIB= SYSTEMC_CXXFLAGS= PATH="/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/lib/../bin:/home/ravi/.local/bin:/home/ravi/.bun/bin:/home/ravi/.local/bin:/home/ravi/.bun/bin:/home/ravi/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games:/home/ravi/.cabal/bin:/home/ravi/.ghcup/bin"  runtest --tool "" --objdir . --status 
+WARNING: testsuite is not in a testsuite/ directory.
+WARNING: Couldn't find tool init file
+Test run by ravi on Sat Nov 14 19:23:19 2026
+Native configuration is x86_64-pc-linux-gnu
+
+		===  tests ===
+
+Schedule of variations:
+    unix
+
+Running target unix
+Using /usr/share/dejagnu/baseboards/unix.exp as board description file for target.
+Using /usr/share/dejagnu/config/unix.exp as generic interface file for target.
+Using ./config/unix.exp as tool-and-target-specific interface file.
+testconfig dir is: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/config
+Sourcing: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/config/verilog.tcl
+testconfig dir is: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/config
+Sourcing: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/config/bluetcl.tcl
+Running ./Library_latency/BGetPut/BGetPut.exp ...
+Running ./Library_latency/CGetPut/CGetPut.exp ...
+Running ./Library_latency/ClientServer/ClientServer.exp ...
+Running ./Library_latency/GetPut/GetPut.exp ...
+Running ./Library_latency/RAM/RAM.exp ...
+Running ./Library_latency/SRAM/SRAM.exp ...
+Running ./Library_latency/SyncRAM/SyncRAM.exp ...
+Running ./MCD_library/AsyncRAM/asyncRAM.exp ...
+Running ./MCD_library/BitSync/bitsync.exp ...
+Running ./MCD_library/BitSync1/bitsync1.exp ...
+Running ./MCD_library/FIFOSync/SyncFIFO.exp ...
+Running ./MCD_library/NullCrossing/Nullcross.exp ...
+Running ./MCD_library/PulseHandShakeSync/PulseHandShake.exp ...
+Running ./MCD_library/RegSync/SyncReg.exp ...
+Running ./MCD_library/SpecialSyncFIFO/SpecialSyncFIFO.exp ...
+Running ./MCD_library/SpecialSyncReg/SpecialSyncReg.exp ...
+Running ./OVL/assertAlways1/assertAlways1.exp ...
+Running ./OVL/assertAlways2/assertAlways2.exp ...
+Running ./OVL/assertAlwaysOnEdge1/assertAlwaysOnEdge1.exp ...
+Running ./OVL/assertAlwaysOnEdge2/assertAlwaysOnEdge2.exp ...
+Running ./OVL/assertAlwaysOnEdge3/assertAlwaysOnEdge3.exp ...
+Running ./OVL/assertAlwaysOnEdge4/assertAlwaysOnEdge4.exp ...
+Running ./OVL/assertAlwaysOnEdge5/assertAlwaysOnEdge5.exp ...
+Running ./OVL/assertAlwaysOnEdge6/assertAlwaysOnEdge6.exp ...
+Running ./OVL/assertChange1/assertChange1.exp ...
+Running ./OVL/assertChange2/assertChange2.exp ...
+Running ./OVL/assertCycleSequence1/assertCycleSequence1.exp ...
+Running ./OVL/assertCycleSequence2/assertCycleSequence2.exp ...
+Running ./OVL/assertDecrement1/assertDecrement1.exp ...
+Running ./OVL/assertDecrement2/assertDecrement2.exp ...
+Running ./OVL/assertDelta1/assertDelta1.exp ...
+Running ./OVL/assertDelta2/assertDelta2.exp ...
+Running ./OVL/assertEvenParity1/assertEvenParity1.exp ...
+Running ./OVL/assertEvenParity2/assertEvenParity2.exp ...
+Running ./OVL/assertFifoIndex1/assertFifoIndex1.exp ...
+Running ./OVL/assertFifoIndex2/assertFifoIndex2.exp ...
+Running ./OVL/assertFifoIndex3/assertFifoIndex3.exp ...
+Running ./OVL/assertFifoIndex4/assertFifoIndex4.exp ...
+Running ./OVL/assertFrame1/assertFrame1.exp ...
+Running ./OVL/assertFrame2/assertFrame2.exp ...
+got a TERM signal, terminated 
+
+		===  Summary ===
+
+# of expected passes		555
+make: *** [/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/suitemake.mk:105: check] Error 143

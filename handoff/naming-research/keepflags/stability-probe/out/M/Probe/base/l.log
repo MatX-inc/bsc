@@ -1,0 +1,5 @@
+Bluesim object created: s/mkProbe.{h,o}
+Bluesim object created: s/model_mkProbe.{h,o}
+Simulation shared library created: s/sim.so
+Simulation executable created: s/sim
+exit=0

@@ -1,0 +1,277 @@
+make: Entering directory '/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs'
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1018
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1037
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1040
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1043
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1044
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1045
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1048
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1066
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1118
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1121
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1163
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1191
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1197
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1198
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b120
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1213
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1225
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1229
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1235
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1240
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1243
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1249
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1263
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1265
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1267
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1294
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1302
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1305
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1314
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1318
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1325
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1326
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1328
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1332
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1349
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1353
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1354
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1356
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1389
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1390
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1396
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1402
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1424
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1429
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1439
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1470
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1480
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1489
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1490
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1493
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1497
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1539
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1540
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1586
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1589
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1591
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1595
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1599
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1610
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1619
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1621
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1654
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1658
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1666
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1690
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1718
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1720
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1753
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1758
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1796
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1894
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b1921
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b198
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b232
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b235
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b257
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b260
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b262
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b263
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b264
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b265
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b267
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b269
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b271
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b281
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b289
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b290
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b292
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b293
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b302
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b304
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b308
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b312
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b316
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b323
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b329
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b335
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b340
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b351
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b359
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b373
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b378
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b381
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b384
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b391
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b394
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b399
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b402
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b405
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b417
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b418
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b41
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b423
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b431
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b436
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b437
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b446
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b447
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b453
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b459
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b460
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b461
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b484
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b487
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b491
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b492
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b496
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b508
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b517
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b518
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b522
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b530
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b532
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b535
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b540
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b542
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b547
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b557
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b561
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b568
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b569
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b578
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b580
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b589
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b600
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b610
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b611
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b621
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b628
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b631
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b633
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b637
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b667
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b671
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b675
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b676
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b68
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b690
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b719
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b737
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b752
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b753
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b765
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b791
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b810
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b834
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b848
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b851
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b864
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b880
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b893
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b898
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b925
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b927
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/b941
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/bluespec_inc/ek
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/github
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/github/gh221
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/github/gh276
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/github/gh309
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/github/gh334
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/github/gh353
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/github/gh435
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/github/gh678
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/github/gh836
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/github/gh839
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/github/gh841
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/github/gh894
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/perf-creg-blowup
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/bsc.bugs/pre_bluespec_inc
+MAKEFLAGS= BSCTEST=1 BSC=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/bsc BSC_OPTIONS="-keep-fires -keep-inlined-boundaries -keep-method-conds" BSDIR=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/lib DUMPBO=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/dumpbo DUMPBA=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/dumpba BSC2BSV=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/bsc2bsv VCDCHECK=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/vcdcheck SHOWRULES=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/showrules FSTSCOPES=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/fstscopes FSTCHECK=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/fstcheck BLUESPECDIR=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/lib BSC_VERILOG_SIM=iverilog TEST_CONFIG_DIR=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/config BLUETCL=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/bluetcl OSTYPE=Linux MACHTYPE=x86_64 LC_ALL=en_US.UTF-8 SYSTEMC_INC= SYSTEMC_LIB= SYSTEMC_CXXFLAGS= PATH="/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/lib/../bin:/home/ravi/.local/bin:/home/ravi/.bun/bin:/home/ravi/.local/bin:/home/ravi/.bun/bin:/home/ravi/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games:/home/ravi/.cabal/bin:/home/ravi/.ghcup/bin"  runtest --tool "" --objdir . --status 
+WARNING: testsuite is not in a testsuite/ directory.
+WARNING: Couldn't find tool init file
+Test run by ravi on Sat Nov 14 19:23:16 2026
+Native configuration is x86_64-pc-linux-gnu
+
+		===  tests ===
+
+Schedule of variations:
+    unix
+
+Running target unix
+Using /usr/share/dejagnu/baseboards/unix.exp as board description file for target.
+Using /usr/share/dejagnu/config/unix.exp as generic interface file for target.
+Using ./../config/unix.exp as tool-and-target-specific interface file.
+testconfig dir is: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/config
+Sourcing: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/config/verilog.tcl
+testconfig dir is: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/config
+Sourcing: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-KM/testsuite/config/bluetcl.tcl
+Running ./bluespec_inc/b1018/b1018.exp ...
+Running ./bluespec_inc/b1037/b1037.exp ...
+Running ./bluespec_inc/b1040/b1040.exp ...
+Running ./bluespec_inc/b1043/b1043.exp ...
+Running ./bluespec_inc/b1044/b1044.exp ...
+Running ./bluespec_inc/b1045/b1045.exp ...
+Running ./bluespec_inc/b1048/b1048.exp ...
+Running ./bluespec_inc/b1066/b1066.exp ...
+Running ./bluespec_inc/b1118/b1118.exp ...
+Running ./bluespec_inc/b1121/b1121.exp ...
+Running ./bluespec_inc/b1163/b1163.exp ...
+Running ./bluespec_inc/b1191/b1191.exp ...
+Running ./bluespec_inc/b1197/b1197.exp ...
+Running ./bluespec_inc/b1198/b1198.exp ...
+Running ./bluespec_inc/b120/b120.exp ...
+Running ./bluespec_inc/b1213/b1213.exp ...
+Running ./bluespec_inc/b1225/b1225.exp ...
+Running ./bluespec_inc/b1229/b1229.exp ...
+Running ./bluespec_inc/b1235/b1235.exp ...
+Running ./bluespec_inc/b1240/b1240.exp ...
+Running ./bluespec_inc/b1243/b1243.exp ...
+Running ./bluespec_inc/b1249/b1249.exp ...
+Running ./bluespec_inc/b1263/b1263.exp ...
+Running ./bluespec_inc/b1265/b1265.exp ...
+Running ./bluespec_inc/b1267/b1267.exp ...
+Running ./bluespec_inc/b1294/b1294.exp ...
+Running ./bluespec_inc/b1302/b1302.exp ...
+Running ./bluespec_inc/b1305/b1305.exp ...
+Running ./bluespec_inc/b1314/b1314.exp ...
+Running ./bluespec_inc/b1318/b1318.exp ...
+Running ./bluespec_inc/b1325/b1325.exp ...
+Running ./bluespec_inc/b1326/b1326.exp ...
+Running ./bluespec_inc/b1328/b1328.exp ...
+Running ./bluespec_inc/b1332/b1332.exp ...
+Running ./bluespec_inc/b1349/b1349.exp ...
+Running ./bluespec_inc/b1353/b1353.exp ...
+Running ./bluespec_inc/b1354/b1354.exp ...
+FAIL: `mkMulti.v.filtered' differs from `mkMulti.v.expected.filtered'
+Running ./bluespec_inc/b1356/b1356.exp ...
+Running ./bluespec_inc/b1389/b1389.exp ...
+Running ./bluespec_inc/b1390/b1390.exp ...
+FAIL: `mkTest.v.filtered' differs from `mkTest.v.expected.filtered'
+FAIL: `mkTest2.v.filtered' differs from `mkTest2.v.expected.filtered'
+FAIL: `mkTest2.sched' differs from `mkTest2.sched.expected'
+Running ./bluespec_inc/b1396/b1396.exp ...
+Running ./bluespec_inc/b1402/b1402.exp ...
+Running ./bluespec_inc/b1424/b1424.exp ...
+Running ./bluespec_inc/b1429/b1429.exp ...
+Running ./bluespec_inc/b1439/b1439.exp ...
+Running ./bluespec_inc/b1470/b1470.exp ...
+Running ./bluespec_inc/b1480/b1480.exp ...
+Running ./bluespec_inc/b1489/b1489.exp ...
+Running ./bluespec_inc/b1490/b1490.exp ...
+FAIL: module `' in `Bug1490Bool.bsv' should compile to Verilog
+FAIL: module `' in `Bug1490MyBool.bsv' should compile to Verilog
+FAIL: module `' in `Bug1490MyUnion.bsv' should compile to Verilog
+got a TERM signal, terminated 
+
+		===  Summary ===
+
+# of expected passes		343
+# of unexpected failures	7
+make: *** wait: No child processes.  Stop.
+make: *** Waiting for unfinished jobs....
+make: *** wait: No child processes.  Stop.

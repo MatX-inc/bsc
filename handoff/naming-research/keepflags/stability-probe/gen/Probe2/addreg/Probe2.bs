@@ -1,0 +1,63 @@
+package Probe2 where
+
+import FIFOF
+import Vector
+
+struct Pair = { a :: Bit 8; b :: Bit 8 } deriving (Bits, Eq)
+
+interface Acc =
+    add :: Bit 8 -> Action
+    total :: Bit 16
+
+-- not synthesized: inlined into mkProbe2
+mkAcc :: Module Acc
+mkAcc = module
+    sum :: Reg (Bit 16) <- mkReg 0
+    inc :: RWire (Bit 8) <- mkRWire
+    rules
+      "accumulate": when True ==> case inc.wget of
+          Valid d -> sum := sum + zeroExtend d
+          Invalid -> return ()
+    interface
+      add x = inc.wset x
+      total = sum
+
+interface Probe2 =
+    push :: Pair -> Action
+    pop :: ActionValue (Bit 8)
+    level :: Bit 4
+    sumOut :: Bit 16
+
+{-# verilog mkProbe2 #-}
+mkProbe2 :: Module Probe2
+mkProbe2 = module
+    inQ :: FIFOF Pair <- mkFIFOF
+    outQ :: FIFOF (Bit 8) <- mkSizedFIFOF 3
+    held :: Reg (Bit 8) <- mkReg 0
+    cnt :: Reg (Bit 4) <- mkReg 0
+    busy :: Reg Bool <- mkReg False
+    seen :: Reg (Bit 8) <- mkReg 0
+    slots :: Vector 4 (Reg (Bit 8)) <- replicateM (mkReg 0)
+    acc :: Acc <- mkAcc
+    let pick :: Pair -> Bit 8
+        pick p = if p.a > p.b then p.a else p.b
+    rules
+      "tick": when True ==> cnt := cnt + 1
+      "move": when not busy ==> do
+          let p = inQ.first
+          inQ.deq
+          held := pick p
+          if p.a == 0 then outQ.enq p.b else acc.add p.a
+          (select slots p.b[1:0]) := p.a
+          seen := seen + 1
+      "drain": when busy, cnt[0:0] == 1 ==> do
+          outQ.enq held
+          busy := False
+      "arm": when not busy, held /= 0, cnt == 7 ==> busy := True
+    interface
+      push p = inQ.enq p
+      pop = do
+          outQ.deq
+          return (outQ.first + readReg (select slots outQ.first[1:0]))
+      level = cnt
+      sumOut = acc.total

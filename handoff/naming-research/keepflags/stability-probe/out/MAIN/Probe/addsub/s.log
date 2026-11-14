@@ -1,0 +1,26 @@
+checking package dependencies
+compiling Probe.bsv
+code generation for mkProbe starts
+Warning: "Probe.bsv", line 56, column 8: (G0117)
+  Rule `process_alt' shadows the effects of `decay_3' when they execute in the
+  same clock cycle. Affected method calls:
+    bank_3.write
+  To silence this warning, use the `-no-warn-action-shadowing' flag.
+Warning: "Probe.bsv", line 56, column 8: (G0117)
+  Rule `process_alt' shadows the effects of `decay_2' when they execute in the
+  same clock cycle. Affected method calls:
+    bank_2.write
+  To silence this warning, use the `-no-warn-action-shadowing' flag.
+Warning: "Probe.bsv", line 56, column 8: (G0117)
+  Rule `process_alt' shadows the effects of `decay_1' when they execute in the
+  same clock cycle. Affected method calls:
+    bank_1.write
+  To silence this warning, use the `-no-warn-action-shadowing' flag.
+Warning: "Probe.bsv", line 56, column 8: (G0117)
+  Rule `process_alt' shadows the effects of `decay' when they execute in the
+  same clock cycle. Affected method calls:
+    bank_0.write
+  To silence this warning, use the `-no-warn-action-shadowing' flag.
+Elaborated module file created: s/mkProbe.ba
+All packages are up to date.
+exit=0

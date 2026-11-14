@@ -1,0 +1,14 @@
+checking package dependencies
+compiling Probe2.bs
+code generation for mkProbe2 starts
+Warning: "Probe2.bs", line 32, column 0: (G0010)
+  Rule "move" was treated as more urgent than "arm". Conflicts:
+    "move" cannot fire before "arm": calls to held.write vs. held.read
+    "arm" cannot fire before "move": calls to busy.write vs. busy.read
+Warning: "Probe2.bs", line 32, column 0: (G0010)
+  Rule "drain" was treated as more urgent than "reset_held". Conflicts:
+    "drain" cannot fire before "reset_held": calls to busy.write vs. busy.read
+    "reset_held" cannot fire before "drain": calls to held.write vs. held.read
+Verilog file created: v/mkProbe2.v
+All packages are up to date.
+exit=0

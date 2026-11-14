@@ -1,0 +1,92 @@
+make: Entering directory '/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator'
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/aggressive-conditions
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/arguments
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/cache
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/curry
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/dynamic
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/dynamic/errors
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/dynamic/strings
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/errors
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/fileIO
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/intsize
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/literal
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/messages
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/opt
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/pack-unpack
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/performance
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/prims
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/prims/build_module
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/prims/impcondof
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/prims/isancestor
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/prims/module_fix
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/prims/name
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/prims/static_eval
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/prims/type_of
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/prims/valueof
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/prims/when
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/primtcons
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/reginit
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/show-progress
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/undefined
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/bsc.evaluator/uninit
+MAKEFLAGS= BSCTEST=1 BSC=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/bsc BSC_OPTIONS="-keep-fires -keep-inlined-boundaries" BSDIR=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/lib DUMPBO=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/dumpbo DUMPBA=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/dumpba BSC2BSV=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/bsc2bsv VCDCHECK=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/vcdcheck SHOWRULES=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/showrules FSTSCOPES=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/fstscopes FSTCHECK=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/fstcheck BLUESPECDIR=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/lib BSC_VERILOG_SIM=iverilog TEST_CONFIG_DIR=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/config BLUETCL=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/bluetcl OSTYPE=Linux MACHTYPE=x86_64 LC_ALL=en_US.UTF-8 SYSTEMC_INC= SYSTEMC_LIB= SYSTEMC_CXXFLAGS= PATH="/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/lib/../bin:/home/ravi/.local/bin:/home/ravi/.bun/bin:/home/ravi/.local/bin:/home/ravi/.bun/bin:/home/ravi/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games:/home/ravi/.cabal/bin:/home/ravi/.ghcup/bin"  runtest --tool "" --objdir . --status 
+WARNING: testsuite is not in a testsuite/ directory.
+WARNING: Couldn't find tool init file
+Test run by ravi on Sat Nov 14 19:23:13 2026
+Native configuration is x86_64-pc-linux-gnu
+
+		===  tests ===
+
+Schedule of variations:
+    unix
+
+Running target unix
+Using /usr/share/dejagnu/baseboards/unix.exp as board description file for target.
+Using /usr/share/dejagnu/config/unix.exp as generic interface file for target.
+Using ./../config/unix.exp as tool-and-target-specific interface file.
+testconfig dir is: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/config
+Sourcing: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/config/verilog.tcl
+testconfig dir is: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/config
+Sourcing: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/config/bluetcl.tcl
+Running ./aggressive-conditions/aggressive-conditions.exp ...
+Running ./arguments/arguments.exp ...
+Running ./cache/def_cache.exp ...
+Running ./curry/curry.exp ...
+FAIL: `mkWhenCurry.v.filtered' differs from `mkWhenCurry.v.expected.filtered'
+Running ./dynamic/dynamic.exp ...
+Running ./dynamic/errors/dynamic_errors.exp ...
+Running ./dynamic/strings/dynamic_strings.exp ...
+Running ./errors/errors.exp ...
+Running ./fileIO/fileIO.exp ...
+Running ./intsize/intsize.exp ...
+Running ./literal/literal.exp ...
+Running ./messages/message.exp ...
+Running ./opt/opt.exp ...
+FAIL: `mkReplaceBitOpt.v.filtered' differs from `mkReplaceBitOpt.v.expected.filtered'
+FAIL: `mkBigReplaceBitOpt.v.filtered' differs from `mkBigReplaceBitOpt.v.expected.filtered'
+FAIL: `mkBigRangeUpdate.v.filtered' differs from `mkBigRangeUpdate.v.expected.filtered'
+FAIL: `mkBigXor.v.filtered' differs from `mkBigXor.v.expected.filtered'
+FAIL: `mkBigXor2.v.filtered' differs from `mkBigXor2.v.expected.filtered'
+FAIL: `mkShiftBit1.v.filtered' differs from `mkShiftBit1.v.expected.filtered'
+FAIL: expected `1' copies of "if (rg == 3'd3) $display("E3")" in `sysEnumCompareWithConstant.v', found `0'
+FAIL: expected `1' copies of "rUEQ" in `sysCompareSameExpr.v', found `6'
+FAIL: expected `1' copies of "rULE" in `sysCompareSameExpr.v', found `6'
+FAIL: expected `1' copies of "rUGE" in `sysCompareSameExpr.v', found `6'
+FAIL: expected `1' copies of "rSEQ" in `sysCompareSameExpr.v', found `6'
+FAIL: expected `1' copies of "rSLE" in `sysCompareSameExpr.v', found `6'
+FAIL: expected `1' copies of "rSGE" in `sysCompareSameExpr.v', found `6'
+Running ./pack-unpack/pack-unpack.exp ...
+FAIL: expected `1' copies of "1'd0: y$EN = f1$EMPTY_N;" in `mkAggrDynSel.v', found `0'
+FAIL: expected `1' copies of "1'd1: y$EN = f2$EMPTY_N;" in `mkAggrDynSel.v', found `0'
+Running ./performance/performance.exp ...
+Running ./prims/build_module/build_module.exp ...
+Running ./prims/impcondof/impcondof.exp ...
+got a TERM signal, terminated 
+
+		===  Summary ===
+
+# of expected passes		713
+# of unexpected failures	16
+# of expected failures		1
+make: *** [/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-K/testsuite/suitemake.mk:105: check] Error 143

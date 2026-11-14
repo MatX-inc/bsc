@@ -1,0 +1,92 @@
+make: Entering directory '/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog'
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/astate
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/comments
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/derived_bits
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/dollar
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/dollar/renaming2
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/dollar/renaming4
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/dollar/renaming
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/filter
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/foreign_module
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/inline
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/inout
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/noinline
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/noinline/divbug
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/opt
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/parameters
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/parameters/integer
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/parameters/real
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/parameters/string
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/portprops
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/positivereset
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/positivereset/ClockDividers
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/positivereset/nameclash
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/positivereset/Reset
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/positivereset/simulation
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/positivereset/SyncReset
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/quirks
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/schedule
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/splitports
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/svkeywords
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/tasks
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/tasks/interfacecalls
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/tasks/plusargs
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/tasks/real
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/tasks/time
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/undet
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/vcd
+cleaning /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/bsc.verilog/verilog_params
+MAKEFLAGS= BSCTEST=1 BSC=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/bsc BSC_OPTIONS="-keep-method-conds" BSDIR=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/lib DUMPBO=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/dumpbo DUMPBA=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/dumpba BSC2BSV=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/bsc2bsv VCDCHECK=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/vcdcheck SHOWRULES=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/showrules FSTSCOPES=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/fstscopes FSTCHECK=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/fstcheck BLUESPECDIR=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/lib BSC_VERILOG_SIM=iverilog TEST_CONFIG_DIR=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/config BLUETCL=/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/bin/bluetcl OSTYPE=Linux MACHTYPE=x86_64 LC_ALL=en_US.UTF-8 SYSTEMC_INC= SYSTEMC_LIB= SYSTEMC_CXXFLAGS= PATH="/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/base/inst/lib/../bin:/home/ravi/.local/bin:/home/ravi/.bun/bin:/home/ravi/.local/bin:/home/ravi/.bun/bin:/home/ravi/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games:/home/ravi/.cabal/bin:/home/ravi/.ghcup/bin"  runtest --tool "" --objdir . --status 
+WARNING: testsuite is not in a testsuite/ directory.
+WARNING: Couldn't find tool init file
+Test run by ravi on Sat Nov 14 19:23:13 2026
+Native configuration is x86_64-pc-linux-gnu
+
+		===  tests ===
+
+Schedule of variations:
+    unix
+
+Running target unix
+Using /usr/share/dejagnu/baseboards/unix.exp as board description file for target.
+Using /usr/share/dejagnu/config/unix.exp as generic interface file for target.
+Using ./../config/unix.exp as tool-and-target-specific interface file.
+testconfig dir is: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/config
+Sourcing: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/config/verilog.tcl
+testconfig dir is: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/config
+Sourcing: /home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/config/bluetcl.tcl
+Running ./astate/astate.exp ...
+Running ./comments/comments.exp ...
+Running ./derived_bits/derived_bits.exp ...
+FAIL: `mkOrigTest.v.filtered' differs from `mkOrigTest.v.expected.filtered'
+FAIL: `mkAlt2Test.v.filtered' differs from `mkAlt2Test.v.expected.filtered'
+FAIL: `mkAlt3Test.v.filtered' differs from `mkAlt3Test.v.expected.filtered'
+FAIL: `mkAlt5Test.v.filtered' differs from `mkAlt5Test.v.expected.filtered'
+FAIL: `mkAlt6Test.v.filtered' differs from `mkAlt6Test.v.expected.filtered'
+FAIL: `mkC0Test.v.filtered' differs from `mkC0Test.v.expected.filtered'
+FAIL: `mkC1Test.v.filtered' differs from `mkC1Test.v.expected.filtered'
+Running ./dollar/dollar.exp ...
+Running ./dollar/renaming/rename.exp ...
+Running ./dollar/renaming2/rename.exp ...
+Running ./dollar/renaming4/rename.exp ...
+Running ./filter/filter.exp ...
+Running ./foreign_module/foreign_module.exp ...
+Running ./inline/inline.exp ...
+Running ./inout/inout.exp ...
+Running ./noinline/divbug/noinline_divbug.exp ...
+Running ./noinline/noinline.exp ...
+Running ./opt/opt.exp ...
+Running ./parameters/integer/integer_param.exp ...
+Running ./parameters/parameters.exp ...
+Running ./parameters/real/real_param.exp ...
+Running ./parameters/string/string_param.exp ...
+Running ./portprops/portprops.exp ...
+got a TERM signal, terminated 
+
+		===  Summary ===
+
+# of expected passes		808
+# of unexpected failures	7
+# of expected failures		2
+make: *** [/home/ravi/claude-tmp/claude-1548697660/-home-ravi/6640a2f0-3ba9-46af-8f63-2f02110094cd/scratchpad/isimp/work/keepflags/keep-suites/ts-M/testsuite/suitemake.mk:105: check] Error 143
