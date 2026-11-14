@@ -12,6 +12,7 @@ io_ifc                        IO    32 inout
 -----
 
 Verilog file created: sysArgToIfcLeaf.v
+Elaborated module file created: sysArgToIfcLeaf.ba
 code generation for sysInoutProps_ArgToIfcHier starts
 === IOproperties (InoutProps_ArgToIfcHier sysInoutProps_ArgToIfcHier):
 Name                         I/O  size props
@@ -24,4 +25,5 @@ io_ifc                        IO    32 inout
 -----
 
 Verilog file created: sysInoutProps_ArgToIfcHier.v
+Elaborated module file created: sysInoutProps_ArgToIfcHier.ba
 All packages are up to date.
