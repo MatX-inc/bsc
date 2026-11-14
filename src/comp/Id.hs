@@ -47,6 +47,7 @@ module Id(
         isHideId, setHideId, rmHideId,
         isHideAllId, setHideAllId, rmHideAllId,
         isBadId, setBadId,
+        isUserWrittenId,
         idQuality,
         isFromRHSId, setFromRHSId,
         isSignedId, setSignedId,
@@ -171,6 +172,9 @@ data IdProp = IdPCanFire
                                         -- a top-level nullary binding, which is
                                         -- what lifted dictionaries become
                                         -- (introduced by LiftDicts)
+              | IdPNonUserBinder        -- a binder the user did not write,
+                                        -- moved to a use site in the design
+                                        -- (ISyntaxXRef.moveBinder)
         deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
 
 -- #############################################################################
@@ -545,12 +549,25 @@ isBadId idx = hasIdProp idx IdP_bad_name
 -- | Quality score for an optional Id: higher = preferred as canonical.
 -- Used wherever we pick the "best" Id from a group of equivalent ones
 -- (e.g. ITransform.runCSE's pickId, IExpand.eqPtrs's pass-2).
--- An IdP_keep'd Id beats a non-bad Id beats a bad Id beats no name at all.
+-- An IdP_keep'd Id beats a non-bad Id beats a bad Id beats no name at all,
+-- and among IdP_keep'd or non-bad Ids one the user wrote beats one the user
+-- did not write (isUserWrittenId).
 idQuality :: Maybe Id -> Int
-idQuality (Just i) | isKeepId i      = 2
-                   | not (isBadId i) = 1
+idQuality (Just i) | isKeepId i      = 3 + user
+                   | not (isBadId i) = 1 + user
                    | otherwise       = 0
+  where user = if isUserWrittenId i then 1 else 0
 idQuality Nothing                    = -1
+
+-- Written by the user: the Id's position is in the design's source.  Names
+-- written in a bsc library (a library position) and names the compiler
+-- generates (no position, as for dictionaries and derived instances) are
+-- not, and neither are such binders moved to a use site (IdPNonUserBinder).
+isUserWrittenId :: Id -> Bool
+isUserWrittenId i =
+    let p = getIdPosition i
+    in  not (isPreludePosition p || p == noPosition ||
+             hasIdProp i IdPNonUserBinder)
 
 isFromRHSId :: Id -> Bool
 isFromRHSId idx = hasIdProp idx IdP_from_rhs

@@ -2469,10 +2469,33 @@ extendHeap = do s <- get
                 mapM_ copycell ((uncurry enumFromTo) (bounds oldheap))
 -}
 
+-- The name of a new heap cell, best first: a binder the user wrote
+-- (Id.isUserWrittenId), a name inferred from the cell's expression, any
+-- other binder that reached the design (a library binder moved to a use
+-- site, or one the compiler generated), no name.  A binder still at its
+-- library position belongs to a library function's internals and gives no
+-- name.  pDef keeps a named cell as a def that AExpand does not inline.
 improveCellName :: HExpr -> Maybe Id -> G (Maybe Id)
-improveCellName _ mi@(Just i)
-  | not $ isPreludePosition $ getPosition i = return mi
-improveCellName e _ = inferName e
+improveCellName e mi@(Just i)
+  | isUserWrittenId i = return mi
+  | otherwise = do mn <- inferName e
+                   case mn of
+                     Nothing | isPreludePosition (getPosition i) -> return Nothing
+                             | otherwise -> return mi
+                     _ -> return mn
+improveCellName e Nothing = inferName e
+
+-- A name the user wrote, given to a value that is already a heap cell (a
+-- binder bound to a heap reference), replaces the cell's name when the user
+-- did not write that name.  Otherwise the cell keeps the name it was given
+-- first.
+nameHeapRef :: HeapPointer -> HeapData -> Id -> G ()
+nameHeapRef p r i = do
+  cell <- getHeap r
+  case hc_name cell of
+    Just old | not (isUserWrittenId old) ->
+      updHeap "name-ref" (p, r) (cell { hc_name = Just i })
+    _ -> return ()
 
 -- Cells enter the heap only here and in updHeap, so forcing the name at
 -- both places ensures that the heap never stores a name thunk.  Names can
@@ -2843,6 +2866,9 @@ toHeap tag t (ICon i (ICDef t' e)) cell_name = do
   e' <- cacheDef i t' e
   toHeap tag t e' cell_name
 toHeap _   _ e@(ICon _ _)      _ = return e
+toHeap _   _ e@(IRefT _ p _ r) (Just i) | isUserWrittenId i = do
+  nameHeapRef p r i
+  return e
 toHeap _   _ e@(IRefT _ _ _ _) _ = return e
 toHeap tag t e cell_name = do
         -- these errors have never happened, disable checks for now.
@@ -2868,6 +2894,10 @@ toHeapCon tag t e cell_name = toHeap tag t e cell_name
 {-# INLINE toHeapWHNF #-}
 toHeapWHNF :: String -> IType -> PExpr -> Maybe Id -> G HExpr
 toHeapWHNF _  _ (P p e@(ICon _ _)) _ | p == pTrue = return e
+toHeapWHNF _  _ (P p e@(IRefT _ ptr _ r)) (Just i)
+  | p == pTrue, isUserWrittenId i = do
+      nameHeapRef ptr r i
+      return e
 toHeapWHNF _  _ (P p e@(IRefT _ _ _ _)) _ | p == pTrue = return e
 toHeapWHNF tag _ (P p e) cell_name
   | IAps (ICon _ (ICPrim _ PrimWhenPred)) [t] [ICon _ (ICPred _ p'), e'] <- e =

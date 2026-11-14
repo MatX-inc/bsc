@@ -16,7 +16,7 @@ import Position(Position, noPosition, isUsefulPosition)
 -- #############################################################################
 
 updateIExprPosition :: Position -> IExpr a -> IExpr a
-updateIExprPosition pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition pos e))
+updateIExprPosition pos (ILam i t e) = (ILam (moveBinder pos i) t (updateIExprPosition pos e))
 updateIExprPosition pos (IAps e ts [e0]) = (IAps (updateIExprPosition pos e) ts [(updateIExprPosition pos e0)])
 updateIExprPosition pos (IAps e ts es) = (IAps (updateIExprPosition pos e) ts es)
 updateIExprPosition pos (IVar i) = (IVar (setIdPosition pos i))
@@ -31,9 +31,19 @@ updateIExprPosition pos (ICon i info) = (ICon (setIdPosition pos i) info)
 updateIExprPosition pos (IRefT t p poss r) = (IRefT t p poss' r)
   where poss' = S.insert pos poss
 
+-- A binder takes the use-site position like the rest of the body.  A binder
+-- the user did not write (Id.isUserWrittenId) keeps that fact as
+-- IdPNonUserBinder when the new position would hide it, so a heap cell
+-- named after it still ranks below the user's names.
+moveBinder :: Position -> Id -> Id
+moveBinder pos i =
+    let i' = setIdPosition pos i
+    in  if isUserWrittenId i || not (isUserWrittenId i')
+        then i'
+        else addIdProp i' IdPNonUserBinder
 
 updateIExprPosition2 :: Position -> IExpr a -> IExpr a
-updateIExprPosition2 pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition pos e))
+updateIExprPosition2 pos (ILam i t e) = (ILam (moveBinder pos i) t (updateIExprPosition pos e))
 updateIExprPosition2 pos iexpr@(IAps e@(ICon i (ICCon _ _)) ts [e0]) =
     if (not (isUsefulPosition (getIdPosition i)))
     then updateIExprPosition pos iexpr

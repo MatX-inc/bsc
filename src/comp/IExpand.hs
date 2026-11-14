@@ -3440,7 +3440,10 @@ evalHeap (ptr, ref) = do
             P _ (IAps (ICon _ (ICUndet { })) _ _) -> internalError ("evalHeap: " ++ ppReadable (ptr, pe'))
             -- create IRefs for ICTuple fields to prevent repeat evaluation after selection
             P p (IAps f@(ICon con_name (ICTuple { fieldIds = field_names })) ts as) -> do
-                let prefix | Just pfx <- expr_name = mkUSId (unQualId pfx)
+                -- the struct cell's name prefixes its fields' names only
+                -- when the user wrote it (Id.isUserWrittenId)
+                let prefix | Just pfx <- expr_name, isUserWrittenId pfx =
+                               mkUSId (unQualId pfx)
                            | otherwise = id
                     struct_field_names =
                          [Just (prefix (unQualId name)) | name <- field_names]
