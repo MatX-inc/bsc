@@ -232,3 +232,15 @@ compile_fail_error SyntaxErrorAfterApp.bs P0005
 compare_file SyntaxErrorAfterApp.bs.bsc-out
 compile_fail_error LexErrorAfterApp.bs P0000
 compare_file LexErrorAfterApp.bs.bsc-out
+
+# Scheduling annotations of a Classic "module verilog"
+# Two annotations give a pair of methods different relations
+compile_fail ModuleVerilogSchedConflict.bs
+compare_file [make_bsc_output_name ModuleVerilogSchedConflict.bs]
+# Each of two methods is SB the other
+compile_fail_error ModuleVerilogSchedSwap.bs T0171
+# Repeating an annotation is allowed
+compile_pass ModuleVerilogSchedRepeat.bs
+# Unannotated pairs get the import "BVI" defaults
+compile_backend_pass ModuleVerilogSchedDefault.bs
+compare_file [make_bsc_output_name ModuleVerilogSchedDefault.bs]

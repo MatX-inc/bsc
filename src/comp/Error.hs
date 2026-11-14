@@ -915,6 +915,8 @@ data ErrMsg =
 
         | EActionSelfSB [String]
         | ETaskMismatchNumArgs String String Integer
+        | EContradictorySchedule (String, String, String)
+                                 Position (String, String, String)
 
         -- Generation errors (including scheduling)
 
@@ -3201,6 +3203,14 @@ getErrorText (EUnbasedUnsizedType lit t hint) =
      nest 2 (text t) $$
      s2par ("To get a value of some other type in the Bits class, use " ++
             hint ++ "."))
+
+getErrorText (EContradictorySchedule ann prev_pos prev_ann) =
+    (Type 171, empty,
+     s2par ("The scheduling annotation " ++ quote (showAnn ann) ++
+            " contradicts the annotation " ++ quote (showAnn prev_ann) ++
+            " at " ++ prPosition prev_pos ++ ".  A pair of methods can " ++
+            "have only one scheduling relation."))
+  where showAnn (m1, op, m2) = unwords [m1, op, m2]
 
 -- Generation Errors
 

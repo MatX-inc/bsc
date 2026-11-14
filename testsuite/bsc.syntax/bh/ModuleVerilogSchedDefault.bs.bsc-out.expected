@@ -1,0 +1,21 @@
+checking package dependencies
+compiling ModuleVerilogSchedDefault.bs
+Warning: "ModuleVerilogSchedDefault.bs", line 12, column 19: (P0200)
+  No scheduling annotation given between method `first' and method `first'
+  Assuming conflict-free.
+Warning: "ModuleVerilogSchedDefault.bs", line 12, column 19: (P0200)
+  No scheduling annotation given between method `notEmpty' and method
+  `notEmpty' Assuming conflict-free.
+Warning: "ModuleVerilogSchedDefault.bs", line 12, column 19: (P0200)
+  No scheduling annotation given between methods (`enq', `deq') and method
+  `deq' Assuming conflict.
+Warning: "ModuleVerilogSchedDefault.bs", line 12, column 19: (P0200)
+  No scheduling annotation given between methods (`first', `notEmpty') and
+  methods (`enq', `deq') Assuming sequenced-before.
+code generation for sysModuleVerilogSchedDefault starts
+Warning: "ModuleVerilogSchedDefault.bs", line 20, column 0: (G0010)
+  Rule "pop" was treated as more urgent than "push". Conflicts:
+    "pop" cannot fire before "push": calls to f.deq vs. f.enq
+    "push" cannot fire before "pop": calls to f.enq vs. f.deq
+Verilog file created: sysModuleVerilogSchedDefault.v
+All packages are up to date.

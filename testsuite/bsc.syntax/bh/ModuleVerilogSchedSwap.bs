@@ -1,0 +1,13 @@
+package ModuleVerilogSchedSwap where
+
+interface VReg8 =
+    get :: Bit 8
+    set :: Bit 8 -> PrimAction
+
+-- get is SB set, and set is SB get
+vMkReg8 :: Module VReg8
+vMkReg8 =
+    module verilog "Reg8" "CLK" {
+        get = "Q_OUT";
+        set = "D_IN" "EN";
+    } [ get <> get, get < set, set < get, set << set ]
