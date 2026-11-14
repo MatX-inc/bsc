@@ -225,7 +225,8 @@ instLead t _ = t
 ctN, ctC, ctK, ctAS, ctAR, ctAF, ctV, ctD, ctM, ctP, ctT, ctErr, ctDeferred,
   ctSkipCell, ctSkipLink, ctSkipDictSel, ctSkipPlain, ctSelfLink, ctNoHead,
   ctInline, ctSkipConst, ctF, ctI, ctQ, ctFMissing, ctFCut, ctRootAlias,
-  ctDecided, ctOutPayload, ctFallInline, ctPreRewrite, ctClass0, nCounters :: Int
+  ctDecided, ctOutPayload, ctFallInline, ctPreRewrite, ctPreRewriteSeen, ctClass0,
+  nCounters :: Int
 ctN = 0
 ctC = 1
 ctK = 2
@@ -253,11 +254,12 @@ ctQ = 23
 ctFMissing = 24     -- data and struct types whose declaration was not found
 ctFCut = 25         -- data and struct types past the limit on nested field types
 ctRootAlias = 26    -- roots linked to the cell that held their value
-ctDecided = 27      -- conditionals written with the literal that decided them
+ctDecided = 27      -- conditionals described with the literal that decided them
 ctOutPayload = 28   -- payloads tied to their constructor at a match-out
 ctFallInline = 29   -- one-bit unpacks that are not a cell's own expression
 ctPreRewrite = 30   -- concats written as evaluated, before a don't-care was absorbed
-ctClass0 = 31       -- cells by class: ctClass0 + class
+ctPreRewriteSeen = 31 -- such rewrites seen (one don't-care operand, result changed)
+ctClass0 = 32       -- cells by class: ctClass0 + class
 nCounters = ctClass0 + nClasses
 
 counterNames :: [(Int, String)]
@@ -272,7 +274,8 @@ counterNames =
       (ctF, "F"), (ctI, "I"), (ctQ, "Q"), (ctFMissing, "F-no-declaration"),
       (ctFCut, "F-cut"), (ctRootAlias, "root-alias"),
       (ctDecided, "decided"), (ctOutPayload, "out-payload"),
-      (ctFallInline, "fall-inline"), (ctPreRewrite, "pre-rewrite") ] ++
+      (ctFallInline, "fall-inline"), (ctPreRewrite, "pre-rewrite"),
+      (ctPreRewriteSeen, "pre-rewrite-seen") ] ++
     [ (ctClass0 + c, "cells-" ++ clsName c) | c <- [0 .. nClasses - 1] ]
 
 -- -----
@@ -1085,6 +1088,7 @@ tlPreRewrite l ts vals heaped res = safely l $ do
   undets <- mapM isUndet vals
   case (undets, heaped) of
     ([u1, u2], [h1, h2]) | u1 /= u2 -> do
+        bump l ctPreRewriteSeen
         mkey <- primKey l res
         case mkey of
           Just (op, nts, cells) -> do
@@ -1179,12 +1183,20 @@ tlFallUnpack l ta tn x = safely l $ do
 -- unpack is a cell's own expression (tlFallUnpack is for the others).
 
 -- The cell p's own expression e is about to be evaluated.  The match is
--- the one eval1 makes next on the same expression.
+-- the one eval1 makes next on the same expression (the expression, its
+-- head and the head's primitive), so it forces nothing new; only the
+-- three primitives of interest go on to the full test.
 tlCondBegin :: TLog -> Int -> IExpr a -> IO ()
-tlCondBegin l p e = do
-  own <- reading l False (evaluate (ownCond e))
-  writeIORef (tl_pending l) (if own then p else -1)
+tlCondBegin l p e =
+  case e of
+    IAps (ICon _ (ICPrim { primOp = op })) _ _
+      | op == PrimIf || op == PrimArrayDynSelect || op == PrimUnpack -> full
+      | otherwise -> return ()
+    IAps (IAps _ _ _) _ _ -> full
+    _ -> return ()
   where
+    full = do own <- reading l False (evaluate (ownCond e))
+              when own $ writeIORef (tl_pending l) p
     ownCond x = case flatAp x of
       (ICon _ (ICPrim { primOp = PrimIf }), [_], [_, _, _]) -> True
       (ICon _ (ICPrim { primOp = PrimArrayDynSelect }), [_, ITNum _], [_, _]) -> True
