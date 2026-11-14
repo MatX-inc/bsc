@@ -185,9 +185,14 @@ pickMostSpecific matches =
 
 solveCtx :: ATFRules -> Int -> M.Map Id IType -> [Pred]
          -> Maybe (M.Map Id IType)
-solveCtx rules fuel b0 ctx = do
+solveCtx rules@(ATFRules symt) fuel b0 ctx = do
     guard (fuel > 0)
-    let pats = [ (c, map cvtType ts) | IsIn c ts <- ctx ]
+    -- Imported instance contexts embed an earlier table's Class record;
+    -- resolve against symt so instances added later (e.g. Deriving) are visible.
+    let curClass c = case findSClass symt (name c) of
+                       Just c' | name c' == name c -> c'
+                       _ -> c
+        pats = [ (curClass c, map cvtType ts) | IsIn c ts <- ctx ]
         loop f b = do
             guard (f > 0)
             r <- foldM (step f) (b, False) pats
