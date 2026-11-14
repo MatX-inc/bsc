@@ -131,7 +131,7 @@ import GenBup(BupFile(..), BupInput(..), BupStats(..), genBupFile, readBupFile,
 import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap, FuncInfo)
 import GenForeign(genForeign, checkForeign)
-import IExpand(iExpand)
+import IExpand(iExpandTL)
 import IExpandUtils(HeapData)
 import ITransform(iTransform)
 import IInline(iInline)
@@ -1281,9 +1281,13 @@ genModule
 
     -- "run" it
     start flags DFexpanded
-    imod0 <- iExpand errh flags symt alldefs atf_cache fwrapper pps def
+    -- the module's type-links file (TypeLinks), beside its .ba
+    let tl_file = (dropSuf (mkAName (bdir flags) prefix modstr) ++ ".tl", srcName, modstr)
+    (imod0, tl_end) <- iExpandTL (Just tl_file) errh flags symt alldefs atf_cache fwrapper pps def
     iMCheck flags symt imod0 "expanded"
     t <- dump errh flags t DFexpanded dumpnames imod0
+    -- the dump forced the module: write the end of the type-links file
+    tl_end
     when (showIESyntax flags) (putStrLnF (show imod0))
     stats flags DFexpanded imod0
 

@@ -12,7 +12,7 @@
 --  * if c 0 e  --> {n-bits}c & e
 --  * flatten & (in asyntax)?
 --  * check for name conflict in the generated IEFace
-module IExpand(iExpand, iExpandStrings) where
+module IExpand(iExpand, iExpandTL, iExpandStrings) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
 import Prelude hiding ((<>))
@@ -92,6 +92,9 @@ import CaptureEvents(CapLogF, MoveSpec(..), moveSpec,
                      evUnpackCancel, evUnpackUndet, evUnpackConst,
                      evPackMerge, evUnpackMerge, lkMat, lkCopy)
 import CaptureRebuild(typeObservations)
+import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
+                 tlValue, tlFixValue, tlArgsReset, tlStored,
+                 tlFinalBegin, tlFinalEnd)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
 
@@ -293,14 +296,30 @@ iExpand :: ErrorHandle -> Flags ->
            IATFCache ->
            Bool -> [PProp] -> HDef ->
            IO (IModule HeapData)
-iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
+iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def =
+  fst <$> iExpandTL Nothing errh flags symt alldefs atf_cache is_noinlined_func pps def
+
+-- iExpand, writing the module's type-links file (TypeLinks) when given its
+-- path, package name and module name.  The evaluator writes most of the
+-- file as it runs; the action returned writes the rest (the facts of the
+-- end of elaboration, the named ends and the types) and must be run once
+-- the caller has forced the module (after the expanded dump), so that it
+-- reads only names the compile has already built.
+iExpandTL :: Maybe (FilePath, String, String) ->
+             ErrorHandle -> Flags ->
+             SymTab -> M.Map Id HExpr ->
+             IATFCache ->
+             Bool -> [PProp] -> HDef ->
+             IO (IModule HeapData, IO ())
+iExpandTL tl_file errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
   -- unbuffer output if we're tracing
   when (doAnyTrace || showElabProgress flags) $
       do hSetBuffering stdout LineBuffering
          hSetBuffering stderr LineBuffering
   -- execute the static elaboration
   -- go is of type GOutput X, where X is the large tuple output of iExpandModuleDef
-  go <- runG errh flags symt alldefs atf_cache mi is_noinlined_func pps $
+  tl_log <- tlNewLog tl_file
+  go <- runG errh flags symt alldefs atf_cache mi is_noinlined_func pps tl_log $
             iExpandModuleDef def
   -- trace the steps and heap size
   when doTraceSteps $ putStrLn ("expansion steps: " ++ (show (go_steps go)))
@@ -442,7 +461,10 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
       traceM ("iExpand done mod\n" ++ ppReadable imod)
   when doProfile $
       traceM ("iExpand profile\n" ++ ppReadable (go_profile go))
-  return imod
+  let tl_end = when (tlOn tl_log) $
+                   iExpandTypeLinks tl_log iheap ptr_map ptr_info insts rules
+                                    rules_cleanup ifc (go_port_types go)
+  return (imod, tl_end)
 
 -- iExpandStrings
 --   Evaluate a toplevel definition of type List String to its strings, with
@@ -458,7 +480,8 @@ iExpandStrings errh flags symt alldefs atf_cache (IDef i t e _) = do
                      EGeneric ("Cannot evaluate " ++ quote (getIdString i) ++
                                " to strings: its type is " ++ ppString t ++
                                ", not List String"))]
-  go <- runG errh flags symt alldefs atf_cache i False [] $
+  tl_log <- tlNewLog Nothing
+  go <- runG errh flags symt alldefs atf_cache i False [] tl_log $
             pushTopValueSchedNameScope i >> evalStringList e
   return (fst (goutput go))
 
@@ -939,6 +962,26 @@ iExpandCapture iheap ptr_map ptrm0 ptr_info args caplog =
         t3 = foldl' (\ t (k, n) -> capStat stIExpand k n t) t2 obs_stats
     in  capStat stIExpand 0 (IM.size ptr_map) t3
 
+
+-- The type-links facts of the end of elaboration (TypeLinks): each
+-- canonical cell's def and final expression, the merges of eqPtrs, the
+-- roots that are in no cell (rule conditions and bodies, method values,
+-- instance arguments) and the saved port types.  Run after the module was
+-- forced, so every cell, name and type read here is already evaluated.
+iExpandTypeLinks :: TLog -> IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
+                    [(HeapPointer, (HExpr, Maybe HDef))] ->
+                    [(Id, HStateVar)] -> HRules -> HRules -> [HEFace] ->
+                    PortTypeMap -> IO ()
+iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules_clean)
+                 ifc port_types = do
+    tlFinalBegin l
+    let own_types = M.findWithDefault M.empty Nothing port_types
+        -- the declared source type of one of the module's own inputs
+        declared kind name
+          | kind == "port" || kind == "arg" || kind == "param" =
+              M.lookup (VName name) own_types
+          | otherwise = Nothing
+    tlFinalEnd l declared
 
 -----------------------------------------------------------------------------
 
@@ -1787,7 +1830,11 @@ handlePrim isMFix curClkRstn ns p ea@(IAps (ICon _ (ICPrim { primOp = PrimModule
         when doDebug $ traceM "handlePrim: enter PrimModuleFix"
         showModProgress ns ("Attempting recursive module instantiation")
         let name = stateLocToId ns
+        -- the cell's pointer for the type-links log: the counter, not ptr,
+        -- which is a thunk that forces the evaluator state
+        tl_ptr <- capNextPtr
         (ptr, ref) <- addHeapCell "prim-mod-fix" (HLoop (Just name))
+        tlIO (\ l -> tlCell l tl_ptr t "prim-mod-fix")
         let rt = IRefT t ptr (S.singleton $ getPosition name) ref
         stno <- getStateNo
         old_rblobs <- getSavedRules
@@ -1796,8 +1843,12 @@ handlePrim isMFix curClkRstn ns p ea@(IAps (ICon _ (ICPrim { primOp = PrimModule
         new_rblobs <- getSavedRules
         -- correctly writing the recursive reference (making sure it is evaluated and unheaped)
         -- requires some contortions
-        _ <- do e'' <- (addPredG p' $ eval1 e') >>= unheap
+        _ <- do pe_fix@(P _ e_fix) <- addPredG p' $ eval1 e'
+                e'' <- unheap pe_fix
                 updHeap "moduleFix" (ptr, ref) (HWHNF e'' Nothing)
+                -- the cell got a referenced cell's value, or this value
+                -- (type links; unheap matched e_fix)
+                tlIO (\ l -> tlFixValue l tl_ptr e_fix)
         -- handle any recursively deferred rules
         oldAggressive <- isAggressive
         mapM_ (\(agg,a,b,c,d) -> do
@@ -2911,7 +2962,9 @@ walkNF e =
     let -- a capture link (CaptureEvents) from the walked cell, which upd
         -- overwrites (e was matched by iGetType)
         capWalkLink k src = case e of
-                              IRefT _ w _ _ -> capLink k w src
+                              IRefT _ w _ _ -> do
+                                  capLink k w src
+                                  tlIO (\ l -> tlCopy l (if k == lkMat then "mat" else "walk") w src)
                               _ -> return ()
         upd p r@(IRefT _ src _ _) ws = do
             -- the walked cell gets a copy of the referenced cell's value
@@ -3210,7 +3263,9 @@ evalUH e = do
           ICon _ (ICLazyArray t arr u) | specialArr t u -> uhArray e e0 t p0
           _ -> do
             pe' <- uhUnheap e pe
+            h0 <- capNextPtr
             e' <- uhHeaped pe
+            tlReheap e h0
             return (e', pe')
 
 -- evalUH for callers that only use the value: the "eval-uh" cell keeps
@@ -3227,6 +3282,18 @@ evalUHV e = do
             pe' <- uhUnheap e pe
             _ <- uhCellLater pe
             return pe'
+
+-- evalUH made one new cell (since the counter was h0) for the value of
+-- the reference e: the cell that e names evaluated to a constant under a
+-- condition, and the new cell holds it too (a type-links copy link; eval1
+-- matched e)
+tlReheap :: HExpr -> HeapPointer -> G ()
+tlReheap e h0 = do
+  h1 <- capNextPtr
+  when (h1 == h0 + 1) $
+    case e of
+      IRefT _ src _ _ -> tlIO (\ l -> tlCopy l "uh" h0 src)
+      _ -> return ()
 
 -- A heaping action that makes one new cell, with that cell's pointer (-1
 -- if it made another number of cells), for the capture (CaptureEvents)
@@ -3262,7 +3329,9 @@ evalUHP e = do
             return (e', pe', ptr)
           _ -> do
             pe' <- uhUnheap e pe
+            h0 <- capNextPtr
             (e', ptr) <- uhHeapedP pe
+            tlReheap e h0
             return (e', pe', ptr)
 
 isRefUH :: HExpr -> Bool
@@ -3518,10 +3587,19 @@ evalStaticOp' doUH doBK doUndet e resultType handler = do
     then return res
     else -- it's a bookkeeping no-op, so preserve the heap name if any
       case e of
-        IRefT _ _ _ r -> do
+        IRefT _ q _ r -> do
             old_cell <- getHeap r
             let old_name = hc_name old_cell
+            h0 <- capNextPtr
             res' <- toHeapWHNF "set-sel-pos" resultType res old_name
+            -- the result's cell holds the value of the cell at q (a
+            -- type-links copy link): the one cell made, or the reference
+            -- toHeapWHNF matched and returned
+            h1 <- capNextPtr
+            let res_ptr | h1 == h0 + 1 = h0
+                        | h1 == h0, IRefT _ x _ _ <- res' = x
+                        | otherwise = -1
+            tlIO (\ l -> tlCopy l "selpos" res_ptr q)
             return $ P pTrue res'
         _ -> return res
 
@@ -3921,9 +3999,11 @@ evalHeap (ptr, ref) = do
         pe' <- unheap pe0
         -- the cell gets a copy of a referenced cell's value (a capture
         -- link, CaptureEvents; unheap matched pe0)
-        case pe0 of
-          P _ (IRefT _ src _ _) -> capLink lkCopy ptr src
-          _ -> return ()
+        copied <- case pe0 of
+          P _ (IRefT _ src _ _) -> do capLink lkCopy ptr src
+                                      tlIO (\ l -> tlCopy l "copy" ptr src)
+                                      return True
+          _ -> return False
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, pe'))
         case pe' of
             P _ (IAps (ICon _ (ICUndet { })) _ _) -> internalError ("evalHeap: " ++ ppReadable (ptr, pe'))
@@ -3936,8 +4016,12 @@ evalHeap (ptr, ref) = do
                 ft <- instFunType (iGetType f) ts
                 let argTys = takeArgTypes (length as) ft
                     mv = moveSpec ptr (length as) ft
-                as' <- mapM (\(k, t, a, n) -> capMoveArg mv k a (toHeap "move-tuple" t a n)) $
+                tlIO tlArgsReset
+                as' <- mapM (\(k, t, a, n) -> capMoveArg mv k a (tlHeaped (toHeap "move-tuple" t a n))) $
                          zip4 [0..] argTys as struct_field_names
+                -- the stored tuple and its fields' cells (type links); a
+                -- copy of another cell's value is that cell's record
+                when (not copied) $ tlIO (\ l -> tlStored l ptr f ts ft as)
                 when doDebug $ traceM ("evalHeap move #1\n" ++ ppReadable (zip as' as))
                 let pe'' = P p (IAps f ts as')
                 {-           (mapIExprPosition cross
@@ -3963,11 +4047,15 @@ evalHeap (ptr, ref) = do
                     mv = case f of
                            ICon _ (ICCon {}) -> moveSpec ptr (length as) ft
                            _ -> NoMove
-                    th (k, t) a = capMoveArg mv k a $
+                    th (k, t) a = capMoveArg mv k a $ tlHeaped $
                                   if isLazyOp f
                                   then toHeap "move-ap" t a Nothing
                                   else toHeapWHNF "move-ap" t (P pTrue a) Nothing
+                tlIO tlArgsReset
                 as' <- zipWithM th (zip [0..] argTys) as
+                -- the stored application and its arguments' cells, for
+                -- every head (type links)
+                when (not copied) $ tlIO (\ l -> tlStored l ptr f ts ft as)
                 when doDebug $ traceM ("evalHeap move #2\n" ++ ppReadable (zip as' as))
                 let pe'' = P p (IAps f ts as')
                 {-            (mapIExprPosition cross
@@ -3979,6 +4067,10 @@ evalHeap (ptr, ref) = do
             _ -> do
                 let new_cell = HWHNF {hc_pexpr = pe', hc_name = expr_name }
                 updHeap "evalHeap" (ptr,ref) new_cell
+                -- a constant, a leaf or a held coercion (type links)
+                when (not copied) $
+                    case pe' of
+                      P _ e_val -> tlIO (\ l -> tlValue l ptr e_val)
                 return pe'
 
 -- Heap a moved argument (evalHeap), logging the move for the capture
@@ -4546,15 +4638,19 @@ conAp' i ci@(ICPrim _ PrimPack) _ [T ta, T tn, E d, E x]
         case xw of
           ICon _ (ICLazyUnpack { lzTa = ta', lzOrig = b, lzOrigPtr = bp }) | ta == ta' -> do
               capEvent evPackCancel bp ta
+              tlIO (\ l -> tlCoerce l 'p' "cancel" ta tn (bp, Just b) (xp, Just xee))
               return (P px b)
           ICon _ (ICUndet {}) -> do
               capEvent evPackUndet xp ta
+              tlIO (\ l -> tlCoerce l 'p' "undet" ta tn (-1, Nothing) (xp, Just xee))
               addPredG px $ unfoldBitsCoercion "PrimPack" idPack d [E xee]
           _ -> do
               sel <- mkBitsMethodSel i (iConType ci) idPack
               (aref, apt) <- capHeapNew $
                   toHeap "coerce" (aitBit tn) (IAps sel [ta, tn] [d, xee]) Nothing
               capEvent evPackHold apt ta
+              -- the typed value and its packed bits (type links)
+              tlIO (\ l -> tlCoerce l 'p' "hold" ta tn (apt, Nothing) (xp, Just xee))
               let (op, app) = capHeldPtrs xp apt
                   node = ICLazyPack { iConType = aitBit tn, lzTa = ta,
                                       lzTn = tn, lzOrig = xee,
@@ -4571,14 +4667,17 @@ conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
     | not doEagerPackUnpack, tn /= ITNum 0, tn /= ITNum 1 = do
         (xee, P px xw, xp) <- evalUHP x
         case xw of
-          ICon _ (ICLazyPack { lzTa = ta', lzOrig = v, lzAppliedPtr = bp }) | ta == ta' -> do
+          ICon _ (ICLazyPack { lzTa = ta', lzOrig = v, lzAppliedPtr = bp, lzOrigPtr = vp }) | ta == ta' -> do
               capEvent evUnpackCancel bp ta
+              tlIO (\ l -> tlCoerce l 'u' "cancel" ta tn (bp, Just xee) (vp, Just v))
               return (P px v)
           ICon _ (ICUndet {}) -> do
               capEvent evUnpackUndet xp ta
+              tlIO (\ l -> tlCoerce l 'u' "undet" ta tn (xp, Just xee) (-1, Nothing))
               addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
           ICon _ (ICInt {}) -> do
               capEvent evUnpackConst xp ta
+              tlIO (\ l -> tlCoerce l 'u' "const" ta tn (xp, Just xee) (-1, Nothing))
               addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
           _ -> do
               sel <- mkBitsMethodSel i (iConType ci) idUnpack
@@ -4592,6 +4691,15 @@ conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
                 ICon _ (ICLazyUnpack { lzOrigPtr = bp }) ->
                     capEvent evUnpackHold bp ta
                 _ -> capEvent evUnpackHold xp ta
+              -- the bits and the typed value unpacked from them (type
+              -- links); over a held pack at another type, the pack's bits
+              -- with both types (a repack)
+              case xw of
+                ICon _ (ICLazyPack { lzTa = ta', lzTn = tn', lzOrig = v,
+                                     lzAppliedPtr = bp, lzOrigPtr = vp }) ->
+                    tlIO (\ l -> do tlCoerce l 'u' "repack" ta tn (bp, Just xee) (apt, Nothing)
+                                    tlCoerce l 'p' "repack" ta' tn' (bp, Just xee) (vp, Just v))
+                _ -> tlIO (\ l -> tlCoerce l 'u' "hold" ta tn (xp, Just xee) (apt, Nothing))
               let (op, app) = capHeldPtrs xp apt
                   node = ICLazyUnpack { iConType = ta, lzTa = ta,
                                         lzTn = tn, lzOrig = xee,
@@ -5639,6 +5747,8 @@ improveIf f t cnd thn@(ICon i1 n1@(ICLazyPack { lzTa = ta1, lzTn = tn1,
          toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
        -- the merged bits (a capture event, CaptureEvents; ta1 was compared)
        capEvent evPackMerge app ta1
+       -- the merged typed value and the merged bits (type links)
+       tlIO (\ l -> tlCoerce l 'p' "merge" ta1 tn1 (app, Nothing) (op, Nothing))
        let (op', app') = capHeldPtrs op app
        return (ICon i1 (n1 { lzOrig = o', lzApplied = a',
                              lzOrigPtr = op', lzAppliedPtr = app' }), True)
@@ -5660,6 +5770,8 @@ improveIf f t cnd thn@(ICon i1 n1@(ICLazyUnpack { lzTa = ta1, lzTn = tn1,
          toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
        -- the merged bits (a capture event, CaptureEvents; ta1 was compared)
        capEvent evUnpackMerge op ta1
+       -- the merged bits and the merged typed value (type links)
+       tlIO (\ l -> tlCoerce l 'u' "merge" ta1 tn1 (op, Nothing) (app, Nothing))
        let (op', app') = capHeldPtrs op app
        return (ICon i1 (n1 { lzOrig = o', lzApplied = a',
                              lzOrigPtr = op', lzAppliedPtr = app' }), True)
@@ -6722,7 +6834,9 @@ iArrayInRange arr = Array.inRange (Array.bounds arr)
 mkArrayCell :: HExpr -> G (ArrayCell HeapData)
 mkArrayCell e = do
    let hcell = HUnev e Nothing
+   h0 <- capNextPtr
    (p, r) <- addHeapCell "mk-array-cell" hcell
+   tlIO (\ l -> tlCellNoType l h0 "mk-array-cell")
    return (ArrayCell p r)
 
 -- ===============
