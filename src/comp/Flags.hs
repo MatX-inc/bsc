@@ -1,5 +1,6 @@
 module Flags(
              Flags(..),
+             FrontEndMode(..),
              storedFlagsPaths,
              redSteps,
              ResourceFlag(..), SATFlag(..), MsgListFlag(..),
@@ -177,10 +178,23 @@ data Flags = Flags {
         -- build each of a compile's symbol tables from scratch instead
         -- of extending the first (for A/B comparison); not stored in
         -- .ba files, since it changes no output
-        rebuildSymTab :: Bool
+        rebuildSymTab :: Bool,
+        -- last, and not stored in .ba files (GenABin): no .ba is
+        -- written in these modes
+        frontEndMode :: FrontEndMode
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)
+
+-- What a source compile produces: everything (the default); only the
+-- package's interface, a .bi file written after context reduction
+-- (-signature-only); or only the typechecked package, a .btp file
+-- (-check-only).  The front-end-only modes read imported packages from
+-- .bi files.  -u -check-only gives each package it recompiles a
+-- SignatureOnly pass, which writes the .bi and the .bup, and then checks
+-- the .bup.
+data FrontEndMode = FullCompile | SignatureOnly | CheckOnly
+    deriving (Eq, Show)
 
 data Verbosity = Quiet | Normal | Verbose | ExtraVerbose
    deriving(Eq, Show, Ord, Enum)
@@ -241,6 +255,9 @@ data DumpFlag
         | DFisimpdicts
         | DFisimplify
         | DFwriteBin
+        | DFwriteSig
+        | DFwriteUntyped
+        | DFwriteTyped
 
         -- module generation
         | DFexpanded

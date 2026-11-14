@@ -8,6 +8,7 @@ DONTKEEPFILES ?= xxxx
 
 TRYDELFILES = $(wildcard \
 	*.bi \
+	*.btp \
 	*.bo \
 	*.ba \
 	*.intern.json \

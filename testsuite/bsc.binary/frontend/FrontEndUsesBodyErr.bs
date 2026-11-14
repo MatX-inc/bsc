@@ -1,0 +1,6 @@
+package FrontEndUsesBodyErr where
+
+import FrontEndBodyErr
+
+twice :: Integer
+twice = answer + answer

@@ -209,7 +209,10 @@ library
     ForeignFunctions
     GHCPretty
     GenABin
+    GenBi
     GenBin
+    GenBtp
+    GenBup
     GenForeign
     GenFuncWrap
     GenSign

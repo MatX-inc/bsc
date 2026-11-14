@@ -7,7 +7,9 @@ include ../common.mk
 
 SRCS = $(wildcard *.bs) $(wildcard *.bsv)
 
-# Only .bo files are generated (no modules are elaborated in this directory)
+# Only .bo files are generated (no modules are elaborated in this directory),
+# each with its .bi (the package interface that -signature-only writes and
+# that -signature-only and -check-only read)
 OBJS = $(addprefix $(BUILDDIR)/,$(addsuffix .bo,$(basename $(SRCS))))
 
 .PHONY: build
@@ -24,17 +26,21 @@ $(BUILDDIR):
 # don't auto-include the Prelude when compiling the Prelude
 $(BUILDDIR)/Prelude.bo:     Prelude.bs ${BSC}
 	${BSC} ${BSCFLAGS} -no-use-prelude Prelude.bs
+	${BSC} ${BSCFLAGS} -no-use-prelude -signature-only Prelude.bs
 
 $(BUILDDIR)/PreludeBSV.bo:  PreludeBSV.bsv ${BSC}
 	${BSC} ${BSCFLAGS} -no-use-prelude PreludeBSV.bsv
+	${BSC} ${BSCFLAGS} -no-use-prelude -signature-only PreludeBSV.bsv
 
 # .bs.bo:
 $(BUILDDIR)/%.bo: %.bs
 	${BSC} ${BSCFLAGS} $<
+	${BSC} ${BSCFLAGS} -signature-only $<
 
 # .bsv.bo:
 $(BUILDDIR)/%.bo: %.bsv
 	${BSC} ${BSCFLAGS} $<
+	${BSC} ${BSCFLAGS} -signature-only $<
 
 .PHONY: clean full_clean
 clean full_clean:

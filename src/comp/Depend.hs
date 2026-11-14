@@ -28,7 +28,7 @@ import FStringCompat
 import Lex
 import Parse
 import FileNameUtil(hasDotSuf, dropSuf, baseName, dirName,
-                    bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix,
+                    bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix, biSuffix, btpSuffix, bupSuffix,
                     mkAName, mkVName, mkVPIHName, mkVPICName,
                     createEncodedFullFilePath)
 import FileIOUtil(readFilesPath, readBinFilePath, readFileCatch, writeFileCatch,
@@ -112,13 +112,19 @@ chkDeps errh flags name = do
                 return (reverse [ (fileName pi, pkg, warns) | pi@(PkgInfo { compileStatus = Recompile pkg warns }) <- pis'' ])
             Left [] -> internalError "Depend.chkDeps: tsort empty cycle"
 
+-- The file whose date shows that a package is compiled: its .bo, or its
+-- .bi in the front-end-only modes, which read and write .bi files
+ifcSuffix :: Flags -> String
+ifcSuffix flags | frontEndMode flags == FullCompile = binSuffix
+                | otherwise = biSuffix
+
 -- Get PkgInfo for a package name.  Try to open the corresponding file.
 -- Also try the .bo file (for installed libraries).
 getPkgInfo :: ErrorHandle -> Flags -> PkgName -> IO (Either EMsg PkgInfo)
 getPkgInfo errh flags pname =
     let name = getIdString pname ++ "." ++ bscSrcSuffix
         bsvname = getIdString pname ++ "." ++ bsvSrcSuffix
-        bname = getIdString pname ++ "." ++ binSuffix
+        bname = getIdString pname ++ "." ++ ifcSuffix flags
         path = ifcPath flags
         errPackageMissing = (getIdPosition pname,
                              EMissingPackage (pfpString pname))
@@ -171,11 +177,19 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
     let mkdname dir suf = dir ++ "/" ++ baseName (dropSuf fname) ++ "." ++ suf
 
     -- find the mod time of the bo file (either in same dir or in the bdir)
-    tbo_samedir <- getModTime (dropSuf fname ++ "." ++ binSuffix)
-    tbo_bdir <- case (bdir flags) of
-                    Nothing -> return Nothing
-                    Just dir -> getModTime (mkdname dir binSuffix)
-    let tbo = if (isJust tbo_bdir) then tbo_bdir else tbo_samedir
+    let getIfcTime suf = do
+            t_samedir <- getModTime (dropSuf fname ++ "." ++ suf)
+            t_bdir <- case (bdir flags) of
+                          Nothing -> return Nothing
+                          Just dir -> getModTime (mkdname dir suf)
+            return (if (isJust t_bdir) then t_bdir else t_samedir)
+    -- in -check-only, a package is checked when both its .bi and its .btp
+    -- are current, and in -signature-only when both its .bi and its .bup
+    -- are (missing is older than any date)
+    tbo <- case frontEndMode flags of
+             CheckOnly -> min <$> getIfcTime biSuffix <*> getIfcTime btpSuffix
+             SignatureOnly -> min <$> getIfcTime biSuffix <*> getIfcTime bupSuffix
+             _ -> getIfcTime (ifcSuffix flags)
 
     -- include the prelude to avoid failures when predule was updated.
     let prelude
@@ -222,6 +236,10 @@ transClose errh flags (errs,done) (n:ns) = do
 -- this file after codegen.
 -- XXX This needs to be kept in sync with what the backend actually does!
 getGenFs :: Flags -> PkgInfo -> [String]
+getGenFs flags _
+    -- the front-end-only modes write no generated files (checkForeign
+    -- writes no foreign .ba)
+    | frontEndMode flags /= FullCompile = []
 getGenFs flags pi =
     let prefix = dirName (fileName pi) ++ "/"
         getName = getIdString . unQualId
@@ -388,7 +406,7 @@ parseFile errh flags fatal_name_mismatch fname = do
     -- Check for package name mismatch
     let reportMismatch = if fatal_name_mismatch then bsError else bsWarning
     -- Use getIdString rather than pfpString here: pfpString calls isClassic(),
-    -- which reads a global IORef.  If it fires before compilePackage calls
+    -- which reads a global IORef.  If it fires before beginPackage calls
     -- setSyntax, GHC can memoize the result as CLASSIC and corrupt the print
     -- mode for the entire subsequent compilation.  Package names are always
     -- simple unqualified identifiers, so getIdString is equivalent.

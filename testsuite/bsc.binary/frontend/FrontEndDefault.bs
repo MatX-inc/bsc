@@ -1,0 +1,13 @@
+package FrontEndDefault () where
+
+-- A class default naming a constructor that is ambiguous with one in the
+-- Prelude; the full compile reports it when it writes the signature of
+-- the unexported class into the .bo (see frontend.exp)
+
+data MyT = Cons Bool
+
+class C a where
+  f :: a -> MyT
+  f x = Cons False
+
+instance C Integer where {}

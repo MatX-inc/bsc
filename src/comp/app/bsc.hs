@@ -11,13 +11,13 @@ import System.Process(system)
 import System.Exit(ExitCode(ExitFailure, ExitSuccess))
 import System.FilePath(takeDirectory)
 import System.IO(hFlush, stdout, hPutStr, stderr, hGetContents, hClose, hSetBuffering, BufferMode(LineBuffering))
-import System.IO(hSetEncoding, utf8)
+import System.IO(hSetEncoding, utf8, hPutStrLn)
 import System.Posix.Files(fileMode,  unionFileModes, ownerExecuteMode, groupExecuteMode, setFileMode, getFileStatus, fileAccess)
 import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory, removeFile)
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
 import Data.Char(isSpace, ord)
 import Data.List(nub, partition, intersperse, sort,
-            isPrefixOf, isSuffixOf, unzip5, intercalate, tails)
+            isPrefixOf, isSuffixOf, unzip5, intercalate, tails, foldl')
 import Data.Time.Clock.POSIX(getPOSIXTime)
 import Data.Maybe(isJust, isNothing, fromMaybe)
 import Numeric(showOct)
@@ -31,6 +31,9 @@ import qualified Control.Exception as CE
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString as B
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import Data.IORef(IORef, newIORef, readIORef, writeIORef)
 import System.IO.Unsafe(unsafePerformIO)
 
@@ -40,18 +43,19 @@ import SCC(scc)
 -- utility libs
 import ParseOp
 import PFPrint
-import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
+import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3,
+            hashInit, nextHashByte, showHash)
 import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, storedPath,
                     mkAName, mkVName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
-                    bscSrcSuffix, binSuffix,
+                    bscSrcSuffix, binSuffix, biSuffix, btpSuffix, bupSuffix,
                     hSuffix, cSuffix, cxxSuffix, cppSuffix, ccSuffix,
                     objSuffix, useSuffix,
                     genFileName, createEncodedFullFilePath,
                     getFullFilePath, getRelativeFilePath)
 import FileIOUtil(writeFileCatch, writeFileBuilderCatch, readFileMaybe, removeFileCatch,
-                  readFilePath)
+                  readFilePath, readBinaryFileCatch)
 import qualified Data.ByteString.Builder as BB
 import TopUtils
 import SystemCheck(doSystemCheck)
@@ -64,6 +68,7 @@ import SpeedyString(snapshotInternState, renderInternTable)
 import Exceptions(bsCatch)
 import Flags(
         Flags(..),
+        FrontEndMode(..),
         storedFlagsPaths,
         DumpFlag(..),
         hasDump,
@@ -74,13 +79,14 @@ import FlagsDecode(
         updateFlags,
         showFlags,
         showFlagsRaw,
+        traceflags,
         exitWithUsage,
         exitWithHelp,
         exitWithHelpHidden)
 import Error(internalError, ErrMsg(..),
              ErrorHandle, initErrorHandle, setErrorHandleFlags,
-             bsError, bsWarning, bsMessage,
-             exitFail, exitOK, exitFailWith)
+             bsError, bsErrorNoExit, bsWarning, bsMessage,
+             exitFail, exitOK, exitFailWith, takeDiagnostics)
 import Position(noPosition, cmdPosition)
 import CVPrint
 import Id
@@ -92,6 +98,8 @@ import SymTab
 import MakeSymTab(mkSymTab, mkSymTabWithWarnings, mkSymTabBase, mkSymTabExtend, cConvInst,
                   getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck)
+import CtxRed(SignProvisos)
+import Eval(rnf)
 import PatMatchCheck(patternMatchWarnings)
 import RedundantProvisos(checkRedundantProvisos)
 import PoisonUtils(mkPoisonedCDefn)
@@ -103,6 +111,7 @@ import ISyntax(IPackage(..), IModule(..),
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef, iConvTStats)
+import IConvLet(mayHaveComplicatedLetrecCycle)
 import CType(cTypeConsStats)
 import GroundCType(groundCTypeStats)
 import BinData(binTypeStats)
@@ -114,11 +123,15 @@ import FixupDefs(fixupDefs, updDef, mkDictBuckets, DictEvMap, DictRedirects,
                  mkDictEvMapAndRedirects, extendDictRedirects)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify, iSimplifyStats)
-import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
-import GenBin(genBinFile, CPackageBin(..), stripImpSigs, checkRoundTrip, sortSched)
+import BinUtil(BinMap, HashMap, readImports, readImportsBi, replaceImportedSignatures)
+import GenBin(genBinFile, forceSignatures, CPackageBin(..), stripImpSigs, checkRoundTrip, sortSched)
+import GenBi(BiFile(..), genBiFile)
+import GenBtp(BtpFile(..), genBtpFile)
+import GenBup(BupFile(..), BupInput(..), BupStats(..), genBupFile, readBupFile,
+              readBupLibraries)
 import GenWrap(genWrap, WrapInfo(..))
-import GenFuncWrap(genFuncWrap, addFuncWrap)
-import GenForeign(genForeign)
+import GenFuncWrap(genFuncWrap, addFuncWrap, FuncInfo)
+import GenForeign(genForeign, checkForeign)
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
 import ITransform(iTransform)
@@ -317,7 +330,9 @@ main' errh flags name =  do
     -- check system requirements
     doSystemCheck errh
 
-    let comp = if updCheck flags'
+    let comp = if hasDotSuf bupSuffix name
+               then checkBup
+               else if updCheck flags'
                then compile_with_deps
                else compile_no_deps
 
@@ -335,23 +350,33 @@ compile_with_deps :: ErrorHandle -> Flags -> String -> IO (Bool)
 compile_with_deps errh flags name = do
     let
         verb = showUpds flags && not (quiet flags)
+        checking = frontEndMode flags == CheckOnly
         -- the flags when re-compiling depended modules
         flags_depend = flags { updCheck = False,
                                genName = [],
                                showCodeGen = verb }
         -- the flags when re-compiling this module
         flags_this = flags_depend { genName = genName flags }
-        comp (success, binmap0, hashmap0) (fn, pkg, parse_warns) = do
+        -- -check-only gives each package it recompiles a -signature-only
+        -- pass, which writes the .bi that later packages read and the
+        -- .bup, and then checks that .bup as -check-only X.bup does
+        comp biSeen (success, binmap, hashmap) (fn, pkg, parse_warns) = do
             when (verb) $ putStrLnF ("compiling " ++ fn)
+            let fl = if fn == name then flags_this else flags_depend
+                fl_pass = if checking then fl { frontEndMode = SignatureOnly } else fl
             -- Show warnings for this file
             when (not $ null parse_warns) $ bsWarning errh parse_warns
-            let fl = if (fn == name)
-                     then flags_this
-                     else flags_depend
             t <- getNow
-            (cur_success, binmap, hashmap)
-                <- compilePackage errh fl t binmap0 hashmap0 fn pkg
-            return (cur_success && success, binmap, hashmap)
+            removeStaleBup errh fl_pass fn
+            (cur_success, binmap', hashmap')
+                <- compileParsed errh fl_pass t binmap hashmap biSeen fn pkg
+            -- a failed signature pass writes no .bup
+            ok <- if checking && cur_success
+                  then do -- the .btp records only the check's diagnostics
+                          _ <- takeDiagnostics errh
+                          checkBup errh fl (putInDir (bdir fl) fn bupSuffix)
+                  else return cur_success
+            return (ok && success, binmap', hashmap')
     when (verb) $ putStrLnF "checking package dependencies"
 
     t <- getNow
@@ -359,49 +384,160 @@ compile_with_deps errh flags name = do
 
     -- get the list of depended files which need recompiling (with parsed packages and warnings)
     start flags DFdepend
-    pkgs <- chkDeps errh flags name
+    -- a failure here stops the named package before comp removes its .bup
+    pkgs0 <- chkDeps errh flags name `CE.onException` removeStaleBup errh flags name
+    -- -check-only checks the named package even when its .btp is current
+    pkgs <- if checking && not (any ((== name) . fst3) pkgs0)
+            then do (pkg, _, warns) <- parseFile errh flags False name
+                    return (pkgs0 ++ [(name, pkg, warns)])
+            else return pkgs0
     _ <- dump errh flags t DFdepend dumpnames (map fst3 pkgs)
 
     -- compile them
-    (ok, _, _) <- foldM comp (True, M.empty, M.empty) pkgs
+    biSeen <- if checking then Just <$> newIORef S.empty else return Nothing
+    (ok, _, _) <- foldM (comp biSeen) (True, M.empty, M.empty) pkgs
 
     when (verb) $
-      if ok then
-          putStrLnF "All packages are up to date."
-      else putStrLnF "All packages compiled (some with errors)."
+      putStrLnF $ case (checking, ok) of
+                    (False, True) -> "All packages are up to date."
+                    (False, False) -> "All packages compiled (some with errors)."
+                    (True, True) -> "All packages checked."
+                    (True, False) -> "All packages checked (some with errors)."
 
     return ok
 
 compile_no_deps :: ErrorHandle -> Flags -> String -> IO (Bool)
 compile_no_deps errh flags name = do
+    removeStaleBup errh flags name
     (pkg, t, parse_warns) <- parseFile errh flags False name
 
     -- Show warnings for this file
     when (not $ null parse_warns) $ bsWarning errh parse_warns
 
-    (ok, _, _) <- compilePackage errh flags t M.empty M.empty name pkg
+    (ok, _, _) <- compileParsed errh flags t M.empty M.empty Nothing name pkg
     return ok
 
--------------------------------------------------------------------------
+-- One parsed package, by the pipeline of its mode: the full compile
+-- (compilePackage), -signature-only (signaturePackage) or -check-only
+-- (checkPackage).  Only the full compile reads .bo files, so the
+-- front-end-only pipelines leave the maps of those read so far as they
+-- are.  biSeen: -u -check-only's record of the packages whose .bi its
+-- signature passes have read (readImportsBi).
+compileParsed :: ErrorHandle -> Flags -> TimeInfo -> BinMap HeapData -> HashMap ->
+                 Maybe (IORef (S.Set String)) -> String -> CPackage ->
+                 IO (Bool, BinMap HeapData, HashMap)
+compileParsed errh flags t binmap hashmap biSeen name pkg =
+    case frontEndMode flags of
+      FullCompile   -> compilePackage errh flags t binmap hashmap name pkg
+      SignatureOnly -> unchanged <$> signaturePackage errh flags t biSeen name pkg
+      CheckOnly     -> unchanged <$> checkPackage errh flags t name pkg
+  where unchanged ok = (ok, binmap, hashmap)
 
-compilePackage ::
-    ErrorHandle ->
-    Flags ->
-    TimeInfo ->
-    BinMap HeapData ->
-    HashMap ->
-    String ->
-    CPackage ->
-    IO (Bool, BinMap HeapData, HashMap)
-compilePackage
-    errh
-    flags                -- user switches
-    tStart
-    binmap0
-    hashmap0
-    name_orig -- String --
-    min@(CPackage pkgId _ _ _ _ _ _) = do
+-- -signature-only first removes the package's .bup, so that a compile
+-- that fails cannot leave an earlier one beside the files it rewrote
+removeStaleBup :: ErrorHandle -> Flags -> String -> IO ()
+removeStaleBup errh flags name =
+    when (frontEndMode flags == SignatureOnly) $ do
+        let bup_filename = putInDir (bdir flags) name bupSuffix
+        stale <- doesFileExist bup_filename
+        when stale $ removeFileCatch errh bup_filename
 
+-- -signature-only: the phases through CtxReduce (ctxReducePackage), with
+-- the imports read from .bi files, then the package's .bi and .bup
+-- (writeSignature, writeBup).  biSeen: as compileParsed; with it,
+-- readImportsBi reports an import whose check failed, the first time a
+-- signature pass of the -u -check-only run reads its .bi.
+signaturePackage :: ErrorHandle -> Flags -> TimeInfo -> Maybe (IORef (S.Set String)) ->
+                    String -> CPackage -> IO Bool
+signaturePackage errh flags tStart biSeen name_orig min@(CPackage pkgId _ _ _ _ _ _) = do
+    (name, dumpnames) <- beginPackage flags name_orig pkgId
+    (biClosure, CtxReduced { cr_time = t, cr_pkgsUsedInTypes = pkgsUsedInTypes,
+                             cr_mctx = mctx, cr_pkgsUsedInCtxReduce = pkgsUsedInCtxReduce,
+                             cr_symt = symt })
+        <- ctxReducePackage errh flags tStart dumpnames
+               (frontEndImports errh flags biSeen min)
+    (ok, pkgsUsedInExports, t) <-
+        writeSignature errh flags t dumpnames name biClosure symt mctx
+    when ok $
+        writeBup errh flags t dumpnames name biClosure mctx
+                 (pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInExports)
+    return ok
+
+-- -check-only from source, without -u (see compile_with_deps): the
+-- phases through CtxReduce (ctxReducePackage), with the imports read from
+-- .bi files, the typecheck (typecheckPackage), then the package's .btp
+-- (writeCheck).
+checkPackage :: ErrorHandle -> Flags -> TimeInfo -> String -> CPackage -> IO Bool
+checkPackage errh flags tStart name_orig min@(CPackage pkgId _ _ _ _ _ _) = do
+    (name, dumpnames) <- beginPackage flags name_orig pkgId
+    (biClosure, CtxReduced { cr_time = t, cr_symt11 = symt11, cr_mder = mder,
+                             cr_pkgsUsedInTypes = pkgsUsedInTypes, cr_mctx = mctx,
+                             cr_pkgsUsedInCtxReduce = pkgsUsedInCtxReduce,
+                             cr_signProvisos = signProvisos, cr_symt = symt })
+        <- ctxReducePackage errh flags tStart dumpnames
+               (frontEndImports errh flags Nothing min)
+    (mod, tcErrors, pkgsUsedInCode, t) <-
+        typecheckPackage errh flags t dumpnames symt mctx
+    when (warnRedundantProvisos flags && not tcErrors) $
+      checkRedundantProvisos errh symt11 mder signProvisos mod
+    writeCheck errh flags t dumpnames name biClosure symt
+               mctx mod tcErrors
+               [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode] Nothing
+
+-- -check-only X.bup: checkPackage's steps after the table that follows
+-- CtxReduce, from what -signature-only recorded in the .bup (see
+-- writeBup), which is the only file read besides the library .bi files
+-- it refers to (found on the -p path).  Messages that the steps
+-- before it produce were reported by -signature-only, so the .btp holds
+-- only this run's.
+checkBup :: ErrorHandle -> Flags -> String -> IO Bool
+checkBup errh flags name_bup = do
+    tStart <- getNow
+    pwd <- getCurrentDirectory
+    let bup_name = createEncodedFullFilePath name_bup pwd
+
+    start flags DFimports
+    bytes <- readBinaryFileCatch errh noPosition name_bup
+    (bup0, bup_hash) <- readBupFile errh name_bup bytes
+    let name = bup_source bup0
+    setSyntax (if hasDotSuf bscSrcSuffix name then CLASSIC else BSV)
+    writeIORef internDumpFile (Just (putInDir (bdir flags) name "intern.json"))
+    -- the two runs must agree on everything but the mode and locations
+    when (bup_flags bup0 /= flagsFingerprint flags) $
+        bsError errh [(cmdPosition, EGeneric
+            ("The flags differ from those of the -signature-only compile that wrote " ++
+             getRelativeFilePath bup_name ++ "."))]
+    -- it needs the package before context reduction
+    when (warnRedundantProvisos flags) $
+        bsError errh [(cmdPosition, EGeneric
+            ("-warn-redundant-provisos needs a check of the source file " ++
+             "(-check-only without -u), not of a .bup file."))]
+    bup <- readBupLibraries errh (verbose flags) (ifcPath flags) bup0
+    let mctx@(CPackage pkgId _ _ impsigs _ _ _) = bup_package bup
+        dumpnames = (Just (baseName (dropSuf name)), Just (getIdString (unQualId pkgId)), Nothing)
+    when traceBup $
+        hPutStrLn stderr (unwords [ "bup read", getRelativeFilePath bup_name, "hash", bup_hash
+                                  , "signatures", show (length impsigs)
+                                  , "libraries", show (length [ () | Just _ <- bup_libs bup ]) ])
+    t <- dumpStr errh flags tStart DFimports dumpnames name_bup
+
+    start flags DFsympostctxreduce
+    symt <- mkSymTab errh mctx
+    t <- dump errh flags t DFsympostctxreduce dumpnames symt
+
+    (mod, tcErrors, pkgsUsedInCode, t) <-
+        typecheckPackage errh flags t dumpnames symt mctx
+
+    writeCheck errh flags t dumpnames bup_name [(pkgId, bup_hash)] symt
+               mctx mod tcErrors
+               [bup_used_types bup, bup_used_ctx bup, pkgsUsedInCode]
+               (Just (bup_used_exports bup))
+
+-- The start of each pipeline from source (compilePackage,
+-- signaturePackage, checkPackage): the package's encoded file name and
+-- the dump names.
+beginPackage :: Flags -> String -> Id -> IO (String, DumpNames)
+beginPackage flags name_orig pkgId = do
     -- Set syntax mode for the compilation pipeline (error messages, printing, etc.)
     setSyntax (if hasDotSuf bscSrcSuffix name_orig then CLASSIC else BSV)
 
@@ -410,29 +546,47 @@ compilePackage
     let name = createEncodedFullFilePath name_orig pwd
         dumpnames = (Just (baseName (dropSuf name)), Just (getIdString (unQualId pkgId)), Nothing)
 
+    -- where -trace-intern-table writes its dump (see dumpInternTable)
     writeIORef internDumpFile (Just (putInDir (bdir flags) name "intern.json"))
+    return (name, dumpnames)
 
-    clkTime <- getClockTime
-    epochTime <- getPOSIXTime
+-- The imports of a front-end-only pipeline, read from .bi files, with the
+-- hash of each package's .bi (readImportsBi).  biSeen: as compileParsed.
+frontEndImports :: ErrorHandle -> Flags -> Maybe (IORef (S.Set String)) -> CPackage ->
+                   IO (CPackage, [(Id, String)])
+frontEndImports errh flags biSeen min = do
+    seen0 <- mapM readIORef biSeen
+    (p, _, seen, closure) <- readImportsBi errh flags M.empty seen0 min
+    sequence_ (writeIORef <$> biSeen <*> seen)
+    return (p, closure)
 
-    -- Values needed for the Environment module
-    let env =
-            [("compilerVersion",iMkString $ bscVersionStr True),
-             ("date",                iMkString $ show clkTime),
-             ("epochTime",      iMkLitSize 32 $ floor epochTime),
-             ("buildVersion",   iMkLitSize 32 $ buildnum),
-             ("genPackageName", iMkString $ getIdBaseString pkgId),
-             ("testAssert",        iMkRealBool $ testAssert flags)
-            ]
+-- What ctxReducePackage hands on to the rest of a pipeline
+data CtxReduced = CtxReduced {
+        cr_time :: TimeInfo,
+        cr_impsigs :: [CImportedSignature],
+        cr_funcs :: [FuncInfo],           -- the `noinline' functions
+        cr_gens :: [WrapInfo],            -- the modules GenWrap wrapped
+        cr_symt11 :: SymTab,              -- the table after Deriving
+        cr_mder :: CPackage,              -- the package after Deriving
+        cr_pkgsUsedInTypes :: S.Set Id,
+        cr_mctx :: CPackage,              -- the package after CtxReduce
+        cr_pkgsUsedInCtxReduce :: S.Set Id,
+        cr_signProvisos :: [SignProvisos],
+        cr_symt :: SymTab                 -- the table after CtxReduce
+    }
 
+-- The phases of each pipeline from source (compilePackage,
+-- signaturePackage, checkPackage) from reading the imports, by readImps,
+-- through CtxReduce and the symbol table that follows it.
+ctxReducePackage :: ErrorHandle -> Flags -> TimeInfo -> DumpNames ->
+                    IO (CPackage, r) -> IO (r, CtxReduced)
+ctxReducePackage errh flags tStart dumpnames readImps = do
     start flags DFimports
     -- Read imported signatures
-    (mimp@(CPackage _ _ imps impsigs _ _ _), binmap, hashmap)
-        <- readImports errh flags binmap0 hashmap0 min
+    (mimp@(CPackage _ _ _ impsigs _ _ _), fromRead) <- readImps
     when (hasDump flags DFimports) $
       let impsigs' = [ppReadable s |  (CImpSign _ _ s) <- impsigs]
       in mapM_ (putStr) impsigs'
-         --mapM_ (\ (CImpSign _ _ s) -> putStr (ppReadable s)) impsigs
     t <- dump errh flags tStart DFimports dumpnames mimp
 
     start flags DFopparse
@@ -442,12 +596,12 @@ compilePackage
     -- Generate a global symbol table
     --
     -- Later stages will introduce new symbols that will need to be added
-    -- to the symbol table.  Rather than worry about properly inserting
-    -- the new symbols, we just build the symbol table fresh each time.
-    -- So this is the first of several times that the table is built.
-    -- We can't delay the building of the table until after all symbols
-    -- are known, because these next stages need a table of the current
-    -- symbols.
+    -- to the symbol table.  We can't delay the building of the table
+    -- until after all symbols are known, because these next stages need
+    -- a table of the current symbols.  So this is the first of several
+    -- tables: the ones after GenWrap, Deriving and CtxReduce extend this
+    -- one's base (its imported layer).  -rebuild-symtab builds every
+    -- table fresh, for comparison.
     --
     start flags DFsyminitial
     (symt00, symBase) <-
@@ -474,7 +628,7 @@ compilePackage
     (mwrp, gens) <- genWrap errh flags (genName flags) generating mfwrp symt0
     t <- dump errh flags t DFgenwrap dumpnames mwrp
 
-    -- Rebuild the symbol table because GenWrap added new types
+    -- Extend the symbol table because GenWrap added new types
     -- and typeclass instances for those types
     start flags DFsympostgenwrap
     symt1 <- mkSymTabNext mwrp
@@ -488,7 +642,7 @@ compilePackage
     mder <- derive errh flags symt1 mfawrp
     t <- dump errh flags t DFderiving dumpnames mder
 
-    -- Rebuild the symbol table because Deriving added new instances
+    -- Extend the symbol table because Deriving added new instances
     start flags DFsympostderiving
     symt11 <- mkSymTabNext mder
     t <- dump errh flags t DFsympostderiving dumpnames symt11
@@ -503,12 +657,26 @@ compilePackage
         cCtxReduceIO errh flags symt11 (warnRedundantProvisos flags) mder
     t <- dump errh flags t DFctxreduce dumpnames mctx
 
-    -- Rebuild the symbol table because CtxReduce has possibly changed
-    -- the types of top-level definitions
+    -- Extend the symbol table because CtxReduce has possibly changed
+    -- the types of top-level definitions and the heads and contexts of
+    -- local instances.
     start flags DFsympostctxreduce
     symt <- mkSymTabNext mctx
     t <- dump errh flags t DFsympostctxreduce dumpnames symt
 
+    return (fromRead,
+            CtxReduced { cr_time = t, cr_impsigs = impsigs, cr_funcs = funcs,
+                         cr_gens = gens, cr_symt11 = symt11, cr_mder = mder,
+                         cr_pkgsUsedInTypes = pkgsUsedInTypes, cr_mctx = mctx,
+                         cr_pkgsUsedInCtxReduce = pkgsUsedInCtxReduce,
+                         cr_signProvisos = signProvisos, cr_symt = symt })
+
+-- The typecheck of each checking pipeline (compilePackage, checkPackage,
+-- checkBup), from the package after CtxReduce and the table built from
+-- it: ConvInst, typecheck, then the messages that read the result.
+typecheckPackage :: ErrorHandle -> Flags -> TimeInfo -> DumpNames -> SymTab -> CPackage ->
+                    IO (CPackage, Bool, S.Set Id, TimeInfo)
+typecheckPackage errh flags t dumpnames symt mctx = do
     -- Turn instance declarations into ordinary definitions
     start flags DFconvinst
     let minst = cConvInst errh symt mctx
@@ -523,9 +691,64 @@ compilePackage
         checkRoundTrip "typechecked package" CPackageBin
                        (\(CPackageBin p) -> sortSched p) (sortSched (stripImpSigs mod))
 
+    -- Reads only what the dumps above forced (see PatMatchCheck).
     when (not tcErrors) $ do
       let pm_warns = patternMatchWarnings flags symt minst mod
       when (not (null pm_warns)) $ bsWarning errh pm_warns
+
+    return (mod, tcErrors, pkgsUsedInCode, t)
+
+-------------------------------------------------------------------------
+
+-- The full compile: the phases through CtxReduce (ctxReducePackage),
+-- with the imports read from .bo files, the typecheck
+-- (typecheckPackage), the internal phases, the modules to synthesize,
+-- then the .bo file.  -u hands the maps of the .bo files read so far
+-- from one package to the next.
+compilePackage ::
+    ErrorHandle ->
+    Flags ->
+    TimeInfo ->
+    BinMap HeapData ->
+    HashMap ->
+    String ->
+    CPackage ->
+    IO (Bool, BinMap HeapData, HashMap)
+compilePackage
+    errh
+    flags                -- user switches
+    tStart
+    binmap0
+    hashmap0
+    name_orig -- String --
+    min@(CPackage pkgId _ _ _ _ _ _) = do
+
+    (name, dumpnames) <- beginPackage flags name_orig pkgId
+
+    clkTime <- getClockTime
+    epochTime <- getPOSIXTime
+
+    -- Values needed for the Environment module
+    let env =
+            [("compilerVersion",iMkString $ bscVersionStr True),
+             ("date",                iMkString $ show clkTime),
+             ("epochTime",      iMkLitSize 32 $ floor epochTime),
+             ("buildVersion",   iMkLitSize 32 $ buildnum),
+             ("genPackageName", iMkString $ getIdBaseString pkgId),
+             ("testAssert",        iMkRealBool $ testAssert flags)
+            ]
+
+    ((binmap, hashmap),
+     CtxReduced { cr_time = t, cr_impsigs = impsigs, cr_funcs = funcs, cr_gens = gens,
+                  cr_symt11 = symt11, cr_mder = mder, cr_pkgsUsedInTypes = pkgsUsedInTypes,
+                  cr_mctx = mctx, cr_pkgsUsedInCtxReduce = pkgsUsedInCtxReduce,
+                  cr_signProvisos = signProvisos, cr_symt = symt })
+        <- ctxReducePackage errh flags tStart dumpnames $ do
+               (p, bm, hm) <- readImports errh flags binmap0 hashmap0 min
+               return (p, (bm, hm))
+
+    (mod, tcErrors, pkgsUsedInCode, t) <-
+        typecheckPackage errh flags t dumpnames symt mctx
 
     when (warnRedundantProvisos flags && not tcErrors) $
       checkRedundantProvisos errh symt11 mder signProvisos mod
@@ -791,22 +1014,10 @@ compilePackage
     t <- getNow
     -- Finally, generate interface files
     start flags DFwriteBin
-
-    -- Class defaults remain source templates in signatures, so record their
-    -- defining scope once before generating either view of the signature.
-    let msign = qualifyClassDefaults errh symt mctx
-    -- Generate the user-visible type signature
-    (bi_sig, pkgsUsedInExports) <- genUserSign errh symt msign
-    -- Generate a type signature where everything is visible
-    bo_sig <- genEverythingSign errh symt msign
-
-    -- Check for unused imports by combining packages from all three sources
-    let (CPackage _ _ imports _ _ _ _) = mctx
-        allUsedPkgs = S.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
-        importedPkgs = [i | (CImpId _ i) <- imports]
-        unusedPkgs = filter (\pkg -> not (S.member pkg allUsedPkgs)) importedPkgs
-        unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg)) | pkg <- unusedPkgs]
-    when (not (null unusedWarns)) $ bsWarning errh unusedWarns
+    (m_bi_sig, bo_sig) <-
+        genSignatures errh symt mctx
+                      [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode] Nothing
+    let bi_sig = fromJustOrErr "compilePackage: no user signature" m_bi_sig
 
     -- Generate binary version of the internal tree .bo file
     let bin_filename = putInDir (bdir flags) name binSuffix
@@ -826,6 +1037,172 @@ compilePackage
 
     return (success && not tcErrors, binmap, hashmap)
 
+
+-- Warn about the imports that no stage of the compile used
+warnUnusedImports :: ErrorHandle -> CPackage -> [S.Set Id] -> IO ()
+warnUnusedImports errh (CPackage _ _ imports _ _ _ _) usedSets = do
+    let allUsedPkgs = S.unions usedSets
+        importedPkgs = [i | (CImpId _ i) <- imports]
+        unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg))
+                      | pkg <- importedPkgs, not (S.member pkg allUsedPkgs)]
+    when (not (null unusedWarns)) $ bsWarning errh unusedWarns
+
+-- The package's signatures as its .bo stores them, with genUserSign's
+-- and genEverythingSign's messages, then the warning for the imports
+-- that no stage used: usedSets, and the packages that the exports use.
+-- Checking a .bup, those come from the .bup (bupUsedExports) and there
+-- is no user-visible signature.  Shared by the full compile and writeCheck.
+genSignatures :: ErrorHandle -> SymTab -> CPackage -> [S.Set Id] ->
+                 Maybe (S.Set Id) -> IO (Maybe CSignature, CSignature)
+genSignatures errh symt mctx usedSets bupUsedExports = do
+    -- Class defaults remain source templates in signatures, so record their
+    -- defining scope once before generating either view of the signature.
+    let msign = qualifyClassDefaults errh symt mctx
+    -- Generate the user-visible type signature
+    (m_bi_sig, pkgsUsedInExports) <-
+        case bupUsedExports of
+          Nothing -> do (bi_sig, used) <- genUserSign errh symt msign
+                        return (Just bi_sig, used)
+          Just used -> return (Nothing, used)
+    -- Generate a type signature where everything is visible
+    bo_sig <- genEverythingSign errh symt msign
+    when checkBinRoundTrip $ do
+        mapM_ (checkRoundTrip "user signature" id id) m_bi_sig
+        checkRoundTrip "full signature" id id bo_sig
+
+    -- Check for unused imports by combining packages from all four sources
+    warnUnusedImports errh mctx (usedSets ++ [pkgsUsedInExports])
+    return (m_bi_sig, bo_sig)
+
+-- -signature-only: write the package's .bi.  genUserSign reads only the
+-- post-ctxreduce package and the symbol table built from it, so this is
+-- the signature that the full compile stores in the .bo.
+writeSignature :: ErrorHandle -> Flags -> TimeInfo -> DumpNames -> String ->
+                  [(Id, String)] -> SymTab -> CPackage ->
+                  IO (Bool, S.Set Id, TimeInfo)
+writeSignature errh flags t dumpnames name closure symt
+               mctx@(CPackage pkgId _ _ _ _ ds _) = do
+    -- typecheck (not reached here) rejects a top-level definition without
+    -- a type signature, which the signature would silently leave out
+    let unsigned = [ (getIdPosition i, ENoTopTypeSign (pfpString i))
+                   | CValue i _ <- ds ]
+    ok <- if null unsigned
+          then return True
+          else if enablePoisonPills flags
+               then bsErrorNoExit errh unsigned >> return False
+               else bsError errh unsigned
+    start flags DFwriteSig
+    let msign = qualifyClassDefaults errh symt mctx
+    (bi_sig, pkgsUsedInExports) <- genUserSign errh symt msign
+    when checkBinRoundTrip $ checkRoundTrip "user signature" id id bi_sig
+    let bi_filename = putInDir (bdir flags) name biSuffix
+    genBiFile errh bi_filename (BiFile pkgId closure bi_sig)
+    when (verbose flags) $
+         putStrLnF ("Interface file created: " ++ getRelativeFilePath bi_filename)
+    t <- dumpStr errh flags t DFwriteSig dumpnames bi_filename
+    return (ok, pkgsUsedInExports, t)
+
+-- -signature-only: also write the package's .bup, the input of
+-- -check-only X.bup (see GenBup).  closure is every imported package with
+-- the hash of the .bi read for it.
+writeBup :: ErrorHandle -> Flags -> TimeInfo -> DumpNames -> String -> [(Id, String)] ->
+            CPackage -> (S.Set Id, S.Set Id, S.Set Id) -> IO ()
+writeBup errh flags t dumpnames name closure mctx usedSets = do
+    start flags DFwriteUntyped
+    let bup_filename = putInDir (bdir flags) name bupSuffix
+        inp = BupInput { bupi_source = name
+                       , bupi_flags = flagsFingerprint flags
+                       , bupi_package = mctx
+                       , bupi_bi_hashes = M.fromList [ (getIdString i, h) | (i, h) <- closure ]
+                       , bupi_used = usedSets
+                       , bupi_full = "-bup-full-imports" `elem` progArgs
+                       , bupi_keep_pos = "-bup-keep-positions" `elem` progArgs }
+    (stats, hash) <- genBupFile errh bup_filename inp
+    when traceBup $ hPutStrLn stderr (showBupStats bup_filename hash stats)
+    when (verbose flags) $
+         putStrLnF ("Untyped package file created: " ++ getRelativeFilePath bup_filename)
+    _ <- dumpStr errh flags t DFwriteUntyped dumpnames bup_filename
+    return ()
+
+-- Hidden flag -trace-bup: one line per .bup written or read
+traceBup :: Bool
+traceBup = "-trace-bup" `elem` progArgs
+
+showBupStats :: String -> String -> BupStats -> String
+showBupStats fn hash st =
+    let (kept, entries) = bups_entries st
+        (bl, bsig) = bups_bytes st
+    in  unwords [ "bup write", getRelativeFilePath fn, "hash", hash
+                , "entries", show kept ++ "/" ++ show entries
+                , "lib", show (fst (bups_lib st)) ++ "/" ++ show (snd (bups_lib st))
+                , "names", show (bups_names st)
+                , "strings", show (bups_strings st)
+                , "bytes", show bl ++ "+" ++ show bsig
+                , "stripped-files", show (bups_stripped st) ]
+
+-- A hash of the flags whose values can change what -signature-only or
+-- -check-only computes: every field of print-flags-raw except the mode,
+-- the output and search locations, the installation directory, the
+-- verbosity and the dumps; -stdlib-names, which print-flags-raw leaves
+-- out; and the hidden flags that are looked up in the arguments
+-- (FlagsDecode.traceflags, with BSC_OPTIONS), except the -trace-* ones.
+-- showCodeGen, which only prints and which -u sets for every package it
+-- compiles, is hashed as False.  The .bup records it, and -check-only of
+-- a .bup requires its own to match.
+flagsFingerprint :: Flags -> String
+flagsFingerprint flags =
+    let excluded = [ "frontEndMode", "rebuildSymTab"
+                   , "bdir", "vdir", "cdir", "fdir", "infoDir", "oFile"
+                   , "ifcPath", "ifcPathRaw", "vPath", "vPathRaw", "cIncPath", "cLibPath"
+                   , "bluespecDir", "verbose", "extraVerbose", "showUpds"
+                   , "dumpAll", "dumps", "kill"
+                   , "printFlags", "printFlagsHidden", "printFlagsRaw" ]
+        keep l = case words l of
+                   (k : "=" : _) -> k `notElem` excluded
+                   _ -> True
+        hidden = S.toAscList (S.fromList [ a | a@('-' : f) <- progArgs, f `elem` traceflags
+                                             , not ("trace-" `isPrefixOf` f) ])
+        txt = unlines (filter keep (lines (showFlagsRaw flags { showCodeGen = False })) ++
+                       ["\tstdlibNames = " ++ show (stdlibNames flags)] ++ hidden)
+    in  showHash (foldl' nextHashByte hashInit
+                         (B.unpack (TE.encodeUtf8 (T.pack txt))))
+
+-- -check-only: write the package's .btp after typecheck.
+writeCheck :: ErrorHandle -> Flags -> TimeInfo -> DumpNames -> String ->
+              [(Id, String)] -> SymTab -> CPackage ->
+              CPackage -> Bool -> [S.Set Id] -> Maybe (S.Set Id) -> IO Bool
+writeCheck errh flags t dumpnames name closure symt
+           mctx@(CPackage pkgId _ _ _ _ _ _) tcmod tcErrors usedSets
+           bupUsedExports = do
+    _ <- checkForeign errh tcmod
+    -- iConvPackage reports EMutualRecursionComplicatedClause where its
+    -- result is forced; convert the package, as the full compile does,
+    -- only when that can happen
+    let simp = simplify flags tcmod
+    when (mayHaveComplicatedLetrecCycle simp) $ do
+        let (lifted, lifted_defs) =
+                if liftDicts flags then liftDictsPkg errh flags symt simp
+                else (simp, [])
+        imod <- iConvPackage errh flags symt lifted_defs lifted
+        _ <- CE.evaluate (rnf lifted)
+        _ <- CE.evaluate (rnf (imod :: IPackage HeapData))
+        return ()
+    start flags DFwriteTyped
+    (m_bi_sig, bo_sig) <- genSignatures errh symt mctx usedSets bupUsedExports
+    forceSignatures (fromMaybe (CSignature pkgId [] [] []) m_bi_sig) bo_sig
+    diags <- takeDiagnostics errh
+    let ok = not tcErrors
+        btpOf (p, ds) = BtpFile pkgId closure ok ds (CPackageBin p)
+        unBtp c = let CPackageBin p = btp_package c in (sortSched p, btp_diagnostics c)
+        contents = (stripImpSigs tcmod, diags)
+    when checkBinRoundTrip $
+        checkRoundTrip "typed package file" btpOf unBtp (sortSched (fst contents), diags)
+    let btp_filename = putInDir (bdir flags) name btpSuffix
+    genBtpFile errh btp_filename (btpOf contents)
+    when (verbose flags) $
+         putStrLnF ("Typed package file created: " ++ getRelativeFilePath btp_filename)
+    _ <- dumpStr errh flags t DFwriteTyped dumpnames btp_filename
+    return ok
 
 genModule ::
     ErrorHandle ->

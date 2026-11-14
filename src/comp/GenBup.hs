@@ -1,0 +1,476 @@
+{-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
+module GenBup(BupFile(..), BupInput(..), BupStats(..),
+              genBupFile, readBupFile, readBupLibraries) where
+
+-- The .bup file: the untyped package that -signature-only hands to
+-- -check-only.  It holds the package after context reduction (mctx), its
+-- imported MatX signatures pruned to what a lookup from the package can
+-- reach, a reference to each library signature, and the values that the
+-- check cannot compute without the steps before context reduction.
+-- -check-only X.bup reads nothing else but the referenced library .bi
+-- files of the installation (see bsc.hs, checkBup).  It carries no hashes
+-- of the MatX import closure, so it changes only when what the check
+-- reads changes.  Library signatures are whole (the check inserts
+-- references to library names) and never change under a MatX edit.
+--
+-- The file is the tag and two format 2 containers, the first preceded by
+-- its length (u64, little-endian):
+--   1. BupLocal: mctx (imported signatures as references), the hash of
+--      each library's .bi, and the rest;
+--   2. the imported MatX signatures, pruned, in closure order.
+-- As in every other format, a container's string table holds only the
+-- strings its contents use.  The check interns those as it reads the
+-- file and then the library .bi files, and any other string as it makes
+-- it, so its intern order is a function of the .bup and the
+-- installation, not the writer's (see bsc.hs, checkBup).
+-- Imported positions are stored with only their file (see genBupFile),
+-- except in imported class and field default bodies, which the check
+-- typechecks in the package's scope.
+
+import Control.Monad(when, zipWithM)
+import Control.Exception(evaluate)
+import Data.Maybe(isNothing, fromMaybe)
+import Data.Bits(shiftL)
+import Data.List(sort)
+import qualified Data.List as L
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Builder as BB
+import qualified Data.IntMap.Strict as IM
+import qualified Data.IntSet as IS
+import qualified Data.Map as M
+import qualified Data.Set as S
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import Data.Word(Word64)
+
+import FStringCompat(FString, fstringId)
+import Position(Position(..), noPosition)
+import Id
+import CType
+import CSyntax
+import Pragma(Pragma(..))
+import PFPrint(pfpString)
+import Error(ErrMsg(..), ErrorHandle, bsError)
+import ErrorUtil(internalError)
+import BinData
+import GenBin(CPackageBin(..))
+import GenBi(BiFile(..), readBiFile, readBiFileMaybe)
+import FileNameUtil(biSuffix)
+import FileIOUtil(writeFileBuilderCatch, existsFilePath, readBinFoundFile)
+import Util(hashInit, nextHashByte, showHash)
+import PreStrings(fsPolyWrapField, fs_read, fs_write, fs_if,
+                  fsPrimSelectFn, fsPrimUpdateFn, fsPrimWriteFn)
+
+-- .bup file tag -- change this whenever the .bup format changes
+header :: [Byte]
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bup-20261111-1"
+
+headerBS :: B.ByteString
+headerBS = B.pack header
+
+-- The package and the values that cross the handoff, as read back
+data BupFile = BupFile
+    { bup_source       :: String   -- the source file, as the writer encoded it
+    , bup_flags        :: String   -- fingerprint of the semantic flags
+      -- mctx, with the pruned signatures (file name "", no import list);
+      -- a library's has no entries until readBupLibraries reads them
+    , bup_package      :: CPackage
+      -- per signature: Just the hash of the library .bi it refers to
+    , bup_libs         :: [Maybe String]
+    , bup_used_types   :: S.Set Id -- packages used in types (before ctxreduce)
+    , bup_used_ctx     :: S.Set Id -- packages used by context reduction
+    , bup_used_exports :: S.Set Id -- packages used by the export list
+    }
+
+-- What the writer is given
+data BupInput = BupInput
+    { bupi_source    :: String
+    , bupi_flags     :: String
+    , bupi_package   :: CPackage  -- mctx, with the full imported signatures
+    , bupi_bi_hashes :: M.Map String String  -- closure package -> hash of its .bi
+    , bupi_used      :: (S.Set Id, S.Set Id, S.Set Id)  -- types, ctxreduce, exports
+    , bupi_full      :: Bool  -- keep every imported signature whole
+    , bupi_keep_pos  :: Bool  -- keep imported positions
+    }
+
+data BupStats = BupStats
+    { bups_entries    :: (Int, Int)  -- imported non-library entries: kept, all
+    , bups_lib        :: (Int, Int)  -- library signatures, their entries
+    , bups_names      :: Int         -- names in the keep set
+    , bups_strings    :: Int         -- in the two containers' string tables
+    , bups_bytes      :: (Int, Int)  -- local part, signatures
+    , bups_stripped   :: Int         -- files whose positions were reduced
+    }
+
+-- The local part of the file
+data BupLocal = BupLocal String String CPackageBin [Maybe String]
+                         [Id] [Id] [Id]
+
+instance Bin BupLocal where
+    writeBytes (BupLocal src fl pkg libs ut uc ue) = section "BupLocal" $ do
+        toBin src; toBin fl; toBin pkg; toBin libs
+        toBin ut; toBin uc; toBin ue
+    readBytes = do src <- fromBin; fl <- fromBin; pkg <- fromBin; libs <- fromBin
+                   ut <- fromBin; uc <- fromBin; ue <- fromBin
+                   return (BupLocal src fl pkg libs ut uc ue)
+
+-- An imported signature, written as Bin CSignature writes it, except
+-- that default bodies keep their positions
+newtype BupSig = BupSig CSignature
+
+instance Bin BupSig where
+    writeBytes (BupSig (CSignature n is fs ds)) =
+        do toBin n; toBin is; toBin fs; toBin (map BupDefn ds)
+    readBytes = BupSig <$> fromBin
+
+newtype BupDefn = BupDefn CDefn
+
+instance Bin BupDefn where
+    writeBytes (BupDefn (Cstruct vis st ik is fs _)) =
+        do putI 2; toBin vis; toBin st; toBin ik; toBin is; toBin (map BupField fs)
+    writeBytes (BupDefn (Cclass incoh ps ik is deps ats fs)) =
+        do putI 3; toBin incoh; toBin ps; toBin ik; toBin is; toBin deps; toBin ats
+           toBin (map BupField fs)
+    writeBytes (BupDefn d) = writeBytes d
+    readBytes = BupDefn <$> fromBin
+
+newtype BupField = BupField CField
+
+instance Bin BupField where
+    writeBytes (BupField (CField n ps cqt def_cs mot)) =
+        do toBin n; toBin ps; toBin cqt; keepPositions (toBin def_cs); toBin mot
+    readBytes = BupField <$> fromBin
+
+-- -------------------------
+-- Writing
+
+genBupFile :: ErrorHandle -> String -> BupInput -> IO (BupStats, String)
+genBupFile errh fn inp = do
+    let CPackage pid exps imps sigs fixs ds incs = bupi_package inp
+        isLib = [ isLibrary sig | CImpSign _ _ sig <- sigs ]
+        biHash n = case M.lookup (getIdString n) (bupi_bi_hashes inp) of
+                     Just h -> h
+                     Nothing -> internalError ("genBupFile: no .bi hash: " ++ getIdString n)
+        libs = [ if l then Just (biHash n) else Nothing
+               | (l, CImpSign _ _ (CSignature n _ _ _)) <- zip isLib sigs ]
+        -- the files of the closure's non-library packages: a position in
+        -- one of them is an imported definition's (a package's own
+        -- positions, including its include files, are kept)
+        impFiles = IS.fromList [ fstringId (pos_file (getIdPosition n))
+                               | (False, CImpSign _ _ (CSignature n _ _ _)) <- zip isLib sigs ]
+        sel p = not (pos_is_stdlib p) && pos_line p >= 0 &&
+                IS.member (fstringId (pos_file p)) impFiles
+        msel = if bupi_keep_pos inp then Nothing else Just sel
+        (ut, uc, ue) = bupi_used inp
+        local = BupLocal (bupi_source inp) (bupi_flags inp)
+                         (CPackageBin (CPackage pid exps imps sigs fixs ds incs))
+                         libs (sortIds ut) (sortIds uc) (sortIds ue)
+    (bsL, strsL) <- encodeV2Strip msel local
+    let exportAll = S.fromList [ getIdString p | Left es <- [exps], CExpPkg p <- es
+                                               , p /= pid ]
+    (sigs', stats) <-
+        if bupi_full inp
+        then return ([ wholeSig s | (False, s) <- zip isLib sigs ], keepAllStats isLib sigs)
+        else pruneSigs strsL exportAll (zip isLib sigs)
+    (bsS, strsS) <- encodeV2Strip msel [ BupSig s | s <- sigs' ]
+    let lenLE b = BB.toLazyByteString (BB.word64LE (fromIntegral (BL.length b)))
+        body = [lenLE bsL, bsL, bsS]
+        hash = showHash (L.foldl' (BL.foldl' nextHashByte) hashInit body)
+    writeFileBuilderCatch errh fn (BB.byteString headerBS <> foldMap BB.lazyByteString body)
+    return (stats { bups_strings = length strsL + length strsS
+                  , bups_bytes = (bl bsL, bl bsS)
+                  , bups_stripped = if bupi_keep_pos inp then 0 else IS.size impFiles },
+            hash)
+  where wholeSig (CImpSign _ _ (CSignature n _ fs ds)) = CSignature n [] fs ds
+        bl = fromIntegral . BL.length
+
+-- A library's .bi is compiled with -stdlib-names, which marks every
+-- position in it, the package name's included (the file it was read from
+-- is no guide: a search path can reach the install by another spelling)
+isLibrary :: CSignature -> Bool
+isLibrary (CSignature n _ _ _) = pos_is_stdlib (getIdPosition n)
+
+sortIds :: S.Set Id -> [Id]
+sortIds s = map snd (sort [ (getIdString i, i) | i <- S.toList s ])
+
+keepAllStats :: [Bool] -> [CImportedSignature] -> BupStats
+keepAllStats libs sigs =
+    let n lib = sum [ length ds | (l, CImpSign _ _ (CSignature _ _ _ ds)) <- zip libs sigs
+                                , l == lib ]
+    in  BupStats (n False, n False) (length (filter id libs), n True) 0 0 (0, 0) 0
+
+-- -------------------------
+-- The keep rule
+--
+-- Deliberately loose (resolving names exactly needs the typechecker).  N
+-- is a set of base names, seeded with every string of the local part
+-- (every Id of mctx, generated names included, and the used sets);
+-- with the Prelude names the typechecker refers to unqualified
+-- (val, the Generic poly-wrap field; _read and _write, for Cwrite; _if,
+-- primSelectFn, primWriteFn and primUpdateFn, for its desugarings in
+-- TCheck), which resolve against every unqualified import; with every
+-- name a library binds in the type namespace (foldTypeBinders), which
+-- TIMonad.findFields tests by bare name; and with every name that a kept
+-- entry binds or mentions.  Library signatures are referred to whole and
+-- never walked, so library names reach N only by these seeds.  Kept:
+-- every instance; every entry of a package re-exported whole (export
+-- Q::*); every entry binding a ready name (an RDY_ Id, Id.isRdyId); and
+-- every entry that binds a name in N, in any package and namespace.
+-- Fixities and pragmas are kept when their name is in N.  Each closure
+-- package keeps its signature, in order, even when nothing in it is kept.
+-- Returns the non-library signatures, pruned.
+
+pruneSigs :: [FString] -> S.Set String -> [(Bool, CImportedSignature)] ->
+             IO ([CSignature], BupStats)
+pruneSigs seeds exportAll lsigs = do
+    let -- the non-library signatures' entries, numbered in order, with
+        -- whether their package is re-exported whole
+        pkgs = [ (getIdString n `S.member` exportAll, ds)
+               | (False, CImpSign _ _ (CSignature n _ _ ds)) <- lsigs ]
+        offsets = scanl (+) 0 (map (length . snd) pkgs)
+        nEntries = last offsets
+        libDefs = [ d | (True, CImpSign _ _ (CSignature _ _ _ ds)) <- lsigs, d <- ds ]
+    -- every string of the entries' default bodies (rare in signatures)
+    bodies <- fmap IM.fromList $ sequence
+                [ do (_, strs) <- encodeV2Strip Nothing defs
+                     return (e, strs)
+                | (e0, (_, ds)) <- zip offsets pkgs, (e, d) <- zip [e0 ..] ds
+                , let defs = defaultBodies d, not (null defs) ]
+    let -- N is the least fixpoint of passes that walk every entry kept by N
+        -- so far, adding the names it binds and mentions.  A pass takes the
+        -- packages and their entries last first, since an entry mostly
+        -- mentions what its imports and earlier entries bind, and skips an
+        -- entry kept by N as the previous pass started (walked by then).
+        revPkgs = reverse [ (e0 + length ds - 1, whole, reverse ds)
+                          | (e0, (whole, ds)) <- zip offsets pkgs ]
+        pass prev ns0 = L.foldl' (\ns (eLast, whole, rds) -> passPkg prev whole eLast ns rds) ns0 revPkgs
+        passPkg _ !_ !_ !ns [] = ns
+        passPkg prev whole e ns (d : ds) =
+            let walked = maybe False (\p -> keptBy p whole d) prev
+            in  passPkg prev whole (e - 1)
+                        (if keptBy ns whole d && not walked then walk e d ns else ns) ds
+        walk e d ns = L.foldl' add (foldDefnNames add ns d) (IM.findWithDefault [] e bodies)
+        add ns x = let i = fstringId x
+                   in  if IS.member i ns then ns else IS.insert i ns
+        -- every instance, every entry of a package re-exported whole, every
+        -- entry binding a ready name, and every entry binding a name in N
+        keptBy ns whole d =
+            whole || case firstBinder d of
+                       Nothing -> isInstance d
+                       Just _ -> foldDefnBinders (\r b -> r || isRdyId b || IS.member (nameId b) ns) False d
+        fixpoint prev ns = let ns' = pass prev ns
+                           in  if IS.size ns' == IS.size ns then ns else fixpoint (Just ns) ns'
+        nFinal = fixpoint Nothing (L.foldl' (foldTypeBinders (\s i -> add s (getIdBase i)))
+                                          (L.foldl' add IS.empty (prelude ++ seeds)) libDefs)
+        prelude = [fsPolyWrapField, fs_read, fs_write, fs_if, fsPrimSelectFn, fsPrimUpdateFn, fsPrimWriteFn]
+        inN i = IS.member (nameId i) nFinal
+        -- an entry kept by binding a name has every name it binds in N
+        keepEntry whole d = case firstBinder d of
+                              Just b -> inN b
+                              Nothing -> whole || isInstance d
+        keepFix (CInfix _ i) = inN i
+        keepFix (CInfixl _ i) = inN i
+        keepFix (CInfixr _ i) = inN i
+        keepPragma (CPragma (Pproperties i _)) = inN i
+        keepPragma (CPragma (Pnoinline is)) = any inN is
+        keepPragma _ = False
+        prune (CImpSign _ _ (CSignature n _ fs ds)) =
+            let whole = getIdString n `S.member` exportAll
+            in  CSignature n [] (filter keepFix fs)
+                    [ d | d <- ds, keepEntry whole d || (isPragma d && keepPragma d) ]
+        isPragma (CPragma _) = True
+        isPragma _ = False
+        sigs' = [ prune s | (False, s) <- lsigs ]
+        nKept = length [ () | (whole, ds) <- pkgs, d <- ds, keepEntry whole d ]
+    return (sigs',
+            BupStats (nKept, nEntries) (length (filter fst lsigs), length libDefs)
+                     (IS.size nFinal) 0 (0, 0) 0)
+  where isInstance (CIinstance {}) = True
+        isInstance _ = False
+
+nameId :: Id -> Int
+nameId = fstringId . getIdBase
+
+-- The default bodies of a struct's or class's fields
+defaultBodies :: CDefn -> [CClause]
+defaultBodies (Cstruct _ _ _ _ fs _) = concatMap cf_default fs
+defaultBodies (Cclass _ _ _ _ _ _ fs) = concatMap cf_default fs
+defaultBodies _ = []
+
+-- A strict left fold over the Ids an entry binds, in order (F1 of the keep
+-- rule matches them by base name)
+{-# INLINE foldDefnBinders #-}
+foldDefnBinders :: (a -> Id -> a) -> a -> CDefn -> a
+foldDefnBinders f z d = case d of
+    Ctype ik _ _ -> f z (iKName ik)
+    CItype ik _ _ -> f z (iKName ik)
+    CprimType ik -> f z (iKName ik)
+    Cdata { cd_name = ik, cd_original_summands = ocs, cd_internal_summands = ics } ->
+        let z1 = L.foldl' (\a c -> fs a (cos_names c)) (f z (iKName ik)) ocs
+            z2 = L.foldl' (\a c -> maybe a (fs a) (cos_field_names c)) z1 ocs
+        in  L.foldl' (\a c -> fs a (cis_names c)) z2 ics
+    Cstruct _ _ ik _ flds _ -> L.foldl' (\a fl -> f a (cf_name fl)) (f z (iKName ik)) flds
+    Cclass _ _ ik _ _ ats flds ->
+        L.foldl' (\a fl -> f a (cf_name fl)) (L.foldl' (\a at -> f a (ca_name at)) (f z (iKName ik)) ats) flds
+    CIclass _ _ ik _ _ ats ms _ -> fs (L.foldl' (\a at -> f a (ca_name at)) (f z (iKName ik)) ats) ms
+    CIValueSign i _ -> f z i
+    Cforeign { cforg_name = i } -> f z i
+    Cprimitive i _ -> f z i
+    _ -> z
+  where fs = L.foldl' f
+
+-- A strict left fold over the Ids an entry binds in the type namespace:
+-- a type, synonym or class, and a class's associated type families.
+-- TIMonad.findFields takes a struct type as imported when its bare name
+-- finds any type in scope, so a MatX type with a library type's name stays
+-- even when nothing the package reaches names it.
+{-# INLINE foldTypeBinders #-}
+foldTypeBinders :: (a -> Id -> a) -> a -> CDefn -> a
+foldTypeBinders f z d = case d of
+    Ctype ik _ _ -> f z (iKName ik)
+    CItype ik _ _ -> f z (iKName ik)
+    CprimType ik -> f z (iKName ik)
+    Cdata { cd_name = ik } -> f z (iKName ik)
+    Cstruct _ _ ik _ _ _ -> f z (iKName ik)
+    Cclass _ _ ik _ _ ats _ -> L.foldl' (\a at -> f a (ca_name at)) (f z (iKName ik)) ats
+    CIclass _ _ ik _ _ ats _ _ -> L.foldl' (\a at -> f a (ca_name at)) (f z (iKName ik)) ats
+    _ -> z
+
+-- The first Id that foldDefnBinders gives
+{-# INLINE firstBinder #-}
+firstBinder :: CDefn -> Maybe Id
+firstBinder d = case d of
+    Ctype ik _ _ -> Just (iKName ik)
+    CItype ik _ _ -> Just (iKName ik)
+    CprimType ik -> Just (iKName ik)
+    Cdata { cd_name = ik } -> Just (iKName ik)
+    Cstruct _ _ ik _ _ _ -> Just (iKName ik)
+    Cclass _ _ ik _ _ _ _ -> Just (iKName ik)
+    CIclass _ _ ik _ _ _ _ _ -> Just (iKName ik)
+    CIValueSign i _ -> Just i
+    Cforeign { cforg_name = i } -> Just i
+    Cprimitive i _ -> Just i
+    _ -> Nothing
+
+-- A strict left fold over the base names an entry binds or mentions,
+-- except in default bodies (see pruneSigs).  Type variables and the sorts
+-- carried by TyCons are left out: a tyvar binds nothing, and a TyCon's
+-- sort comes from the entry that binds its name, which its name keeps.
+-- Inlined so that f is known at each use: otherwise every name is passed
+-- as a thunk and every step reboxes the accumulator.
+{-# INLINE foldDefnNames #-}
+foldDefnNames :: (a -> FString -> a) -> a -> CDefn -> a
+foldDefnNames f z0 d = defn (foldDefnBinders (\z i -> f z (getIdBase i)) z0 d)
+  where
+    defn z = case d of
+      Ctype _ _ t -> ty z t
+      CItype _ _ _ -> z
+      CprimType _ -> z
+      Cdata { cd_original_summands = ocs, cd_internal_summands = ics, cd_derivings = ders } ->
+          L.foldl' der (L.foldl' (\z' -> ty z' . cis_arg_type) (L.foldl' (L.foldl' qt) z (map cos_arg_types ocs)) ics) ders
+      Cstruct _ st _ _ fs ders -> L.foldl' der (L.foldl' field (sub z st) fs) ders
+      Cclass _ ps _ _ _ _ fs -> L.foldl' field (L.foldl' prd z ps) fs
+      CIclass _ ps _ _ _ _ _ _ -> L.foldl' prd z ps
+      CIValueSign _ t -> qt z t
+      Cforeign { cforg_type = t } -> qt z t
+      Cprimitive _ t -> qt z t
+      CIinstance i t -> qt (idf z i) t
+      CPragma (Pproperties i _) -> idf z i
+      CPragma (Pnoinline is) -> L.foldl' idf z is
+      Cinstance t _ -> qt z t
+      CValue i _ -> idf z i
+      CValueSign (CDef i t _) -> qt (idf z i) t
+      CValueSign (CDefT i _ t _) -> qt (idf z i) t
+    idf !z i = f z (getIdBase i)
+    der z (CStock tcs) = L.foldl' idf z (map typeclassId tcs)
+    der z (CVia tc i) = idf (idf z (typeclassId tc)) i
+    sub z (SDataCon i _) = idf z i
+    sub z (SPolyWrap i mc g) = maybe id (flip idf) mc (idf (idf z i) g)
+    sub z _ = z
+    field z (CField n _ t _ mot) = maybe id (flip ty) mot (qt (idf z n) t)
+    qt z (CQType ps t) = ty (L.foldl' prd z ps) t
+    prd z (CPred tc ts) = L.foldl' ty (idf z (typeclassId tc)) ts
+    ty z (TCon (TyCon i _ _)) = idf z i
+    ty z (TCon _) = z
+    ty z (TAp a b) = ty (ty z a) b
+    ty z (TVar _) = z
+    ty z (TGen _ _) = z
+    ty z (TDefMonad _) = z
+
+-- -------------------------
+-- Reading
+
+-- Also returns the hash of every byte after the tag.  Each container's
+-- string table is interned when its root is decoded, the local part's
+-- first; its other values are decoded on demand.  Library signatures are
+-- left as references (see readBupLibraries).
+readBupFile :: ErrorHandle -> String -> B.ByteString -> IO (BupFile, String)
+readBupFile errh nm s = do
+    let hlen = B.length headerBS
+        bad = bsError errh [(noPosition, EBinFileVerMismatch nm)]
+    when (B.take hlen s /= headerBS) bad
+    let body = B.drop hlen s
+        (bsL, bsS) = splitLen body
+        hash = showHash (B.foldl' nextHashByte hashInit body)
+    when (B.length body < 8) bad
+    BupLocal src fl (CPackageBin pkg) libs ut uc ue <- evaluate (decode bsL)
+    sigs <- evaluate (decode bsS :: [CSignature])
+    let CPackage pid exps imps refs fixs ds incs = pkg
+        merge (CImpSign _ q sig : rs) (Just _ : ls) ss = CImpSign "" q sig : merge rs ls ss
+        merge (CImpSign _ q _ : rs) (Nothing : ls) (sig : ss) = CImpSign "" q sig : merge rs ls ss
+        merge [] [] [] = []
+        merge _ _ _ = internalError "readBupFile: signatures"
+    when (length libs /= length refs ||
+          length sigs /= length (filter isNothing libs)) $ bad
+    return (BupFile { bup_source = src
+                    , bup_flags = fl
+                    , bup_package = CPackage pid exps imps (merge refs libs sigs) fixs ds incs
+                    , bup_libs = libs
+                    , bup_used_types = S.fromList ut
+                    , bup_used_ctx = S.fromList uc
+                    , bup_used_exports = S.fromList ue },
+            hash)
+  where splitLen b = let n = fromIntegral (readW64 (B.take 8 b))
+                     in  B.splitAt n (B.drop 8 b)
+        readW64 :: B.ByteString -> Word64
+        readW64 b = foldr (\x acc -> (acc `shiftL` 8) + fromIntegral x) 0 (B.unpack b)
+
+-- Fill in each library signature of a .bup that readBupFile read, from
+-- the library's .bi on the search path (verbose: each copy read is
+-- reported), which must be the file -signature-only read: the first
+-- copy with the recorded hash, so other copies are no reason for a
+-- warning.  The .bi is decoded as lazily as an import is (its string
+-- table is interned when its package name is checked), and a copy passed
+-- over is not decoded.
+readBupLibraries :: ErrorHandle -> Bool -> [String] -> BupFile -> IO BupFile
+readBupLibraries errh verb path bup = do
+    let CPackage pid exps imps sigs fixs ds incs = bup_package bup
+        fill Nothing s = return s
+        fill (Just h) (CImpSign f q (CSignature n _ _ _)) = do
+            let biname = getIdString n ++ "." ++ biSuffix
+                search first [] = return (Left first)
+                search first (c:cs) = do
+                    mfile <- readBinFoundFile errh noPosition verb c
+                    case mfile of
+                      Nothing -> search first cs
+                      Just file
+                        | Just (bi, hash) <- readBiFileMaybe file, hash == h
+                        -> return (Right (bi, c))
+                        | otherwise -> search (Just (fromMaybe (file, c) first)) cs
+            found <- existsFilePath biname path >>= search Nothing
+            (bi, name) <- case found of
+                Right bc -> return bc
+                Left Nothing ->
+                    bsError errh [(noPosition, EMissingIfcFile biname (pfpString n))]
+                -- the first copy read is reported: not a .bi, or not the one
+                Left (Just (file, name)) -> do
+                    _ <- readBiFile errh name file
+                    bsError errh [(noPosition, EBinFileSignatureMismatch biname (pfpString pid))]
+            when (bi_name bi /= n) $
+                bsError errh [(noPosition, EBinFilePkgNameMismatch name
+                                               (pfpString n) (pfpString (bi_name bi)))]
+            let CSignature n' _ fs es = bi_sig bi
+            return (CImpSign f q (CSignature n' [] fs es))
+    sigs' <- zipWithM fill (bup_libs bup) sigs
+    return (bup { bup_package = CPackage pid exps imps sigs' fixs ds incs })
