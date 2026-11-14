@@ -92,6 +92,7 @@ import SymTab
 import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
                   getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck)
+import PatMatchCheck(patternMatchWarnings)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import CQualifyClassDefaults(qualifyClassDefaults)
@@ -511,6 +512,10 @@ compilePackage
     when checkBinRoundTrip $
         checkRoundTrip "typechecked package" CPackageBin
                        (\(CPackageBin p) -> sortSched p) (sortSched (stripImpSigs mod))
+
+    when (not tcErrors) $ do
+      let pm_warns = patternMatchWarnings flags symt minst mod
+      when (not (null pm_warns)) $ bsWarning errh pm_warns
 
     --when (early flags) $ return ()
     let prefix = dirName name ++ "/"

@@ -70,6 +70,7 @@ Flags {
 	optUndet = False,
 	parallelSimLink = 1,
 	passThroughAssertions = False,
+	patternCheckFuel = 100000,
 	preprocessOnly = False,
 	printFlags = False,
 	printFlagsHidden = False,
@@ -136,7 +137,9 @@ Flags {
 	vpp = True,
 	vsim = Nothing,
 	warnActionShadowing = True,
+	warnIncompletePatterns = True,
 	warnMethodUrgency = True,
+	warnOverlappingPatterns = True,
 	warnUndetPred = False,
 	semanticPortsComment = False
 }

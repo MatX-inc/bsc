@@ -1,0 +1,3 @@
+return (case (m) matches
+           tagged Valid .x: x;
+        endcase);
