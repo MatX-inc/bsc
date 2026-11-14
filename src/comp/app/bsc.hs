@@ -160,7 +160,8 @@ import SimBlocksToC(simBlocksToC)
 import SystemCWrapper(checkSystemCIfc, wrapSystemC)
 import SimFileUtils(analyzeBluesimDependencies)
 import VFileUtils(partitionStaleVerilogMods, touchVFiles)
-import Verilog(VProgram(..), vGetMainModName, getVeriInsts)
+import Verilog(VProgram(..), VModule(..), VArg(..), VMItem(..), VVDecl(..),
+               vvName, getVIdString, vGetMainModName, getVeriInsts)
 import Depend
 import Version(bscVersionStr, copyright, buildnum)
 import Classic(SyntaxMode(..), setSyntax)
@@ -1060,19 +1061,22 @@ genModule
             getIOPropsA flags pps (Just sched_info'') amod_final
     t <- dump errh flags t DFAPackageIOproperties dumpnames aioprops
 
-    (t, vfilenames)
+    (t, vfilenames, finalWireNames, finalWireTypes)
         <- if (backend flags == Just Verilog && not (elabOnly flags))
-           then genModuleVerilog
-                    errh pps flags dumpnames t prefix modstr
-                    blurb methodConflictBlurb methodConflictBVI
-                    vPathInfo sched_info'' aioprops amod_final
-           else return (t, [])
+           then do (t', vfs, names, types)
+                       <- genModuleVerilog
+                              errh pps flags dumpnames t prefix modstr
+                              blurb methodConflictBlurb methodConflictBVI
+                              vPathInfo sched_info'' aioprops amod_final
+                   return (t', vfs, Just names, Just types)
+           else return (t, [], Nothing, Nothing)
 
     t <- if (genABin flags)
          then do t' <- writeABin errh pps flags dumpnames t prefix
                            modstr srcName (orig_cqt wi)
                            sched_info'' methodConflict vPathInfo
-                           amod_final
+                           (amod_final { apkg_final_wire_names = finalWireNames,
+                                         apkg_final_wire_types = finalWireTypes })
                  touchVFiles vfilenames
                  return t'
          else return t
@@ -1191,7 +1195,9 @@ genModuleVerilog :: ErrorHandle
                  -> VIOProps -- port properties (from the APackage)
                  -> APackage
                  -> IO (TimeInfo,
-                        [VFileName]) -- the Verilog files written
+                        [VFileName], -- the Verilog files written
+                        M.Map String String,
+                        M.Map String (S.Set IType))
 genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                  blurb methodConflictBlurb methodConflictBVI vPathInfo scheduleInfo
                  aioprops atsPackage =
@@ -1337,7 +1343,44 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Return
        -- * the Verilog file names written
-       return (t, vfilenames)
+       -- * the final physical wire names and source type candidates
+       names <- if genABin flags && not (null (aspkg_expr_types aumod))
+                then CE.evaluate (force (emittedWireNameMap vprog0 vprog))
+                else return M.empty
+       types <- if genABin flags
+                then CE.evaluate (force (getFinalWireTypeCandidates names aumod))
+                else return M.empty
+       return (t, vfilenames, names, types)
+
+
+-- Dollar-sign removal preserves declarations and their traversal order.
+-- Zipping declarations captures their EXACT simultaneous mapping, including
+-- unchanged names and dollar-removal collision resolution. Only real signals
+-- are included; a removed pre-codegen name must not bind to a surviving wire
+-- that happens to receive that spelling during collision resolution.
+emittedWireNameMap :: VProgram -> VProgram -> M.Map String String
+emittedWireNameMap before after =
+    let old = signals before
+        new = signals after
+    in if length old == length new
+       then M.fromList (zip old new)
+       else internalError "emittedWireNameMap: renaming changed signal declarations"
+  where
+    signals prog@(VProgram mods _ _ _) =
+        concat [map getVIdString (concatMap (concatMap portSignal . fst) (vm_ports m) ++
+                                  concatMap itemSignals (vm_body m)) |
+                 m <- mods, getVIdString (vm_name m) == vGetMainModName prog]
+    portSignal (VAInput i _) = [i]
+    portSignal (VAOutput i _) = [i]
+    portSignal (VAInout i mi _) = [fromMaybe i mi]
+    portSignal (VAParameter {}) = []
+    itemSignals (VMDecl (VVDecl _ _ vs)) = map vvName vs
+    itemSignals (VMDecl (VVDWire _ v _)) = [vvName v]
+    itemSignals (VMComment _ x) = itemSignals x
+    itemSignals (VMRegGroup _ _ _ x) = itemSignals x
+    itemSignals (VMGroup _ xss) = concatMap (concatMap itemSignals) xss
+    itemSignals (VMIfdef _ xs) = concatMap itemSignals xs
+    itemSignals _ = []
 
 
 -- Write a Verilog program to file (along with its use file)
@@ -1634,7 +1677,8 @@ vGenMods errh flags t0 abmis = do
                               printFlagsRaw = printFlagsRaw flags,
                               timeStamps = timeStamps flags,
                               showVersion = showVersion flags,
-                              updCheck = updCheck flags
+                              updCheck = updCheck flags,
+                              genABin = False
                           }
                 methodConflict = abmi_method_dump abmi
                 methodConflictBlurb
@@ -1655,7 +1699,7 @@ vGenMods errh flags t0 abmis = do
                 -- .ba's own contents, so a regenerated .v matches the
                 -- original compile's under -semantic-ports-comment too
                 (aioprops, _) = getIOPropsA cgflags pps (Just aschedinfo) apkg
-            (t', vfns) <-
+            (t', vfns, _, _) <-
                 genModuleVerilog errh pps cgflags dumpnames t prefix modstr
                     blurb methodConflictBlurb methodConflictBVI
                     pathinfo aschedinfo aioprops apkg

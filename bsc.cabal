@@ -138,6 +138,7 @@ library
     ARenameIO
     ASchedule
     AScheduleInfo
+    ASourceTypes
     AState
     ASyntax
     ASyntaxUtil
