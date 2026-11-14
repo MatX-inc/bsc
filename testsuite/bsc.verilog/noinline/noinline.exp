@@ -51,6 +51,68 @@ test_c_veri_bsv_modules NoInlineInSched {module_inv}
 
 # -----
 
+# One call of a noinline function is one instance of the function's
+# module, whatever the result of the call defines: the argument of
+# several register writes or submodule methods, the enable or the
+# condition of several method calls, the result of several value
+# methods.  Each of those signals used to get a copy of the call, and
+# the Verilog backend wrote an instance for each copy, all with the one
+# instance name of the call (which is not legal Verilog).
+#
+# So count the instances, and link and simulate the design.
+
+set multiuse_mods [list module_multiUseEncode module_multiUsePick \
+                       module_multiUseFold mkNoInlineMultiUse_Sub]
+
+proc noinline_multiuse_count_instances {} {
+    global vtest
+
+    if { $vtest == 1 } {
+        # the top module has two calls of each of these
+        find_n_strings sysNoInlineMultiUse.v \
+            {module_multiUseEncode instance_multiUseEncode_} 2
+        find_n_strings sysNoInlineMultiUse.v \
+            {module_multiUsePick instance_multiUsePick_} 2
+        find_n_strings mkNoInlineMultiUse_Sub.v \
+            {module_multiUseFold instance_multiUseFold_} 1
+    }
+}
+
+# With the default flags, identical definitions are joined again after
+# the copying, which hid the copies, except a copy in a method enable
+# that came before every definition the others could be joined to (an
+# enable is never that definition)
+test_c_veri_bsv_modules NoInlineMultiUse $multiuse_mods
+noinline_multiuse_count_instances
+
+# Other flags expose other copies:
+#  * a condition signal of -keep-method-conds is, like an enable, never
+#    the definition that the others are joined to
+#  * with -no-opt-join-defs, nothing is joined
+#  * with -keep-fires, the CAN_FIRE and WILL_FIRE of a rule are two more
+#    signals that the rule's condition defines
+foreach multiuse_opts { {-keep-method-conds}
+                        {-no-opt-join-defs}
+                        {-keep-fires -keep-method-conds -no-opt-join-defs} } {
+    # erase to force recompile with different options
+    erase NoInlineMultiUse.bo
+    erase sysNoInlineMultiUse.v
+    erase mkNoInlineMultiUse_Sub.v
+
+    test_veri_only_bsv_modules_options \
+        NoInlineMultiUse $multiuse_mods $multiuse_opts
+    noinline_multiuse_count_instances
+}
+
+# A Classic foreign function bound to a module is instantiated in the
+# same way, so one call of it is one instance too
+if { $vtest == 1 } {
+compile_verilog_pass ForeignMultiUse.bs {} {-no-opt-join-defs}
+find_n_strings sysForeignMultiUse.v {Dup instance_vdup_} 1
+}
+
+# -----
+
 # Test for error conditions when trying to synthesize functions
 # whose types cannot be synthesized.
 
