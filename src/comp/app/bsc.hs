@@ -146,6 +146,7 @@ import ABinUtil(readAndCheckABin, readAndCheckABinPathCatch, getABIHierarchy,
 import ASourceTypes(anchorASPackage)
 import AMuxSourceTypes(propagateArgumentMuxTypes)
 import AConditionalSourceTypes(propagateConditionalTypes)
+import APrimitiveSourceTypes(propagatePrimitiveTypes)
 import WireAnalysis(getFinalWireTypeCandidates)
 import GenABin(genABinFile)
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap,
@@ -1276,9 +1277,10 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Expand some primitives
        start flags DFsynthesize
-       -- Optimization can expose further sharing and lower array selections.
+       -- Derive primitive interpretations before lowering erases signedness.
+       -- The same closure also joins aliases and selections exposed by AOpt.
        let asynmod = aSynthesize flags
-                         (anchorASPackage (propagateConditionalTypes aomod))
+                         (anchorASPackage (propagatePrimitiveTypes aomod))
        asCheck flags asynmod "asynthesize"
        -- Check that referenced signal names exist
        asSignalCheck flags asynmod "synthesize"
