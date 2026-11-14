@@ -50,6 +50,36 @@ compile_verilog_pass NoInline_LessPatternsThanArgs_BSV_TypeDef.bsv
 test_c_veri_bsv_modules NoInlineInSched {module_inv}
 
 # -----
+# Each noinline or module-bound foreign call emits one Verilog instance,
+# even when its result feeds multiple readers.
+
+set multiuse_mods [list module_multiUseEncode module_multiUsePick \
+                       mkNoInlineMultiUse_Sub]
+
+test_c_veri_bsv_modules NoInlineMultiUse $multiuse_mods
+if { $vtest == 1 } {
+    find_n_strings sysNoInlineMultiUse.v \
+        {module_multiUseEncode instance_multiUseEncode_} 1
+    find_n_strings sysNoInlineMultiUse.v \
+        {module_multiUsePick instance_multiUsePick_} 1
+    find_n_strings mkNoInlineMultiUse_Sub.v \
+        {module_multiUseEncode instance_multiUseEncode_} 1
+
+    erase NoInlineMultiUse.bo
+    erase sysNoInlineMultiUse.v
+    erase mkNoInlineMultiUse_Sub.v
+    test_veri_only_bsv_modules_options NoInlineMultiUse $multiuse_mods \
+        {-keep-fires -keep-method-conds -no-opt-join-defs}
+    find_n_strings sysNoInlineMultiUse.v \
+        {module_multiUseEncode instance_multiUseEncode_} 1
+    find_n_strings sysNoInlineMultiUse.v \
+        {module_multiUsePick instance_multiUsePick_} 1
+
+    compile_verilog_pass ForeignMultiUse.bs {} {-no-opt-join-defs}
+    find_n_strings sysForeignMultiUse.v {Dup instance_vdup_} 1
+}
+
+# -----
 
 # Test for error conditions when trying to synthesize functions
 # whose types cannot be synthesized.

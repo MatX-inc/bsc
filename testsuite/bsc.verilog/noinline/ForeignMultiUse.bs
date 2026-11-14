@@ -1,0 +1,18 @@
+package ForeignMultiUse(sysForeignMultiUse, Ifc) where
+
+{-# verilog sysForeignMultiUse #-}
+
+foreign vdup :: Bit 8 -> Bit 16 = "Dup",("i","o")
+
+interface Ifc =
+  get1 :: Bit 16
+  get2 :: Bit 16
+
+sysForeignMultiUse :: Module Ifc
+sysForeignMultiUse =
+  module
+    r :: Reg (Bit 8) <- mkReg 0
+    let v = vdup r
+    interface
+      get1 = v
+      get2 = v

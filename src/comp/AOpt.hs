@@ -479,7 +479,7 @@ aOptBoolExpr e = e
 --   reasons, aInsertCase must come before aExp.
 aOptDef :: BFlags -> ADef -> O ()
 -- inline ASDef references more eagerly than aExp
--- (but don't inline ATaskValue or foreign AFunCall,
+-- (but don't inline ATaskValue, foreign AFunCall or ANoInlineFunCall,
 -- which need to keep their def names)
 aOptDef bflgs def@(ADef i t rdef@(ASDef rt aid) ps) = do
     mredirect <- lookupDef aid
@@ -489,6 +489,8 @@ aOptDef bflgs def@(ADef i t rdef@(ASDef rt aid) ps) = do
             internalError ("Aopt::aOptDef lookup failed: " ++ ppReadable def)
         Just (ATaskValue {}) -> aOptDef_dflt bflgs def  -- don't redirect
         Just (AFunCall { ae_isC = True }) -> aOptDef_dflt bflgs def  -- don't redirect
+        -- ANoInlineFunCall carries its module instance name; copying duplicates the instance.
+        Just (ANoInlineFunCall {}) -> aOptDef_dflt bflgs def  -- don't redirect
         Just rdef_expr -> addDef (ADef i t rdef_expr ps)
 aOptDef bflgs def = aOptDef_dflt bflgs def
 
