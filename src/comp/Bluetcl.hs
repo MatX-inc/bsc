@@ -37,7 +37,7 @@ import Util(quote, concatMapM, concatUnzip3, lastOrErr, fromJustOrErr, fst3,
             thd, readOrErr)
 import IOUtil(getEnvDef)
 
-import Util(mapFst, mapSnd)
+import Util(mapFst, mapSnd, stableOrdNub)
 import TclUtils
 import GHCPretty()
 
@@ -1288,7 +1288,7 @@ tclModule ["porttypes",modname] = do
            (arginfo, ifcinfo) <- getModPortInfo apkg pps tifc
            let h_arg_types = concatMap dispPortsModArg arginfo
                h_ifc_types = concatMap dispPortsIfc ifcinfo
-           return $ TLst $ nub (h_arg_types ++ h_ifc_types)
+           return $ TLst $ stableOrdNub (h_arg_types ++ h_ifc_types)
 ------
 tclModule ["wiretypemap",modname] = do
   if (isPrimitiveModule modname)
@@ -1685,7 +1685,7 @@ tclSubmodule ["porttypes",modname] =
                       hifcs = concatMap dispPortsIfc ifcinfo
                   return $
                       TLst $ [TStr instname, TStr submodname,
-                              TLst [TStr "ports", TLst $ nub (hargs ++ hifcs)]]
+                              TLst [TStr "ports", TLst $ stableOrdNub (hargs ++ hifcs)]]
           infs <- mapM mkInfo avis
           return $ TLst infs
 ----------
@@ -3684,9 +3684,9 @@ getModPortInfo apkg pps tifc = do
     let ifc' :: [AIFace]
         ifc' = apkg_interface apkg
         -- need to filter out ready methods that are always ready
+        isARdy = mkIsAlwaysRdy pps
         notAlwaysRdy :: AIFace -> Bool
-        notAlwaysRdy aif = let mid = aif_name aif
-                           in not $ (isRdyId mid) && (isAlwaysRdy pps mid)
+        notAlwaysRdy aif = not (isARdy (aif_name aif))
         ifc = filter notAlwaysRdy ifc'
 
     -- interface hierarchy

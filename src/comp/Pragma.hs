@@ -19,6 +19,7 @@ module Pragma(
               extractSchedPragmaIds,
 
               isAlwaysRdy,
+              mkIsAlwaysRdy,
               isAlwaysEn,
               isEnWhenRdy,
 
@@ -52,6 +53,7 @@ import Prelude hiding ((<>))
 #endif
 
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Data.Maybe(listToMaybe)
 import Data.List(sort)
 import qualified Data.Generics as Generic
@@ -661,6 +663,22 @@ isAlwaysRdy pps = \i -> check i rdyLists
     check _ [] = False
     check i (Nothing : _) = isRdyId i
     check i (Just rdys : rest) = i `elem` rdys || check i rest
+
+-- Build an O(log n) ready-method predicate for callers that query every
+-- port of a synthesized module (such as Bluetcl port inspection).
+mkIsAlwaysRdy :: [PProp] -> (Id -> Bool)
+mkIsAlwaysRdy pps
+  | any isAllRdy pps = isRdyId
+  | otherwise = \i -> isRdyId i && S.member i ar_ids
+  where
+    isAllRdy (PPalwaysReady [])   = True
+    isAllRdy (PPalwaysEnabled []) = True
+    isAllRdy _                    = False
+    !ar_ids = S.fromList [ mkRdyId (flattenUSId i)
+                         | pp <- pps, i <- rdyIds pp ]
+    rdyIds (PPalwaysReady is)   = is
+    rdyIds (PPalwaysEnabled is) = is
+    rdyIds _                    = []
 
 
 -- NOTE: always_enabled implies enabled_when_ready
