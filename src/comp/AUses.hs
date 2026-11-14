@@ -199,7 +199,8 @@ useDropCond a = a
 -- Data Types: ActionUses, ExprUses
 
 -- map from a submodule to a map from methods (on the module) to their uses
-type MethodExprUses = M.Map Id (M.Map Id (M.Map AExpr UseCond))
+type MethodExprUsesK k = M.Map Id (M.Map Id (M.Map k UseCond))
+type MethodExprUses = MethodExprUsesK AExpr
 type MethodActionUses = M.Map Id (M.Map Id [AAction])
 
 toListMethodExprUses :: MethodExprUses -> [(MethodId, [UniqueUse])]
@@ -219,7 +220,8 @@ toListMethodActionUses mus =
 type FFuncId = AId
 
 -- map from a foreign function to its uses
-type FFuncExprUses = M.Map FFuncId (M.Map AExpr UseCond)
+type FFuncExprUsesK k = M.Map FFuncId (M.Map k UseCond)
+type FFuncExprUses = FFuncExprUsesK AExpr
 type FFuncActionUses = M.Map FFuncId [AAction]
 
 toListFFExprUses :: FFuncExprUses -> [(FFuncId, [UniqueUse])]
@@ -234,13 +236,95 @@ toListFFActionUses fus =
 
 -- ----------
 
-type ExprUses = (MethodExprUses, FFuncExprUses)
+type ExprUsesK k = (MethodExprUsesK k, FFuncExprUsesK k)
+type ExprUses = ExprUsesK AExpr
 type ActionUses = (MethodActionUses, FFuncActionUses)
 
-noExprUses :: ExprUses
+-- ----------
+-- Ranked keys
+
+-- The use maps built in the UCM are keyed by RKey: a call expression paired
+-- with its rank among all the call expressions of the module (see
+-- mkKeyRanks).  Ranks are in Ord AExpr order, so every compare between two
+-- ranked keys has the outcome compare on their expressions would have, and
+-- every Data.Map operation takes the same path: the same trees, the same
+-- surviving key (with its expression) and the same value thunks, combined and
+-- forced in the same order as with AExpr keys.  An unranked key (-1: an
+-- expression with a NaN literal, whose Ord is not a total order, or one the
+-- collection missed) is compared by its expression.  unrankUses turns the
+-- maps back into AExpr maps for everything outside the UCM.
+data RKey = RKey {-# UNPACK #-} !Int !AExpr
+
+rkExpr :: RKey -> AExpr
+rkExpr (RKey _ e) = e
+
+instance Eq RKey where
+    k1 == k2 = compare k1 k2 == EQ
+
+instance Ord RKey where
+    compare (RKey i e) (RKey j e')
+        | i >= 0 && j >= 0 = compare i j
+        | otherwise        = compare e e'
+
+type RExprUses = ExprUsesK RKey
+
+-- Back to AExpr keys.  M.map is lazy in the values and mapKeysMonotonic keeps
+-- the tree, so each converted map holds the same value thunks, and forcing it
+-- forces just its source map's spine (Data.Map is spine-strict): nothing is
+-- forced that the AExpr-keyed map would not have forced at the same point.
+unrankUses :: RExprUses -> ExprUses
+unrankUses ~(mus, fus) = (M.map (M.map unrankMap) mus, M.map unrankMap fus)
+  where unrankMap = M.mapKeysMonotonic rkExpr
+
+-- The call expressions eDomain can reach from the rules, the defs (through
+-- ASDef) and the instance arguments, with repeats.
+useKeys :: [ADef] -> [Rule] -> [AVInst] -> [AExpr]
+useKeys defs rules avis = foldr exprKeys [] roots
+  where roots = [ e | ADef _ _ e _ <- defs ] ++
+                concat [ ps ++ rs ++ concatMap aact_args ws
+                       | Rule _ _ ps rs ws <- rules ] ++
+                concatMap avi_iargs avis
+
+exprKeys :: AExpr -> [AExpr] -> [AExpr]
+exprKeys e@(AMethCall { ae_args = es }) acc = e : foldr exprKeys acc es
+exprKeys e@(AFunCall { ae_args = es }) acc = e : foldr exprKeys acc es
+exprKeys (APrim { ae_args = es }) acc = foldr exprKeys acc es
+exprKeys (ANoInlineFunCall { ae_args = es }) acc = foldr exprKeys acc es
+exprKeys (ATuple _ es) acc = foldr exprKeys acc es
+exprKeys (ATupleSel _ e _) acc = exprKeys e acc
+exprKeys _ acc = acc
+
+-- Rank i is the i-th class of the distinct keys in Ord AExpr order.  The
+-- module's ATS was deepseq'd at its DFATSclean dump, before aSchedule, and an
+-- Id in WHNF has its FStrings interned (strict fields), so these compares and
+-- the lookups in rankKey force nothing new.  Derived Ord AExpr is a total
+-- preorder except through ASReal: compare on a NaN is never EQ and not
+-- antisymmetric, so keys holding a NaN are left out (and, never comparing EQ
+-- to a ranked key, always look up as unranked).
+mkKeyRanks :: [AExpr] -> M.Map AExpr Int
+mkKeyRanks ks =
+    M.fromDistinctAscList (zip (S.toAscList (S.fromList (filter (not . hasNaN) ks))) [0..])
+
+hasNaN :: AExpr -> Bool
+hasNaN (ASReal { ae_rval = r }) = isNaN r
+hasNaN (APrim { ae_args = es }) = any hasNaN es
+hasNaN (AMethCall { ae_args = es }) = any hasNaN es
+hasNaN (ANoInlineFunCall { ae_args = es }) = any hasNaN es
+hasNaN (AFunCall { ae_args = es }) = any hasNaN es
+hasNaN (ATuple _ es) = any hasNaN es
+hasNaN (ATupleSel _ e _) = hasNaN e
+hasNaN (ASAny { ae_val = Just e }) = hasNaN e
+hasNaN (ASClock { ae_clock = AClock o g }) = hasNaN o || hasNaN g
+hasNaN (ASReset { ae_expr = AReset w }) = hasNaN w
+hasNaN (ASInout { ae_expi = AInout w }) = hasNaN w
+hasNaN _ = False
+
+-- ----------
+
+noExprUses :: ExprUsesK k
 noExprUses = (M.empty, M.empty)
 
-singleMethodExprUse :: AId -> AMethodId -> AExpr -> UseCond -> ExprUses
+singleMethodExprUse :: AId -> AMethodId -> RKey -> UseCond -> RExprUses
 singleMethodExprUse i m e c =
     (M.singleton i (M.singleton m (M.singleton e c)),
      M.empty)
@@ -250,19 +334,19 @@ singleMethodActionUse i m a =
     (M.singleton i (M.singleton m [a]),
      M.empty)
 
-singleFFuncExprUse :: AId -> AExpr -> UseCond -> ExprUses
+singleFFuncExprUse :: AId -> RKey -> UseCond -> RExprUses
 singleFFuncExprUse i e c = (M.empty, M.singleton i (M.singleton e c))
 
 singleFFuncActionUse :: AId -> AAction -> ActionUses
 singleFFuncActionUse i a = (M.empty, M.singleton i [a])
 
-getMethodExprUses :: ExprUses -> MethodExprUses
+getMethodExprUses :: ExprUsesK k -> MethodExprUsesK k
 getMethodExprUses = fst
 
 getMethodActionUses :: ActionUses -> MethodActionUses
 getMethodActionUses = fst
 
-getFFuncExprUses :: ExprUses -> FFuncExprUses
+getFFuncExprUses :: ExprUsesK k -> FFuncExprUsesK k
 getFFuncExprUses = snd
 
 getFFuncActionUses :: ActionUses -> FFuncActionUses
@@ -279,17 +363,17 @@ lookupMethodActionUse (MethodId objId methId) objmap =
 -- Merge expression uses by combining the use condition of identical exprs
 -- (Ravi's comment: "merge only expressions -- merging actions is dangerous")
 
-mergeExprUses :: [ExprUses] -> ExprUses
+mergeExprUses :: [RExprUses] -> RExprUses
 mergeExprUses uss =
   let
-      mergeUsesFn :: M.Map AExpr UseCond -> M.Map AExpr UseCond ->
-                     M.Map AExpr UseCond
+      mergeUsesFn :: M.Map RKey UseCond -> M.Map RKey UseCond ->
+                     M.Map RKey UseCond
       mergeUsesFn us1 us2 = M.unionWith orUseCond us1 us2
 
-      mergeMethodUses :: [MethodExprUses] -> MethodExprUses
+      mergeMethodUses :: [MethodExprUsesK RKey] -> MethodExprUsesK RKey
       mergeMethodUses ms = M.unionsWith (M.unionWith mergeUsesFn) ms
 
-      mergeFFuncUses :: [FFuncExprUses] -> FFuncExprUses
+      mergeFFuncUses :: [FFuncExprUsesK RKey] -> FFuncExprUsesK RKey
       mergeFFuncUses fs = M.unionsWith mergeUsesFn fs
 
       (muss, fuss) = unzip uss
@@ -320,17 +404,17 @@ mergeActionUses uss =
   in
       (mergeMethodUses muss, mergeFFuncUses fuss)
 
-mergeExprUsesM :: [ExprUses] -> UCM (ExprUses)
+mergeExprUsesM :: [RExprUses] -> UCM (RExprUses)
 mergeExprUsesM uss = do
   let
-      mergeUsesFnM :: M.Map AExpr UseCond -> M.Map AExpr UseCond ->
-                      UCM (M.Map AExpr UseCond)
+      mergeUsesFnM :: M.Map RKey UseCond -> M.Map RKey UseCond ->
+                      UCM (M.Map RKey UseCond)
       mergeUsesFnM us1 us2 = map_unionWithM orUseCondM us1 us2
 
-      mergeMethodUsesM :: [MethodExprUses] -> UCM (MethodExprUses)
+      mergeMethodUsesM :: [MethodExprUsesK RKey] -> UCM (MethodExprUsesK RKey)
       mergeMethodUsesM ms = map_unionsWithM (map_unionWithM mergeUsesFnM) ms
 
-      mergeFFuncUsesM :: [FFuncExprUses] -> UCM (FFuncExprUses)
+      mergeFFuncUsesM :: [FFuncExprUsesK RKey] -> UCM (FFuncExprUsesK RKey)
       mergeFFuncUsesM fs = map_unionsWithM mergeUsesFnM fs
 
       (muss, fuss) = unzip uss
@@ -340,7 +424,7 @@ mergeExprUsesM uss = do
 
 -- ----------
 
-addUseCond :: DefMap -> AExpr -> ExprUses -> ExprUses
+addUseCond :: DefMap -> AExpr -> RExprUses -> RExprUses
 addUseCond dm c (mus, fus) =
     let
         addUC c' = andUseCond dm c c'
@@ -365,7 +449,7 @@ addUseCond dm c (mus, fus) =
 
 -- extract common uses with the same condition
 -- only used in eDomain
-intersectUses :: ExprUses -> ExprUses -> ExprUses
+intersectUses :: RExprUses -> RExprUses -> RExprUses
 intersectUses (mus1, fus1) (mus2, fus2) = (mus', fus')
   where mus' = M.intersectionWith (M.intersectionWith M.intersection) mus1 mus2
         fus' = M.intersectionWith (M.intersection) fus1 fus2
@@ -373,7 +457,7 @@ intersectUses (mus1, fus1) (mus2, fus2) = (mus', fus')
 -- return only uses unique to the first set
 -- even if only the condition is different
 -- only used in eDomain
-minusUses :: ExprUses -> ExprUses -> ExprUses
+minusUses :: RExprUses -> RExprUses -> RExprUses
 minusUses (mus1, fus1) (mus2, fus2) = (mus', fus')
   where mus' = M.differenceWith mapmapdiff mus1 mus2
         fus' = M.differenceWith mapdiff fus1 fus2
@@ -504,7 +588,7 @@ rumGetMethodIds m r = [ MethodId objId methId
 -- expressed with expontential defs.
 
 type DefMap = M.Map AId AExpr
-type DefUseMap = M.Map AId ExprUses
+type DefUseMap = M.Map AId RExprUses
 
 -- condition under which an AExpr is used
 -- since AExprs do not contain their condition (unlike AActions)
@@ -513,7 +597,8 @@ data UCState = UCState { nextNo :: !Int,
                          new_defs :: [ADef],
                          defMap :: DefMap,
                          defUseMap :: DefUseMap,
-                         cseMap :: M.Map AExpr (AId, AType)
+                         cseMap :: M.Map AExpr (AId, AType),
+                         keyRanks :: M.Map AExpr Int
                        }
 
 type UCM a = State (UCState) a
@@ -521,7 +606,7 @@ type UCM a = State (UCState) a
 getDefMap :: UCM (DefMap)
 getDefMap = liftM defMap get
 
-getDefUses:: AId -> UCM (ExprUses)
+getDefUses:: AId -> UCM (RExprUses)
 getDefUses i = do
   um <- liftM defUseMap $ get
   case (M.lookup i um) of
@@ -540,19 +625,25 @@ getDefUses i = do
       -- traceM ("getDefUses: " ++ ppReadable (i, e, uses))
       return uses
 
-initUCState :: [ADef] -> UCState
-initUCState defs = UCState {
+initUCState :: [ADef] -> [AExpr] -> UCState
+initUCState defs keys = UCState {
                      nextNo = 1,
                      new_defs = [],
                      -- is throwing away props incorrect?
                      cseMap = M.fromList [(e, (i,t)) | ADef i t e _props <- defs ],
                      defMap = M.fromList [(i, e) | ADef i _ e _props <- defs ],
-                     defUseMap = M.empty
+                     defUseMap = M.empty,
+                     keyRanks = mkKeyRanks keys
                    }
 
-runUCState :: [ADef] -> UCM a -> (a, [ADef])
-runUCState defs m = (res, new_defs s)
-   where (res, s) = runState m (initUCState defs)
+runUCState :: [ADef] -> [AExpr] -> UCM a -> (a, [ADef])
+runUCState defs keys m = (res, new_defs s)
+   where (res, s) = runState m (initUCState defs keys)
+
+rankKey :: AExpr -> UCM RKey
+rankKey e = do
+  s <- get
+  return $! RKey (M.findWithDefault (-1) e (keyRanks s)) e
 
 aUsesPref :: String
 aUsesPref = "__duses"
@@ -760,7 +851,7 @@ addTrue e uc
 
 buildUseMaps :: [ADef] -> [Rule] -> [AVInst] -> (RuleUsesMap, MethodUsesMap, [ADef])
 buildUseMaps defs rules avis = (rum, mum, reverse new_defs)
-  where ((rum, mum), new_defs) = runUCState defs m
+  where ((rum, mum), new_defs) = runUCState defs (useKeys defs rules avis) m
         m = do rum <- ruleUsesMap rules
                -- traceM (ppReadable rum)
                mum <- createMethodUsesMap rum avis
@@ -785,9 +876,9 @@ rUses (Rule _ _ preds reads writes) = do
   rs <- mergeExprUsesM (rDomains ++ wDomains)
   -- Action uses don't require monadic merging
   let ws = mergeActionUses wRanges
-  return (RuleUses ps rs ws)
+  return (RuleUses (unrankUses ps) (unrankUses rs) ws)
 
-aUses :: AAction -> UCM (ExprUses, ActionUses)
+aUses :: AAction -> UCM (RExprUses, ActionUses)
 aUses a@(ACall i mi (c:es)) = do
     cond_uses <- eDomain c
     dm <- getDefMap
@@ -814,7 +905,7 @@ aUses a@(ATaskAction { aact_objid = i, aact_args = (c:es) }) = do
 
 aUses a = internalError ("AUses - action without condition: " ++ ppReadable a)
 
-eDomain :: AExpr -> UCM (ExprUses)
+eDomain :: AExpr -> UCM (RExprUses)
 -- special cases for non-strict primitives
 eDomain (APrim _ _ PrimIf [cnd, thn, els]) = do
   cond_uses <- eDomain cnd
@@ -852,13 +943,15 @@ eDomain (APrim { ae_args = es }) =
     -- should primitives have resource constraints?
     mapM eDomain es >>= mergeExprUsesM
 eDomain e@(AMethCall _ i mi es) = do
-    let this_use = singleMethodExprUse i (unQualId mi) e ucTrue
+    k <- rankKey e
+    let this_use = singleMethodExprUse i (unQualId mi) k ucTrue
     es_uses <- mapM eDomain es
     mergeExprUsesM (this_use : es_uses)
 eDomain (ATuple _ es) = mapM eDomain es >>= mergeExprUsesM
 eDomain (ATupleSel _ e _) = eDomain e
 eDomain e@(AFunCall { ae_objid = i, ae_args = es }) = do
-    let this_use = singleFFuncExprUse i e ucTrue
+    k <- rankKey e
+    let this_use = singleFFuncExprUse i k ucTrue
     es_uses <- mapM eDomain es
     mergeExprUsesM (this_use : es_uses)
 -- don't count noinline functions
@@ -883,7 +976,7 @@ eDomain e@(ASReset { }) = return noExprUses
 eDomain e@(ASInout { }) = return noExprUses
 eDomain e@(AMGate { }) = return noExprUses
 
-eDomainArray :: AExpr -> AExpr -> UCM (ExprUses)
+eDomainArray :: AExpr -> AExpr -> UCM (RExprUses)
 {-
 -- XXX PrimArrayDynSelect would have been pushed into the arms,
 -- XXX so this shouldn't occur
@@ -1007,7 +1100,7 @@ aInstUseMap :: [AVInst] -> UCM [(AId, ExprUses)]
 aInstUseMap avis = mapM iUses avis
   where iUses avi = do
           arg_uses <- (mapM eDomain (avi_iargs avi) >>= mergeExprUsesM)
-          return (avi_vname avi, arg_uses)
+          return (avi_vname avi, unrankUses arg_uses)
 
 -- ==============================
 -- Errors
