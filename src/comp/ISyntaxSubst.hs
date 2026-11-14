@@ -399,6 +399,9 @@ eSubstWith ectx tctx allIds e
     sub ectx tctx allIds = go
       where
         tsub = tSubWithNorm tctx allIds
+        -- a function value: NOINLINE keeps GHC from rebuilding the partial
+        -- application at every node the loop visits
+        {-# NOINLINE tsub #-}
         go ee@(ILam i t e) =
           case lookupVar i ectx of
             Just _ ->
