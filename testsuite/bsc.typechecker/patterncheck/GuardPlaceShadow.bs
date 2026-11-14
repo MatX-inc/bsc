@@ -1,0 +1,20 @@
+package GuardPlaceShadow where
+
+-- Folded guards contribute to the coverage premises, so guarded clauses
+-- can shadow later clauses.  Both matches are exhaustive (no T0165); each
+-- dead clause is reported (T0166).
+
+-- Complementary guards over the payload place shadow a later Valid clause.
+complementShadow :: Maybe Bool -> Bit 2
+complementShadow (Valid b) when b = 0
+complementShadow (Valid c) when not c = 1
+complementShadow (Valid _) = 2
+complementShadow Invalid = 3
+
+-- A guarded clause covers exactly (Valid True), shadowing the literal
+-- clause.
+literalShadow :: Maybe Bool -> Bit 2
+literalShadow (Valid b) when b = 0
+literalShadow (Valid True) = 1
+literalShadow (Valid False) = 2
+literalShadow Invalid = 3

@@ -1,6 +1,63 @@
 checking package dependencies
 compiling ./Interfaces.bsv
 compiling ./X86_Datatypes.bsv
+Warning: "X86_Datatypes.bsv", line 591, column 10: (T0165)
+  Pattern matching in this case expression is not exhaustive. The following
+  patterns are not covered:
+    tagged DEC_FXU .*
+    tagged DEC_FPU .*
+    tagged DEC_UNIMPLEMENTED .*
+    tagged DEC_UNDEFINED
+Warning: "X86_Datatypes.bsv", line 593, column 14: (T0165)
+  Pattern matching in this case expression is not exhaustive. The following
+  pattern is not covered:
+    tagged FUU_shift_left .*
+Warning: "X86_Datatypes.bsv", line 689, column 10: (T0165)
+  Pattern matching in this case expression is not exhaustive. The following
+  patterns are not covered:
+    tagged DEC_FXU .*
+    tagged DEC_FPU .*
+    tagged DEC_UNIMPLEMENTED .*
+    tagged DEC_UNDEFINED
+Warning: "X86_Datatypes.bsv", line 790, column 10: (T0165)
+  Pattern matching in this case expression is not exhaustive. The following
+  patterns are not covered:
+    tagged DEC_FXU .*
+    tagged DEC_FPU .*
+    tagged DEC_UNIMPLEMENTED .*
+    tagged DEC_UNDEFINED
+Warning: "X86_Datatypes.bsv", line 860, column 10: (T0165)
+  Pattern matching in this case expression is not exhaustive. The following
+  patterns are not covered:
+    tagged DEC_FXU .*
+    tagged DEC_FPU .*
+    tagged DEC_BRU .*
+    tagged DEC_DIO .*
+    ...
+Warning: "X86_Datatypes.bsv", line 910, column 10: (T0165)
+  Pattern matching in this case expression is not exhaustive. The following
+  patterns are not covered:
+    tagged DEC_FXU .*
+    tagged DEC_FPU .*
+    tagged DEC_LSU .*
+    tagged DEC_BRU .*
+    ...
+Warning: "X86_Datatypes.bsv", line 912, column 14: (T0165)
+  Pattern matching in this case expression is not exhaustive. The following
+  patterns are not covered:
+    tagged FUU_logic .*
+    tagged FUU_compare .*
+    tagged FUU_count_lz .*
+    tagged FUU_cond .*
+    ...
+Warning: "X86_Datatypes.bsv", line 947, column 14: (T0165)
+  Pattern matching in this case expression is not exhaustive. The following
+  patterns are not covered:
+    tagged FUU_logic .*
+    tagged FUU_compare .*
+    tagged FUU_count_lz .*
+    tagged FUU_cond .*
+    ...
 compiling ./BaseTypes.bsv
 compiling IBuffer2.bsv
 code generation for mkIBuffer starts
