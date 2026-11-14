@@ -711,6 +711,7 @@ data ErrMsg =
         | ESVPNoClosingParen String
         | ESVPNoId String
         | ENotUTF8
+        | EBadUnbasedUnsized Char Char -- '0 or '1, char glued to it
         | EDefaultResetNoSuchArg String  -- ^ value of the default_reset attr
 
         -- Type checker and static elaboration errors
@@ -824,6 +825,7 @@ data ErrMsg =
         | WIncoherentMatch String String
         | WOrphanInst String
         | WTransitiveIncoherentMatch String String String
+        | EUnbasedUnsizedType String String String -- literal, expected type, unpack hint
         | WTypedHole String [String] -- inferred type, bloogle approximate matches
         | EModInstWrongArgs [Position]
         | EAmbiguous [(String, Position, [(String, [Position])])]
@@ -1965,6 +1967,12 @@ getErrorText (ENonHaskellOperator op cs) =
                       Nothing -> ""
         replacements = [('\171'{-«-}, ['\x226A'{-≪-}]),
                         ('\187'{-»-}, ['\x2A20'{-⨠-}, '\x226B'{-≫-}])]
+
+getErrorText (EBadUnbasedUnsized d c) =
+    (Parse 228, empty,
+     s2par ("The unbased unsized literal " ++ ['\'', d] ++
+            " cannot be immediately followed by " ++ show c ++ ".  " ++
+            "If they are separate tokens, add a space between them."))
 
 -- Type check and elaboration errors
 
@@ -3174,6 +3182,14 @@ getErrorText (WTypedHole t ms) =
 getErrorText (EBloogleMatches e ms) =
     let (tag, ctx, d) = getErrorText e
     in  (tag, ctx, d $$ bloogleMatchesDoc "exact name" ms)
+
+getErrorText (EUnbasedUnsizedType lit t hint) =
+    (Type 170, empty,
+     s2par ("The unbased unsized literal " ++ lit ++ " must have a Bit type, " ++
+            "but here it is expected to have type:") $$
+     nest 2 (text t) $$
+     s2par ("To get a value of some other type in the Bits class, use " ++
+            hint ++ "."))
 
 -- Generation Errors
 

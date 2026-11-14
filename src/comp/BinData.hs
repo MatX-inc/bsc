@@ -774,6 +774,7 @@ instance Bin IdProp where
     writeBytes IdPParserGenerated = putI 36
     writeBytes IdPIncoherent      = putI 37
     writeBytes IdPCAF             = putI 38
+    writeBytes IdPUnbasedUnsized  = putI 39
     readBytes = do
         i <- getI
         case i of
@@ -807,6 +808,7 @@ instance Bin IdProp where
           36 -> return IdPParserGenerated
           37 -> return IdPIncoherent
           38 -> return IdPCAF
+          39 -> return IdPUnbasedUnsized
           n  -> internalError $ "BinData.Bin(IdProp).readBytes: " ++ show n
 
 
