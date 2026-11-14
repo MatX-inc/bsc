@@ -248,7 +248,7 @@ ctN, ctC, ctK, ctAS, ctAR, ctAF, ctV, ctD, ctM, ctP, ctT, ctErr, ctDeferred,
   ctInline, ctSkipConst, ctF, ctI, ctQ, ctFMissing, ctFCut, ctRootAlias,
   ctDecided, ctOutPayload, ctFallInline, ctPreRewrite, ctPreRewriteSeen,
   ctB, ctNormRec, ctNormType, ctNormLeft, ctPreRewriteInline, ctPreRewriteLost,
-  ctPreRewriteCarried, ctClass0, nCounters :: Int
+  ctPreRewriteCarried, ctPreRewriteZero, ctClass0, nCounters :: Int
 ctN = 0
 ctC = 1
 ctK = 2
@@ -288,7 +288,8 @@ ctNormLeft = 35     -- such types that the normalizer left with a type function
 ctPreRewriteInline = 36 -- concats as evaluated written again on an inline node of the final view
 ctPreRewriteLost = 37   -- such rewrites whose result no cell stored
 ctPreRewriteCarried = 38 -- rewrites of a concat with an operand that has such a record
-ctClass0 = 39       -- cells by class: ctClass0 + class
+ctPreRewriteZero = 39   -- rewrites seen whose don't-care operand has no bits
+ctClass0 = 40       -- cells by class: ctClass0 + class
 nCounters = ctClass0 + nClasses
 
 counterNames :: [(Int, String)]
@@ -308,7 +309,8 @@ counterNames =
       (ctNormRec, "norm-records"), (ctNormType, "norm-types"),
       (ctNormLeft, "norm-left"), (ctPreRewriteInline, "pre-rewrite-inline"),
       (ctPreRewriteLost, "pre-rewrite-lost"),
-      (ctPreRewriteCarried, "pre-rewrite-carried") ] ++
+      (ctPreRewriteCarried, "pre-rewrite-carried"),
+      (ctPreRewriteZero, "pre-rewrite-zero") ] ++
     [ (ctClass0 + c, "cells-" ++ clsName c) | c <- [0 .. nClasses - 1] ]
 
 -- -----
@@ -1288,7 +1290,8 @@ tlOutPayload l out tys res mscrut = safely l $ do
 -- res is an application, the concat as it was evaluated is kept for the
 -- cell that stores res (preRewriteAt).  A result that is a constant or a
 -- reference has no bits of a wire where the don't-care was, and nothing
--- is kept; the results of the first kind are counted by their head.
+-- is kept; nor is anything kept for a don't-care operand of no bits.  The
+-- results of the first kind are counted by their head.
 tlPreRewrite :: TLog -> [IType] -> [IExpr a] -> [IExpr a] -> IExpr a -> IO ()
 tlPreRewrite l ts vals heaped res = safely l $ do
   undets <- mapM isUndet vals
@@ -1303,19 +1306,25 @@ tlPreRewrite l ts vals heaped res = safely l $ do
                            _ -> False
         when (one || carried e1 || carried e2) $ do
           r <- evaluate res
+          cts <- mapM (numArg l) ts
+          -- a don't-care operand of no bits leaves nothing to say
+          let empty = case (u1, u2, cts) of
+                        (True, _, NArg 0 : _) -> True
+                        (_, True, _ : NArg 0 : _) -> True
+                        _ -> False
           if one then do
               bump l ctPreRewriteSeen
+              when empty $ bump l ctPreRewriteZero
               shape <- reading l "unreadable" (evaluate (let x = resultHead r in length x `seq` x))
               modifyIORef' (tl_prerwRes l) (M.insertWith (+) shape 1)
             else bump l ctPreRewriteCarried
           case r of
-            IAps _ _ _ -> do
+            IAps _ _ _ | not empty -> do
                 lost <- readIORef (tl_prerw l)
                 case lost of
                   Just _ -> bump l ctPreRewriteLost
                   Nothing -> return ()
                 sn <- makeStableName r
-                cts <- mapM (numArg l) ts
                 writeIORef (tl_prerw l) (Just (PreRw sn cts [e1, e2] 16))
             _ -> return ()
     _ -> return ()
