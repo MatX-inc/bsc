@@ -1047,7 +1047,7 @@ findReducedPreds ds vps = withoutSolvedPool $ do
   bvs <- getBoundTVs
   let reduceOne vp = do
           let dvs = (tv vp) ++ bvs
-          SolveResult reduce_res _ _ <- reducePredsAggressive (Just dvs) (eds ++ eps) [vp]
+          SolveResult reduce_res _ _ _ <- reducePredsAggressive (Just dvs) (eds ++ eps) [vp]
           case (reduce_res) of
             -- The predicate can reduce away entirely here even though
             -- the main solve failed on it: the report runs in a
@@ -1123,8 +1123,8 @@ earlyContextReduction pos ps =
         -- use position.  When neither the site nor the predicate has
         -- one (generated code), defer to the definition-level report,
         -- which knows the definition's name and position.  The
-        -- predicate cannot escape unreported: it is irreducible, so
-        -- nothing can discharge it downstream, and the
+        -- predicate cannot escape unreported: it is irreducible, so no
+        -- pool entry or instance can discharge it downstream, and the
         -- definition-level check is the terminal backstop.
         reportable p = pos /= noPosition ||
                        any (/= noPosition) (getVPredPositions p)
