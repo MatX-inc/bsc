@@ -95,10 +95,10 @@ import CaptureRebuild(typeObservations)
 import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlStoredValue, tlFixValue, tlArgsReset, tlStored, tlRedex,
                  tlCondBegin, tlCondEnd, tlCondDecided, tlOutPayload,
-                 tlFallUnpack, tlPreRewrite,
+                 tlFallUnpack, tlPreRewrite, tlUnpackAt,
                  tlRoot, tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr,
                  tlFinalTuple, tlNamed, tlRootAliases, tlAlias, tlClosedExpr,
-                 tlClosed, tlUnitExpr, tlInstance, tlFinalEnd)
+                 tlClosed, tlUnitExpr, tlInstance, tlInstArg, tlFinalEnd)
 import TypeLinksDecl(tlFieldTypes, tlBitsInstance)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
@@ -1097,6 +1097,23 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
     -- instances: the Verilog module
     mapM_ (\ (inst, sv) ->
                tlInstance l (getIdString inst) (getVNameString (vName (isv_vmi sv))))
+          insts
+    -- what each instance argument feeds in the instance's Verilog module
+    mapM_ (\ (inst, sv) ->
+               let vmi = isv_vmi sv
+                   feeds a = case a of
+                     Param vn -> ("param", getVNameString vn)
+                     Port (vn, _) _ _ -> ("port", getVNameString vn)
+                     ClockArg i -> ("clock", case lookupInputClockWires i vmi of
+                                               Just (vn, _) -> getVNameString vn
+                                               Nothing -> "-")
+                     ResetArg i -> ("reset", case lookupInputResetWire i vmi of
+                                               Just vn -> getVNameString vn
+                                               Nothing -> "-")
+                     InoutArg vn _ _ -> ("inout", getVNameString vn)
+               in  mapM_ (\ (k, a) -> let (kind, name) = feeds a
+                                      in  tlInstArg l (getIdString inst) k kind name)
+                         (zip [0 ..] (vArgs vmi)))
           insts
     -- instance arguments
     mapM_ (\ (inst, sv) ->
@@ -4908,6 +4925,9 @@ conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
                     tlIO (\ l -> do tlCoerce l 'u' "repack" ta tn (bp, Just xee) (apt, Nothing)
                                     tlCoerce l 'p' "repack" ta' tn' (bp, Just xee) (vp, Just v))
                 _ -> tlIO (\ l -> tlCoerce l 'u' "hold" ta tn (xp, Just xee) (apt, Nothing))
+              -- where this unpack is written: its primitive's position,
+              -- read after elaboration
+              tlIO (\ l -> tlUnpackAt l apt i)
               let (op, app) = capHeldPtrs xp apt
                   node = ICLazyUnpack { iConType = ta, lzTa = ta,
                                         lzTn = tn, lzOrig = xee,

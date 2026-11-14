@@ -11,8 +11,10 @@
 -- is a constant or a leaf; D, M the defs and merges at the end of
 -- elaboration; P the named ends; T the types; F the field types of the
 -- data and struct types; B whether a type has an instance of Bits; I each
--- state instance's Verilog module; Q the number of calls of each instance
--- method in the final expressions.
+-- state instance's Verilog module; G what each instance argument feeds in
+-- that module; Q the number of calls of each instance method in the final
+-- expressions; L the source position of a one-constructor type's
+-- constructor application or of an unpack, a number into the table X.
 --
 -- Forcing.  A hook here may evaluate a type to weak head normal form, match
 -- an expression's constructor and read lazy fields of a constructor's info.
@@ -35,7 +37,7 @@ module TypeLinks(
         -- links
         tlCopy, tlCoerce, tlStoredValue, tlFixValue,
         tlArgsReset, tlArgPush, tlStored, tlRedex,
-        tlOutPayload, tlFallUnpack, tlPreRewrite,
+        tlOutPayload, tlFallUnpack, tlPreRewrite, tlUnpackAt,
         -- decided conditionals
         tlCondBegin, tlCondTake, tlCondEnd, tlCondDecided,
         -- roots
@@ -44,7 +46,7 @@ module TypeLinks(
         End, tlCellEnd,
         tlFinalBegin, tlDef, tlMerge, tlFinalExpr, tlFinalTuple, tlNamed,
         tlRootAliases, tlAlias, tlClosedExpr, tlClosed, tlUnitExpr,
-        tlInstance, tlFinalEnd
+        tlInstance, tlInstArg, tlFinalEnd
     ) where
 
 import Control.Exception(SomeException, evaluate, try, catch)
@@ -63,9 +65,10 @@ import System.IO(IOMode(..), BufferMode(..), openBinaryFile, hSetBuffering)
 import System.IO.Unsafe(unsafePerformIO)
 import System.Mem.StableName(StableName, makeStableName, eqStableName)
 
-import FStringCompat(getFString)
-import Position(noPosition)
-import Id(Id, getIdString, getIdBaseString)
+import FStringCompat(FString, getFString)
+import FileNameUtil(getRelativeFilePath)
+import Position(Position(..), noPosition)
+import Id(Id, getIdString, getIdBaseString, getIdPosition)
 import PreIds(idArrow, idBit, idPrimPair)
 import IntLit(IntLit(..))
 import Prim(PrimOp(..))
@@ -248,7 +251,8 @@ ctN, ctC, ctK, ctAS, ctAR, ctAF, ctV, ctD, ctM, ctP, ctT, ctErr, ctDeferred,
   ctInline, ctSkipConst, ctF, ctI, ctQ, ctFMissing, ctFCut, ctRootAlias,
   ctDecided, ctOutPayload, ctFallInline, ctPreRewrite, ctPreRewriteSeen,
   ctB, ctNormRec, ctNormType, ctNormLeft, ctPreRewriteInline, ctPreRewriteLost,
-  ctPreRewriteCarried, ctPreRewriteZero, ctClass0, nCounters :: Int
+  ctPreRewriteCarried, ctPreRewriteZero, ctG, ctL, ctX, ctLNone, ctClass0,
+  nCounters :: Int
 ctN = 0
 ctC = 1
 ctK = 2
@@ -289,7 +293,11 @@ ctPreRewriteInline = 36 -- concats as evaluated written again on an inline node 
 ctPreRewriteLost = 37   -- such rewrites whose result no cell stored
 ctPreRewriteCarried = 38 -- rewrites of a concat with an operand that has such a record
 ctPreRewriteZero = 39   -- rewrites seen whose don't-care operand has no bits
-ctClass0 = 40       -- cells by class: ctClass0 + class
+ctG = 40
+ctL = 41
+ctX = 42
+ctLNone = 43        -- applications whose head has no position
+ctClass0 = 44       -- cells by class: ctClass0 + class
 nCounters = ctClass0 + nClasses
 
 counterNames :: [(Int, String)]
@@ -310,7 +318,8 @@ counterNames =
       (ctNormLeft, "norm-left"), (ctPreRewriteInline, "pre-rewrite-inline"),
       (ctPreRewriteLost, "pre-rewrite-lost"),
       (ctPreRewriteCarried, "pre-rewrite-carried"),
-      (ctPreRewriteZero, "pre-rewrite-zero") ] ++
+      (ctPreRewriteZero, "pre-rewrite-zero"), (ctG, "G"), (ctL, "L"),
+      (ctX, "X"), (ctLNone, "L-no-position") ] ++
     [ (ctClass0 + c, "cells-" ++ clsName c) | c <- [0 .. nClasses - 1] ]
 
 -- -----
@@ -364,6 +373,15 @@ data TLog = TLog {
     -- what the rewrites of a concat with a don't-care operand gave, by
     -- the result's head
     tl_prerwRes :: !(IORef (M.Map String Int)),
+    -- applications met while the evaluator ran whose source position is
+    -- their head's: what the node is (a view's con record, or 'K': the
+    -- typed end of an unpack), the node, and the head's Id, unread,
+    -- newest first (the Id's position is read after elaboration)
+    tl_heads :: !(IORef [(Char, End, Id)]),
+    -- the positions written so far: (file, line, column) -> number; and
+    -- the table, newest first
+    tl_posTab :: !(IORef (M.Map (FString, Int, Int) Int)),
+    tl_posList :: !(IORef [Position]),
     tl_counts :: !(IOUArray Int Int)
   }
 
@@ -416,6 +434,9 @@ tlNewLog mfile = do
   prerwApps <- newIORef []
   prerwKeys <- newIORef M.empty
   prerwRes <- newIORef M.empty
+  heads <- newIORef []
+  posTab <- newIORef M.empty
+  posList <- newIORef []
   counts <- newArray (0, nCounters - 1) 0
   return (TLog { tlOn = maybe False (const True) mh,
                  tl_out = maybe (error "TypeLinks: no file") id mh,
@@ -428,7 +449,9 @@ tlNewLog mfile = do
                  tl_decided = decided, tl_prerw = prerw,
                  tl_prerwCells = prerwCells,
                  tl_prerwApps = prerwApps, tl_prerwKeys = prerwKeys,
-                 tl_prerwRes = prerwRes, tl_counts = counts })
+                 tl_prerwRes = prerwRes, tl_heads = heads,
+                 tl_posTab = posTab, tl_posList = posList,
+                 tl_counts = counts })
 
 -- The value a rewrite gave (the name of that very object: the cell that
 -- stores it is told by identity, with no comparison of expressions), the
@@ -968,7 +991,14 @@ describeSel l vw depth node mft mends msel e0 = do
         ICCon { conTagInfo = cti } -> do
             nm <- ctiName cti
             xs <- ends False
-            out "con" nm (resTid ic) [] xs
+            done <- out "con" nm (resTid ic) [] xs
+            -- the constructor of a one-constructor type: where this
+            -- application is written
+            when done $
+                case nm of
+                  NmOf _ 1 -> headPosition l vw node hi
+                  _ -> return ()
+            return done
         ICTuple {} -> do
             xs <- ends False
             out "tup" (NmNum n) (resTid ic) [] xs
@@ -1085,9 +1115,11 @@ describeSel l vw depth node mft mends msel e0 = do
                      Nothing -> return True
           when (vw == 'R' && (w == 0 || w == 1) && not isBit) $
               case (node, operand) of
-                (ECell _, x : _) | linkable x ->
+                (ECell _, x : _) | linkable x -> do
                     emit l (atType tt (if dir == 'p' then RK 'p' "fall" tid w node x
                                        else RK 'u' "fall" tid w x node))
+                    -- where the unpack is written
+                    when (dir == 'u') $ headPosition l 'K' node hi
                 _ -> return ()
           out kind (NmStr "-") (return tt) [] operand
       -- the element cells of an array argument (Nothing: the argument is
@@ -1101,6 +1133,78 @@ describeSel l vw depth node mft mends msel e0 = do
                 Just <$> argEnds l vw depth False els
             _ -> return Nothing
     _ -> return False
+
+-- -----
+-- Source positions of applications
+--
+-- An application has no position of its own: the only one it has is its
+-- head's, the position the compiler keeps for its messages and its
+-- cross-reference.  Where the source is as written, that is where the
+-- head is written: a constructor at that application (or, in the code
+-- made for a deriving clause, in the type's declaration); the unpack
+-- primitive inside the library's own "unpack" (one position for every
+-- use).  When a package's compile puts a function's body in place of a
+-- call, its simplifier stamps the head of the result again: with the
+-- position of the call when the function is imported, of the function's
+-- definition when it is the package's own, or of a use of the parameter
+-- inside that function when the result is the argument itself; never
+-- with a library's position.  So a position that is not a library's
+-- names a place in the source that the application came through: most
+-- often the expression itself or the call that expands to it, sometimes
+-- a function it was passed through.  The tag-to-value primitive is made
+-- with no position.
+--
+-- No Id is read while the evaluator runs: in the live views the head's
+-- Id is kept unread and its position is written after elaboration.
+
+-- The node has, in the view vw, a con record of a one-constructor type
+-- whose constructor is hd; or (vw 'K') it is the typed end of an unpack
+-- whose primitive is hd.  The position is written at once in the final
+-- view (L), and by headPositions after elaboration otherwise.
+headPosition :: TLog -> Char -> End -> Id -> IO ()
+headPosition l vw node hd
+  | vw == 'F' = writeHeadPosition l vw node hd
+  | otherwise = modifyIORef' (tl_heads l) ((vw, node, hd) :)
+
+-- The unpack that made the typed value of the cell p (the typed end of a
+-- K u record) is an application of the primitive hd.
+tlUnpackAt :: TLog -> Int -> Id -> IO ()
+tlUnpackAt l p hd
+  | p < 0 = return ()
+  | otherwise = modifyIORef' (tl_heads l) (('K', ECell p, hd) :)
+
+-- after elaboration: the positions kept by headPosition, oldest first
+headPositions :: TLog -> IO ()
+headPositions l = do
+  xs <- readIORef (tl_heads l)
+  writeIORef (tl_heads l) []
+  forM_ (reverse xs) $ \ (vw, node, hd) -> safely l (writeHeadPosition l vw node hd)
+
+-- L: what the node is, the node, and the number of its head's position
+-- in the table (nothing when the head has no position)
+writeHeadPosition :: TLog -> Char -> End -> Id -> IO ()
+writeHeadPosition l vw node hd = do
+  mn <- positionNo l (getIdPosition hd)
+  case mn of
+    Nothing -> bump l ctLNone
+    Just n -> do nb <- endB l node
+                 put l ctL (B.string7 "L " <> B.char7 vw <> sp <> nb <> sp <> B.intDec n)
+
+-- the number of a position in the table, made at its first use; Nothing
+-- for no position
+positionNo :: TLog -> Position -> IO (Maybe Int)
+positionNo l pos0 = reading l Nothing $ do
+  pos <- evaluate pos0
+  if pos == noPosition then return Nothing else do
+    let key = (pos_file pos, pos_line pos, pos_column pos)
+    m <- readIORef (tl_posTab l)
+    case M.lookup key m of
+      Just n -> return (Just n)
+      Nothing -> do
+        let n = M.size m
+        writeIORef (tl_posTab l) $! M.insert key n m
+        modifyIORef' (tl_posList l) (pos :)
+        return (Just n)
 
 -- -----
 -- Hooks: cells
@@ -1532,6 +1636,7 @@ tlFinalBegin l norm = safely l $ do
   rs <- readIORef (tl_defer l)
   writeIORef (tl_defer l) []
   forM_ (reverse rs) $ \ r -> safely l (writeRec l r)
+  safely l (headPositions l)
 
 -- the canonical cell p is the def named name, of width w (D)
 tlDef :: TLog -> Int -> IType -> String -> IO ()
@@ -1647,6 +1752,16 @@ tlInstance :: TLog -> String -> String -> IO ()
 tlInstance l inst vmod = safely l $
   put l ctI (B.string7 "I " <> B.stringUtf8 (word inst) <> sp <> B.stringUtf8 (word vmod))
 
+-- Argument k of the state instance inst (the named end "<inst>.arg<k>")
+-- feeds, in the instance's Verilog module, a parameter, an input port, a
+-- clock, a reset or an inout of this name ("-": it has no port) (G).
+tlInstArg :: TLog -> String -> Int -> String -> String -> IO ()
+tlInstArg l inst k kind name = safely l $ do
+  -- read first: a failure must not leave half a line
+  _ <- evaluate (length inst + length kind + length name)
+  put l ctG (B.string7 "G " <> B.stringUtf8 (word inst) <> sp <> B.intDec k <> sp <>
+             B.string7 kind <> sp <> B.stringUtf8 (word name))
+
 -- -----
 -- Roots
 
@@ -1756,6 +1871,18 @@ tlFinalEnd l declared fieldsOf bitsOf methods = do
       put l ctT (B.string7 "T " <> B.intDec tid <> sp <> B.string7 (clsName cls) <> sp <>
                  B.intDec w <> sp <> B.intDec ncon <> sp <> B.intDec nfield <> sp <>
                  B.intDec enum <> sp <> B.stringUtf8 s)
+  -- the table of positions (X): number, line, column, whether the file is
+  -- a library's, file
+  safely l $ do
+    ps <- reverse <$> readIORef (tl_posList l)
+    forM_ (zip [0 :: Int ..] ps) $ \ (n, pos) -> safely l $ do
+      -- the file as the compiler's messages name it (without the mark
+      -- of the directory it was compiled in)
+      file <- evaluate (let f = word (getRelativeFilePath (getFString (pos_file pos)))
+                        in  length f `seq` f)
+      put l ctX (B.string7 "X " <> B.intDec n <> sp <> B.intDec (pos_line pos) <> sp <>
+                 B.intDec (pos_column pos) <> sp <>
+                 B.char7 (if pos_is_stdlib pos then '1' else '0') <> sp <> B.stringUtf8 file)
   safely l $ do
     forM_ counterNames $ \ (k, name) -> do
       v <- readArray (tl_counts l) k
