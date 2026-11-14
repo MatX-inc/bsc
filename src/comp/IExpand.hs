@@ -3324,7 +3324,10 @@ evalStaticOp' doUH doBK doUndet e resultType handler = do
               -- make sure the handler only uses "pe"
               let ee = UHExpr (internalError ("evalStaticOp: doUH == False"))
               return (ee, pe)
-  res <-
+  -- With doBK the handler call in the last arm must stay a tail call: the
+  -- handler usually evaluates the rest of the computation (such as the next
+  -- iteration of a loop), so a frame here would cost stack per static op.
+  (if doBK then id else (>>= keepName)) $
    case e' of
     ICon i (ICUndet { iuKind = k }) | doUndet -> do
       let kind_integer = undefKindToInteger k
@@ -3379,9 +3382,10 @@ evalStaticOp' doUH doBK doUndet e resultType handler = do
          -- uses "ee", we pass "p" in for the handler to use with "e'"
          handler ee (p, e')
 
-  if doBK
-    then return res
-    else -- it's a bookkeeping no-op, so preserve the heap name if any
+  where
+    -- it's a bookkeeping no-op, so preserve the heap name if any
+    keepName :: PExpr -> G PExpr
+    keepName res =
       case e of
         IRefT _ _ _ r -> do
             old_cell <- getHeap r
