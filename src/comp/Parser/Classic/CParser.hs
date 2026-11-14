@@ -221,6 +221,7 @@ suff =  dot ..+ pFieldId                >>- flip CSelect
 
 aexp' :: CParser CExpr
 aexp' =     pAny                           >>- anyExprAt
+        ||! pHole                          >>- holeExprAt
         ||! pVarId                         >>- cVar
         ||! pConId                         >>- (\ i -> CCon i [])
         ||! lp ..+ dot ..+ pFieldId +.. rp >>- CLam (Right id_x) . CSelect (cVar id_x)
@@ -708,6 +709,12 @@ pConOper = pConOp ||! l L_bquote ..+ pConId +.. l L_bquote
 
 pAny :: CParser Position
 pAny = l L_uscore
+
+-- "__" lexes as an ordinary varid; as an expression it is a typed hole
+pHole :: CParser Position
+pHole = lcp "__" (\p x -> case x of
+    L_varid fs | fs == fsUnderUnder -> Just p
+    _ -> Nothing)
 
 pVarId :: CParser Id
 pVarId = varSym
