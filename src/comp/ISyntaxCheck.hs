@@ -47,7 +47,7 @@ eqType flags symt r (ITForAll i k t) (ITForAll i' k' t') =
 eqType flags symt r t t' = eqType0 flags symt r t t'
 
 eqType0 :: Flags -> SymTab -> Env -> IType -> IType -> Bool
-eqType0 flags symt r@(E _ _ eqs _) t t' =
+eqType0 flags symt r@(E _ _ eqs _ _) t t' =
     let r_direct = t == t'
         r_ec = EC.isEqual eqs t t'
         r_eq1 = eqType1 flags symt r t t'
@@ -101,14 +101,14 @@ eqType1 _ _ _ _ _ = False
 -- sa'` (when the env has two `Bits a _` dicts with different result
 -- vars) cannot be discharged even though the EC records `sa ≡ sa'`.
 eqTypeNum :: Flags -> SymTab -> Env -> IType -> IType -> Bool
-eqTypeNum flags symt r@(E _ _ ecRaw _) t1 t2
+eqTypeNum flags symt r@(E _ _ ecRaw _ _) t1 t2
     -- Attempt to save time by weeding out cases without TAdd, SizeOf, etc
     -- (since there's no use trying to equate "n" and "m", for instance)
     -- XXX can we also weed out when the kind is not numeric?
     | isITAp t1 || isITAp t2 =
     let numEqCls = mustFindClass symt (CTypeclass idNumEq)
         (r', t1') = convType r t1
-        (rWithT2@(E _ _ _ (PredEnv _ m s)), t2') = convType r' t2
+        (rWithT2@(E _ _ _ (PredEnv _ m s) _), t2') = convType r' t2
         boundTVs = M.elems m
         -- For each numeric-kind EC class, emit a spanning tree of
         -- equalities (n-1 pairs, not all n*(n-1)/2) --- satisfy chases
@@ -292,7 +292,7 @@ groundKind r t =
 
 tCheckIPackage :: Flags -> SymTab -> IPackage a -> Bool
 tCheckIPackage flags symt (IPackage pi _ _ ds) =
-    let r  = emptyEnv
+    let r  = envWithATFIndex symt
         rules = buildATFRules symt
         defOK (IDef i t e _) =
             trace_icheck ("=== tCheckIPackage defOK: " ++ ppReadable i ++ " :: " ++ ppReadable t) $
@@ -308,7 +308,7 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
                                     imod_interface  = ifc }) =
         let eqTy _ = (==) -- Just direct equality, no other manipulations.
             rules = buildATFRules symt
-            r = foldr (\ (i, k) r -> addK i k r) emptyEnv iks
+            r = foldr (\ (i, k) r -> addK i k r) (envWithATFIndex symt) iks
             defOK (IDef i t e _) =
                 let t' = tCheck flags symt rules r eqTy e
                 in  assert (t == t') "defOK2"
@@ -335,15 +335,28 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
 
 -------
 
-data Env = E (M.Map Id IType) (M.Map Id IKind) (EC.EquivClasses IType) PredEnv
+data Env = E (M.Map Id IType) (M.Map Id IKind) (EC.EquivClasses IType) PredEnv ATFIndex
 
 emptyEnv :: Env
-emptyEnv = E M.empty M.empty EC.empty emptyPredEnv
+emptyEnv = E M.empty M.empty EC.empty emptyPredEnv []
+
+envWithATFIndex :: SymTab -> Env
+envWithATFIndex symt = E M.empty M.empty EC.empty emptyPredEnv (mkATFIndex symt)
+
+type ATFIndex = [(Id, Id, Kind, TISort)]
+
+mkATFIndex :: SymTab -> ATFIndex
+mkATFIndex symt =
+    [ (acId, qatfId, atfK, ti)
+    | (atfId, TypeInfo (Just qatfId) atfK _ ti@(TIatf { atf_class_id = acId }) _)
+          <- getAllTypes symt
+    , atfId == qatfId
+    ]
 
 addDict :: SymTab -> IType -> Env -> Env
-addDict symt t e@(E tm km eqs ps) =
+addDict symt t e@(E tm km eqs ps ai) =
     trace_icheck ("addDict: " ++ ppReadable t ++ " -> eqs: " ++ ppReadable new_eqs) $
-    E tm km eqs' ps'
+    E tm km eqs' ps' ai
   where new_eqs = case t of
                     (ITAp (ITAp (ITCon i _ _) t1) t2)
                          | i == idLog   -> [(ITAp iTLog t1, t2)]
@@ -358,7 +371,7 @@ addDict symt t e@(E tm km eqs ps) =
                     -- For classes with type functions: add ATF equivalences.
                     -- E.g., for Container f e with "type Elem f = e":
                     -- dict type "Container a Maybe" adds (Elem a, Maybe)
-                    otherwise -> atfEqsFromDict symt t
+                    otherwise -> atfEqsFromDict ai t
         eqs' = let eqFn (x,y) ec = EC.equate x y ec
                in  foldr eqFn eqs new_eqs
         ps' = addPred symt e t
@@ -366,10 +379,9 @@ addDict symt t e@(E tm km eqs ps) =
 -- Generate type function equivalences from a class dictionary type.
 -- For a class with "type Elem f = e", when dict type "Container a Maybe"
 -- is added, produce the equivalence (Elem a, Maybe).
-atfEqsFromDict :: SymTab -> IType -> [(IType, IType)]
-atfEqsFromDict symt dictType =
+atfEqsFromDict :: ATFIndex -> IType -> [(IType, IType)]
+atfEqsFromDict ai dictType =
     let (hd, classArgs) = splitITAp dictType
-        allTypes = getAllTypes symt
         -- Convert Kind to IKind
         kToIK KStar = IKStar
         kToIK KNum  = IKNum
@@ -385,11 +397,9 @@ atfEqsFromDict symt dictType =
            -- qualified id (ti_qual_id) -- ITCon Ids must be qualified
            -- (enforced by IType.mkITCon) -- and keep a single entry
            -- per ATF by matching only the canonical alias.
-           | (atfId, TypeInfo (Just qatfId) atfK _ ti@(TIatf { atf_class_id = acId
-                                                             , atf_param_idxs = pIdxs
-                                                             , atf_target_idx = tIdx }) _)
-               <- allTypes
-           , atfId == qatfId
+           | (acId, qatfId, atfK, ti@(TIatf { atf_param_idxs = pIdxs
+                                            , atf_target_idx = tIdx }))
+               <- ai
            , acId == cid
            , tIdx < length classArgs
            , all (\idx -> idx >= 0 && idx < length classArgs) pIdxs
@@ -401,24 +411,24 @@ atfEqsFromDict symt dictType =
          _ -> []
 
 addT :: SymTab -> Id -> IType -> Env -> Env
-addT symt i t (E tm km eqs ps) =
+addT symt i t (E tm km eqs ps ai) =
     trace_icheck ("addT: " ++ ppReadable i ++ " :: " ++ ppReadable t) $
-    addDict symt t $ E (M.insert i t tm) km eqs ps
+    addDict symt t $ E (M.insert i t tm) km eqs ps ai
 
 addK :: Id -> IKind -> Env -> Env
-addK i k (E tm km eqs ps) = E tm (M.insert i k km) eqs ps
+addK i k (E tm km eqs ps ai) = E tm (M.insert i k km) eqs ps ai
 
 findT :: Id -> Env -> IType
-findT i (E tm _ _ _) =
+findT i (E tm _ _ _ _) =
     case M.lookup i tm of
         Just t -> t
         Nothing -> internalError ("ISyntaxCheck.findT " ++ ppString i ++ "\n" ++ ppReadable (M.toList tm))
 
 findK :: Id -> Env -> Maybe IKind
-findK i (E _ km _ _) = M.lookup i km
+findK i (E _ km _ _ _) = M.lookup i km
 
 instance PPrint Env where
-    pPrint d _ (E tm km eqs ps) =
+    pPrint d _ (E tm km eqs ps _) =
         text "Env" <+>
         (pPrint d 0 (M.toList tm) $$
          pPrint d 0 (M.toList km) $$
@@ -438,13 +448,13 @@ convType r (ITAp t1 t2) =
     let (r', t1') = convType r t1
         (r'', t2') = convType r' t2
     in  (r'', TAp t1' t2')
-convType r@(E tm km eqs (PredEnv n m s)) (ITVar i) =
+convType r@(E tm km eqs (PredEnv n m s) ai) (ITVar i) =
     case (M.lookup i m) of
       Just tyvar -> (r, TVar tyvar)
       Nothing ->
           let k = fromJustOrErr ("findK: " ++ ppReadable (r, i)) $ findK i r
               tyvar = TyVar i n (iToCK k)
-              r' = E tm km eqs (PredEnv (n+1) (M.insert i tyvar m) s)
+              r' = E tm km eqs (PredEnv (n+1) (M.insert i tyvar m) s) ai
           in  (r', TVar tyvar)
 convType r (ITCon i k s) = (r, TCon (TyCon i (Just (iToCK k)) s))
 convType r (ITNum n) = (r, TCon (TyNum n noPosition))
@@ -457,7 +467,7 @@ convTypes r (t:ts) = let (r', t') = convType r t
                      in  (r'', t':ts')
 
 addPred :: SymTab -> Env -> IType -> PredEnv
-addPred symt r@(E _ _ _ ps) t =
+addPred symt r@(E _ _ _ ps _) t =
     let
         res =
             case (splitITAp t) of
@@ -467,7 +477,7 @@ addPred symt r@(E _ _ _ ps) t =
               _ -> Nothing
     in
         case res of
-          Just (E _ _ _ (PredEnv n m s), new_pred) ->
+          Just (E _ _ _ (PredEnv n m s) _, new_pred) ->
               PredEnv n m (S.insert new_pred s)
           Nothing -> ps
 
