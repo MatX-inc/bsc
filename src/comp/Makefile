@@ -108,8 +108,11 @@ BSCEXES = bsc
 TCLEXES = bluetcl
 UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba vcdcheck
 SHOWRULESEXES = showrules
+# Build-consistency checkers: installed as part of the normal install
+# (not just install-extra), because the library build runs them
+CHECKEXES = tconcheck
 
-EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES)
+EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES) $(CHECKEXES)
 
 # Point the linker at the vendored solvers installed in $(PREFIX)/lib/SAT.
 CABAL_ENV = LIBRARY_PATH="$(abspath $(PREFIX))/lib/SAT$${LIBRARY_PATH:+:$$LIBRARY_PATH}"
@@ -135,7 +138,7 @@ $(EXES): version
 # Install targets
 
 .PHONY: install
-install: $(BSCEXES) $(TCLEXES) install-bsc install-bluetcl
+install: $(BSCEXES) $(TCLEXES) $(CHECKEXES) install-bsc install-bluetcl install-checkers
 
 .PHONY: install-extra
 install-extra: $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
