@@ -4,8 +4,9 @@
 --   late       a restore after a string is interned is rejected
 --   empty      an empty snapshot restores and changes nothing, so another
 --              restore may follow it
---   generated  generated spellings restore as plain entries, and a name
---              noted after the restore is placed after every restored entry
+--   generated  generated spellings restore as plain entries, a CSE name
+--              made from its number is its restored entry, and a name
+--              interned after the restore is placed after every restored entry
 --   lazycount  a snapshot whose internNextId interns a string when it is
 --              evaluated is rejected, and none of its entries is restored
 import Control.Exception(ErrorCall, evaluate, try)
@@ -14,7 +15,7 @@ import Data.Either(isLeft, isRight)
 import System.Environment(getArgs)
 import System.Exit(exitFailure)
 
-import SpeedyString(InternSnapshot(..), fromString, internCount,
+import SpeedyString(InternSnapshot(..), fromString, fromEnumName, internCount,
                     restoreInternState, snapshotInternState)
 
 main :: IO ()
@@ -62,8 +63,9 @@ main = do
         after <- snapshotInternState
         check "the table is that snapshot" (after == sample)
       "generated" -> do
-        let spellings = ["a", "_tctyvar5", "_tcdict2", "_tctyvar05", "b"]
-            snap = InternSnapshot 5 (zip [0 ..] spellings)
+        let spellings = ["a", "_tctyvar5", "_tcdict2", "_tctyvar05", "__i7",
+                         "__j0", "__i07", "b"]
+            snap = InternSnapshot 8 (zip [0 ..] spellings)
         r <- restoreInternState snap
         check "generated spellings restore" (isRight r)
         let ss = map fromString spellings
@@ -72,11 +74,15 @@ main = do
         v9 <- evaluate (fromString "_tctyvar9")
         check "_tctyvar5 is its restored entry"
               (case drop 1 ss of (s1:_) -> fromString "_tctyvar5" == s1; [] -> False)
+        check "__i7 and __j0 made from their numbers are their restored entries"
+              (case drop 4 ss of
+                 (s4:s5:_) -> fromEnumName "_i" 7 == s4 && fromEnumName "_j" 0 == s5
+                 _ -> False)
         check "strings interned after the restore follow every restored entry"
               (case reverse ss of (sLast:_) -> sLast < c && c < v9; [] -> False)
         after <- snapshotInternState
         check "the snapshot appends newly interned names in order"
-              (after == InternSnapshot 7
+              (after == InternSnapshot 10
                           (zip [0 ..] (spellings ++ ["c", "_tctyvar9"])))
       "lazycount" -> do
         let snap = sample { internNextId = fromString "count" `seq` 4 }
