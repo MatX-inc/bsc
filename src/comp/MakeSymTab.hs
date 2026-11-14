@@ -656,7 +656,7 @@ mkInstId mi t =
     addIdProp (mkQId pos qfs inst_fs) IdPDict
   where pos = getPosition t
         qfs = getIdFString mi
-        inst_fs = concatFString (intersperse fsTilde (map getIdFStringP (flat (expandSyn t))))
+        inst_fs = concatFString (intersperse fsMangleSep (map getIdFStringP (flat (expandSyn t))))
         flat (TVar (TyVar i _ _)) = [i]
         flat (TCon (TyCon i _ _)) = [i]
         flat (TCon (TyNum n _)) = [mkNumId n]
