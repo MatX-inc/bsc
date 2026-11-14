@@ -125,9 +125,34 @@ tiOneDef d = return d
 -- as they will ever be.  Only the constructors that survive
 -- typechecking are traversed (compare "getFreeE" below).
 reportTypedHoles :: CDefn -> TI CDefn
-reportTypedHoles (CValueSign (CDefT i vs qt cs)) = do
-    cs' <- mapM thClause cs
-    return (CValueSign (CDefT i vs qt cs'))
+reportTypedHoles d@(CValueSign (CDefT i vs qt cs))
+    | any hasHoleClause cs = do
+        cs' <- mapM thClause cs
+        return (CValueSign (CDefT i vs qt cs'))
+    | otherwise = return d
+  where
+    hasHoleClause (CClause _ qs e) = any hasHoleQual qs || hasHoleExpr e
+    hasHoleQual (CQGen _ _ e) = hasHoleExpr e
+    hasHoleQual (CQFilter e) = hasHoleExpr e
+    hasHoleDefl (CLValueSign (CDefT _ _ _ dcs) qs) =
+        any hasHoleClause dcs || any hasHoleQual qs
+    hasHoleDefl _ = False
+    hasHoleRule (CRule _ mi qs e) =
+        maybe False hasHoleExpr mi || any hasHoleQual qs || hasHoleExpr e
+    hasHoleRule (CRuleNest _ mi qs rs) =
+        maybe False hasHoleExpr mi || any hasHoleQual qs || any hasHoleRule rs
+    hasHoleExpr (CAnyT _ UHole _) = True
+    hasHoleExpr (Cletseq ds e) = any hasHoleDefl ds || hasHoleExpr e
+    hasHoleExpr (Cletrec ds e) = any hasHoleDefl ds || hasHoleExpr e
+    hasHoleExpr (CApply f es) = hasHoleExpr f || any hasHoleExpr es
+    hasHoleExpr (CTaskApplyT f _ es) = hasHoleExpr f || any hasHoleExpr es
+    hasHoleExpr (CConT _ _ es) = any hasHoleExpr es
+    hasHoleExpr (CStructT _ fs) = any (hasHoleExpr . snd) fs
+    hasHoleExpr (Crules _ rs) = any hasHoleRule rs
+    hasHoleExpr (CTApply e _) = hasHoleExpr e
+    hasHoleExpr (CmoduleVerilogT _ m _ _ _ ses _ _ _) =
+        hasHoleExpr m || any (hasHoleExpr . snd) ses
+    hasHoleExpr _ = False
 reportTypedHoles d = return d
 
 thClause :: CClause -> TI CClause

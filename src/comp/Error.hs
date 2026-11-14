@@ -812,7 +812,7 @@ data ErrMsg =
         | WIncoherentMatch String String
         | WOrphanInst String
         | WTransitiveIncoherentMatch String String String
-        | WTypedHole String [String] -- ^ inferred type, bloogle approximate matches
+        | WTypedHole String [String] -- inferred type, bloogle approximate matches
         | EModInstWrongArgs [Position]
         | EAmbiguous [(String, Position, [(String, [Position])])]
         | EAmbiguousExplCtx [Doc] [Doc] Doc
@@ -3126,6 +3126,12 @@ getErrorText (WTransitiveIncoherentMatch pred root_pred root_inst) =
 getErrorText (WInterfaceSyntaxUsedForStruct name) =
     (Type 168, empty, s2par ("Interface syntax used to construct " ++ quote name ++
                              ", but that type is a struct, not an interface."))
+
+getErrorText (WTypedHole t ms) =
+    (Type 169, empty,
+     s2par ("Typed hole " ++ quote "__" ++ " has the inferred type:") $$
+     nest 2 (text t) $$
+     bloogleMatchesDoc "approximate" ms)
 
 -- Generation Errors
 
