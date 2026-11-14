@@ -96,7 +96,8 @@ import LiftDicts(liftDictsPkg, liftDictsWrapper,
                  LiftDictsContext, prepareLiftDictsContext,
                  reserveLiftDictsNames)
 import ISimpDicts(iSimpDicts)
-import FixupDefs(fixupDefs, updDef, mkDictBuckets, mkDictRedirects)
+import FixupDefs(fixupDefs, updDef, mkDictBuckets, DictEvMap, DictRedirects,
+                 mkDictEvMapAndRedirects, extendDictRedirects)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
@@ -546,7 +547,7 @@ compilePackage
     -- whole compile (see mkDictRedirects); "updDef" reuses it per
     -- synthesized module instead of rebuilding the evidence map over
     -- every imported def each time
-    let dictRedirects = mkDictRedirects dictBuckets imod binmods
+    let (dictEvMap, dictRedirects) = mkDictEvMapAndRedirects dictBuckets imod binmods
     let (imodf, alldefsList) = fixupDefs dictRedirects imod binmods
     let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
     iPCheck flags symt imodf "fixup"
@@ -610,10 +611,11 @@ compilePackage
     --   doesn't update "alldefs"; this is likely OK because it is only used
     --   to build undefined values (in IExpand) and to insert RWires
     --   (in AAddSchedAssumps)
-    let gen :: Maybe LiftDictsContext -> (IPackage HeapData, Bool) ->
-               [WrapInfo] -> IO (IPackage HeapData, Bool)
-        gen _ (im, !success) []  = return (im, success)
-        gen dict_context (im, !success) (wi@(WrapInfo { mod_nm = i, wrapped_mod = i' }) : xs) = do
+    let gen :: Maybe LiftDictsContext -> DictEvMap -> DictRedirects ->
+               (IPackage HeapData, Bool) -> [WrapInfo] ->
+               IO (IPackage HeapData, Bool)
+        gen _ _ _ (im, !success) []  = return (im, success)
+        gen dict_context dict_evmap dict_redirects (im, !success) (wi@(WrapInfo { mod_nm = i, wrapped_mod = i' }) : xs) = do
             let (mfile, mpkg, _) = dumpnames
                 dumpnames' = (mfile, mpkg, Just (getIdString (unQualId i)))
                 fwrapper = i `elem` map (\ (i, _, _, _, _) -> i) funcs
@@ -668,7 +670,10 @@ compilePackage
             -- references
             -- XXX Note that alldefs is not updated here.  This works
             -- XXX because the defs we use from it will not have changed.
-            let im' = updDef dictRedirects idef im binmods
+            let (dict_evmap', dict_redirects') =
+                    extendDictRedirects dictBuckets dict_evmap
+                                        wrap_lifted_defs dict_redirects
+                im' = updDef dict_redirects' idef im_lifted binmods
             t <- dump errh flags t DFwrapper_fixup dumpnames' im'
 
             t <- dump errh flags tStartWrapper DFwrappercomp dumpnames' idef
@@ -679,10 +684,10 @@ compilePackage
                     Just context -> Just $! reserveLiftDictsNames
                         [i | IDef i _ _ _ <- wrap_lifted_defs] context
             -- recurse for each module in [WrapInfo]
-            gen dict_context' (im', success && ok && ok2) xs
+            gen dict_context' dict_evmap' dict_redirects' (im', success && ok && ok2) xs
 
 
-    (imodr, success) <- gen wrapper_dict_context (imods, True) ordgens
+    (imodr, success) <- gen wrapper_dict_context dictEvMap dictRedirects (imods, True) ordgens
 
     t <- getNow
     -- Finally, generate interface files
