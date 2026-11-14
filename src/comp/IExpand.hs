@@ -3441,10 +3441,42 @@ instance PPrint Arg where
     pPrint d p (E e) = pPrint d p e
     pPrint d p (T t) = text"\183" <> pPrint d p t
 
+-- The tree a fold of iAp and iAP over the arguments builds, each node built
+-- once: type arguments join a node only while it has no expression arguments.
 mkAp :: HExpr -> [Arg] -> HExpr
 mkAp f [] = f
-mkAp f (E e : as) = mkAp (iAp f e) as
-mkAp f (T t : as) = mkAp (iAP f t) as
+mkAp f as = mkApTree f as
+
+mkApTree :: HExpr -> [Arg] -> HExpr
+mkApTree (IAps g ts es) as@(E _ : _) = wrap (IAps g ts (es ++ es')) rest
+  where !(es', rest) = spanE as
+-- Takes the type run and the expression run that follows it here, rather than
+-- adding the types and recursing into the clause above: recursing would build
+-- a types-only node and immediately rebuild it.
+mkApTree (IAps g ts []) as@(T _ : _) = wrap (IAps g (ts ++ ts') es') rest
+  where !(ts', es', rest) = firstRunT as
+mkApTree f as = wrap f as
+
+-- New nodes around h, one per run.
+wrap :: HExpr -> [Arg] -> HExpr
+wrap h [] = h
+wrap h as = wrap (IAps h ts es) rest
+  where !(ts, es, rest) = firstRunT as
+
+-- A run of type arguments, then a run of expression arguments, and the rest.
+firstRunT :: [Arg] -> ([IType], [HExpr], [Arg])
+firstRunT as = (ts, es, rest)
+  where !(ts, as') = spanT as
+        !(es, rest) = spanE as'
+
+-- Each in one pass that builds the run strictly, without a thunk per element.
+spanT :: [Arg] -> ([IType], [Arg])
+spanT (T t : as) = (t : ts, rest) where !(ts, rest) = spanT as
+spanT as = ([], as)
+
+spanE :: [Arg] -> ([HExpr], [Arg])
+spanE (E e : as) = (e : es, rest) where !(es, rest) = spanE as
+spanE as = ([], as)
 
 mkApUH :: HExpr -> [Arg] -> G HExpr
 mkApUH f es = do es' <- mapM evalArgUH es
