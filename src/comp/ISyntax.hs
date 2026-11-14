@@ -807,8 +807,6 @@ data IConInfo a =
           -- and does not appear in IPackage
           -- XXX consider renaming it to ICModDef?
         | ICValue { iConType :: IType, iValDef :: IExpr a }
-          -- module arguments that are interfaces -- NO LONGER SUPPORTED
-        | ICIFace { iConType :: IType, ifcTyId :: Id, ifcIds :: [(Id, Integer, Bool)] }
           -- a constructor containing rule pragmas, which is used in the
           -- arguments to PrimRule.
           -- only exists before expansion
@@ -930,7 +928,6 @@ cmpC c1 c2 =
         ICMethArg { } -> EQ
         ICModPort { } -> EQ
         ICModParam { } -> EQ
-        ICIFace { ifcTyId = ti1, ifcIds = is1 } -> compare (ti1, is1) (ifcTyId c2, ifcIds c2)
         ICRuleAssert { iAsserts = asserts } -> compare asserts (iAsserts c2)
         ICSchedPragmas { iPragmas = pragmas } -> compare pragmas (iPragmas c2)
         ICMethod { iInputNames = inames1, iOutputNames = outnames1, iMethod = meth1 } ->
@@ -1193,7 +1190,6 @@ instance PPrint (IExpr a) where
     pPrint d@PDReadable p (ICon i (ICOut _ _)) = text "out" <> ppId d i
     pPrint d@PDReadable p (ICon i (ICSel _ _ _)) = text "." <> ppId d i
     pPrint d@PDReadable _ (ICon i (ICPrim _ p)) = text (show p)
-    pPrint d@PDReadable _ (ICon i (ICIFace _ _ is)) = ppId d i <> text"{" <> sep (map (pPrint d 10) is) <> text "}"
     pPrint d@PDReadable _ (ICon i (ICLazyArray {})) = ppId d i <> text "[Array]"
     -- distinguish held coercions from an application of the bare
     -- primitive (they only ever print from diagnostics, so show the
@@ -1271,7 +1267,6 @@ instance NFData (IConInfo a) where
     -- rnf (ICValue x1 x2) = rnf2 x1 x2
     -- XXX the above line causes cycles somehow so, like ICDef, we don't enter ICValue
     rnf (ICValue x1 x2) = ()
-    rnf (ICIFace x1 x2 x3) = rnf3 x1 x2 x3
     rnf (ICRuleAssert x1 x2) = rnf2 x1 x2
     rnf (ICSchedPragmas x1 x2) = rnf2 x1 x2
     rnf (ICMethod x1 x2 x3 x4) = rnf4 x1 x2 x3 x4
@@ -1455,7 +1450,6 @@ showTypelessCI (ICMethArg {iConType = t}) = "(ICMethArg _ )"
 showTypelessCI (ICModPort {iConType = t}) = "(ICModPort _ )"
 showTypelessCI (ICModParam {iConType = t}) = "(ICModParam _ )"
 showTypelessCI (ICValue {iConType = t, iValDef = e}) = "(ICValue)"
-showTypelessCI (ICIFace {iConType = t, ifcTyId = i, ifcIds = ids}) = "(ICIFace _ " ++ (show i) ++ " " ++ (show ids) ++ ")"
 showTypelessCI (ICRuleAssert {iConType = t, iAsserts = rps}) = "(ICRuleAssert _ " ++ (show rps) ++ ")"
 showTypelessCI (ICSchedPragmas {iConType = t, iPragmas = sps}) = "(ICSchedPragmas _ " ++ (show sps) ++ ")"
 showTypelessCI (ICMethod {iConType = t, iInputNames = ins, iOutputNames = outs, iMethod = m }) = "(ICMethod " ++ (show ins) ++ " " ++ (show outs) ++ " " ++ (ppReadable m) ++ ")"
