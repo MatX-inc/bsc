@@ -1947,7 +1947,7 @@ getErrorText (EDefaultResetNoSuchArg name) =
             "the " ++ quote "default_reset_port" ++ " attribute instead."))
 
 getErrorText (ENonHaskellOperator op cs) =
-    (Parse 225, empty,
+    (Parse 227, empty,
      s2par ("The operator " ++ quote op ++ " contains the " ++
             (if plural then "characters " else "character ") ++
             unwordsAnd (map showU cs) ++

@@ -2,7 +2,7 @@ package SchemaPipingOperator((⨠), (≫), result) where
 
 -- U+2A20 (Z NOTATION SCHEMA PIPING) and U+226B (MUCH GREATER-THAN) are
 -- in the MathSymbol general category, which GHC accepts in operators,
--- so no P0225 error (or warning) should be reported for them.
+-- so no P0227 error (or warning) should be reported for them.
 
 infixr 12 ⨠
 infixl 12 ≫

@@ -6,11 +6,10 @@ module Lex(Token(..), LexItem(..), LFlags(..), prLexItem,
 -- Bluespec lexical analysis.  Written for speed, not beauty!
 import Numeric(readFloat)
 import Data.Char
-import Data.List(nub)
 -- import Data.Ratio
 import qualified Data.Set as S
 
-import Util(itos)
+import Util(itos, stableOrdNub)
 import Position
 import Error(internalError, ErrMsg(..), EMsg)
 import FStringCompat
@@ -594,6 +593,6 @@ nonHaskellOperatorErrors ts = concatMap err (takeWhile (not . isEnd) ts)
     err (Token pos (L_consym fs)) = opErr pos (getFString fs)
     err _ = []
     opErr pos op =
-        case nub (filter (not . isHsSymbol) op) of
+        case stableOrdNub (filter (not . isHsSymbol) op) of
           [] -> []
           cs -> [(pos, ENonHaskellOperator op cs)]
