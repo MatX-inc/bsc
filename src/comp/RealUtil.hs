@@ -6,8 +6,8 @@ module RealUtil( log2, log10
 
 import Warmup ()
 import Data.Coerce (coerce)
-import GHC.Word
-import GHC.Exts
+import Data.Word (Word64)
+import GHC.Float (castDoubleToWord64, castWord64ToDouble)
 import Foreign.C.Types
 
 -- ---------------
