@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 module FStringCompat(FString, getFString,
-                     tmpFString, cloneFString, concatFString,
+                     tmpFString, enumFString, cloneFString, concatFString,
                      mkNumFString, mkStrFString, mkFString,
                      filterFString
                     ) where
@@ -44,6 +44,10 @@ cloneFString fs f = head [f' | n <- [1..] :: [Integer],
 
 tmpFString :: Int -> String -> FString
 tmpFString _ = fromString
+
+-- "_" ++ str ++ itos n
+enumFString :: String -> Int -> FString
+enumFString str n = FString (S.fromEnumName str n)
 
 concatFString :: [FString] -> FString
 concatFString fs = FString $ S.concat [s | FString s <- fs]
