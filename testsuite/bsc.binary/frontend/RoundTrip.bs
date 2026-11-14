@@ -1,0 +1,62 @@
+package RoundTrip where
+
+-- Constructs whose signatures and typechecked forms the format 2
+-- encoding must round-trip (see frontend.exp)
+
+import Vector
+import FIFO
+
+data Op = Add | Sub | Mul (UInt 8)
+    deriving (Eq, Bits, FShow)
+
+struct Pair a = { first :: a; second :: a }
+    deriving (Eq, Bits)
+
+type Word = Bit 32
+
+class Shape s where
+    area :: s -> Integer
+    perimeter :: s -> Integer
+    perimeter _ = 0
+
+data Square = Square Integer
+
+instance Shape Square where
+    area (Square n) = n * n
+
+interface Counter =
+    incr :: Action
+    value :: Word
+
+mkCounter :: Module Counter
+mkCounter =
+  module
+    r :: Reg Word <- mkReg 0
+    f :: FIFO Word <- mkFIFO
+    rules
+      "drain": when True ==> f.deq
+    interface
+      incr = do r := r + 1
+                f.enq r
+      value = r
+
+sumV :: Vector 4 Word -> Word
+sumV v = foldr (+) 0 v
+
+swapP :: Pair a -> Pair a
+swapP p = Pair { first = p.second; second = p.first }
+
+evens :: Integer -> List Integer
+evens n = let go :: Integer -> List Integer
+              go k = if k > n then Nil else Cons k (go (k + 2))
+          in  go 0
+
+classify :: Op -> String
+classify op = case op of
+                Add -> "add"
+                Sub -> "sub"
+                Mul k -> if k == 0 then "zero" else "mul"
+
+{-# verilog sysRoundTrip #-}
+sysRoundTrip :: Module Counter
+sysRoundTrip = mkCounter
