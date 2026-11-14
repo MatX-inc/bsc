@@ -4,7 +4,7 @@ module ISyntax(
         IPackage(..),
         IDef(..),
         IKind(..),
-        IType(..),
+        IType(ITVar, ITCon, ITNum, ITStr, ITAp, ITForAll),
         IExpr(..),
         ConTagInfo(..),
         IConInfo(..),
@@ -35,7 +35,6 @@ module ISyntax(
         iREmpty,
         uniquifyRules,
         fdVars,
-        normITAp,
         splitITAp,
         aTVars,
         fTVars,
@@ -51,9 +50,7 @@ module ISyntax(
         showTypeless,
         showTypelessRules,
         getIExprPosition,
-        getITypePosition,
         getIExprPositionCross,
---        getITypePositionCross,
         getIRuleId,
         getIRuleStateLoc,
         sameClockDomain,
@@ -94,10 +91,9 @@ import Eval
 import Id
 import Wires(ResetId, ClockDomain, ClockId, noClockId, noResetId, noDefaultClockId, noDefaultResetId, WireProps)
 import IdPrint
-import PreIds(idId, idBind, idReturn, idPack, idUnpack, idMonad, idLiftModule, idBit, idFromInteger, idTNumToStr)
+import PreIds(idBind, idReturn, idPack, idUnpack, idMonad, idLiftModule, idBit, idFromInteger)
 import Backend
 import Prim(PrimOp(..))
-import TypeOps
 import ConTagInfo
 import VModInfo(VModInfo, vArgs, vName, VName(..), {- VeriPortProp(..), -}
                 VArgInfo(..), VFieldInfo(..), isParam, VWireInfo)
@@ -106,7 +102,6 @@ import Pragma(Pragma, PProp, RulePragma, ISchedulePragma,
               extractSchedPragmaIds, removeSchedPragmaIds, mapSPIds)
 import Position
 import Data.Maybe
-import FStringCompat(mkNumFString)
 
 import qualified Data.Set as S
 import Flags
@@ -414,26 +409,9 @@ checkRUnionAttributes (IRules sps1 rs1) (IRules sps2 rs2) =
         (msgs, sps')
 
 
--- This function just handles special built-in type functions like TAdd and Id__,
--- would be nice to get rid of it if we can make those work via preds, as with
--- user-defined type functions, but that seems hard because we still need to
--- permit them in instance heads.
-normITAp :: IType -> IType -> IType
-normITAp (ITAp (ITCon op _ _) (ITNum x)) (ITNum y) | isJust (res) =
-    mkNumConT (fromJust res)
-  where res = opNumT op [x, y]
-normITAp (ITCon op _ _) (ITNum x) | isJust (res) =
-    mkNumConT (fromJust res)
-  where res = opNumT op [x]
-normITAp (ITAp (ITCon op _ _) (ITStr x)) (ITStr y) | isJust (res) =
-    ITStr (fromJust res)
-  where res = opStrT op [x, y]
-normITAp (ITCon op _ _) (ITNum x) | op == idTNumToStr =
-    ITStr (mkNumFString x)
-
-normITAp f@(ITCon op _ _) a | op == idId = a
-
-normITAp f a = ITAp f a
+-- The type-function reduction that used to live here (normITAp) is
+-- now performed by the ITAp smart constructor itself; see
+-- IType.mkITAp.
 
 aTVars :: IType -> S.Set Id
 aTVars (ITForAll i _ t) = S.insert i (aTVars t)
@@ -1286,12 +1264,6 @@ getIExprPositionCross iexpr =
        then (getIExprPositionCrossInternal 0 iexpr)
        else noPosition
 
--- getITypePositionCross :: IType -> Position
--- getITypePositionCross itype =
---     if (True)
---        then (getITypePositionCrossInternal 0 itype)
---        else noPosition
-
 -- #############################################################################
 -- #
 -- #############################################################################
@@ -1313,9 +1285,6 @@ getIExprPositionCrossInternal n (ILAM i _ e) =
     let pos = (getIExprPositionCrossInternal (n + 1) e)
     in  firstPos [pos, getIdPosition i]
 
--- getIExprPositionCrossInternal n (ICon i (ICPrim t op)) =
---     getITypePositionCrossInternal (n + 1) t
-
 getIExprPositionCrossInternal _ (ICon i (ICSel _ _ _)) =
     if (isPassThroughOp i)
         then -- trace("DDD " ++ (pfpString i)) $
@@ -1325,30 +1294,11 @@ getIExprPositionCrossInternal _ (ICon i (ICSel _ _ _)) =
 
 
 getIExprPositionCrossInternal _ (ICon i _) = getIdPosition i
--- Prefer the positions stamped on the heap ref (collected out of band
--- when expressions are rewritten); fall back to the type's positions.
-getIExprPositionCrossInternal n (IRefT t _ poss _) =
-    firstPos (S.toAscList poss ++ [getITypePositionCrossInternal (n + 1) t])
-
-
-getITypePositionCrossInternal :: Int -> IType -> Position
-getITypePositionCrossInternal 10 _ = noPosition
-
-getITypePositionCrossInternal n (ITForAll i _ t) =
-    let pos = (getIdPosition i)
-    in  firstPos [pos, (getITypePositionCrossInternal (n + 1) t)]
-
-getITypePositionCrossInternal n (ITAp t t') =
-    let t_pos = getITypePositionCrossInternal (n + 1) t
-        t'_pos = getITypePositionCrossInternal (n + 1) t'
-        pos_list = [t_pos, t'_pos]
-    in  firstPos pos_list
-
-getITypePositionCrossInternal _ (ITVar i) = getIdPosition i
-getITypePositionCrossInternal _ (ITCon i _ _) = getIdPosition i
-getITypePositionCrossInternal _ (ITNum _) = noPosition
-getITypePositionCrossInternal _ (ITStr _) = noPosition
-
+-- The positions stamped on the heap ref (collected out of band when
+-- expressions are rewritten).  There is no type fallback: Ids embedded
+-- in ITypes carry no positions (IType normalizes them on entry).
+getIExprPositionCrossInternal _ (IRefT _ _ poss _) =
+    firstPos (S.toAscList poss)
 
 
 -- #############################################################################
@@ -1375,48 +1325,30 @@ isPassThroughOp i = (i == idBit) ||
 -- #
 -- #############################################################################
 
+-- Types contribute no positions here: Ids embedded in ITypes carry
+-- noPosition by construction (IType normalizes them on entry), so
+-- only term-side Ids and heap-ref stamps are consulted.
 getIExprPosition :: IExpr a -> Position
 
-getIExprPosition (ILam i t e) =
-    let t_pos = getITypePosition t
-        i_pos = getIExprPosition e
-        pos_list = [getIdPosition i, t_pos, i_pos]
-    in  firstPos pos_list
+getIExprPosition (ILam i _ e) =
+    firstPos [getIdPosition i, getIExprPosition e]
 
-getIExprPosition (IAps e ts es) =
-    let t_pos_list = map getITypePosition ts
-        i_pos_list = map getIExprPosition es
-        pos_list = getIExprPosition e : t_pos_list ++ i_pos_list
-    in  firstPos pos_list
+getIExprPosition (IAps e _ es) =
+    firstPos (getIExprPosition e : map getIExprPosition es)
 
 getIExprPosition (IVar i) = getIdPosition i
 
 getIExprPosition (ILAM i _ e) = firstPos [getIdPosition i, getIExprPosition e]
--- getIExprPosition (ICon i (ICPrim t op)) = getITypePosition t
 getIExprPosition (ICon i _) = getIdPosition i
--- Prefer the positions stamped on the heap ref (collected out of band
--- when expressions are rewritten); fall back to the type's positions.
+-- The positions stamped on the heap ref (collected out of band when
+-- expressions are rewritten).
 -- When poss has several entries the pick is by Ord Position, whose
 -- FString file component compares by intern order.  Today every live
 -- poss is a singleton allocation seed, so the pick rule is moot; when
 -- issue #863 re-enables stamping at the evaluator sites, revisit it
 -- (recency is not representable in a set).
-getIExprPosition (IRefT t _ poss _) =
-    firstPos (S.toAscList poss ++ [getITypePosition t])
-
-getITypePosition :: IType -> Position
-getITypePosition (ITForAll i _ t) = firstPos [getIdPosition i, getITypePosition t]
-
-getITypePosition (ITAp t t') =
-    let t_pos = getITypePosition t
-        t'_pos = getITypePosition t'
-        pos_list = [t_pos, t'_pos]
-    in  firstPos pos_list
-
-getITypePosition (ITVar i) = getIdPosition i
-getITypePosition (ITCon i _ _) = getIdPosition i
-getITypePosition (ITNum _) = noPosition
-getITypePosition (ITStr _) = noPosition
+getIExprPosition (IRefT _ _ poss _) =
+    firstPos (S.toAscList poss)
 
 --------
 
@@ -1431,13 +1363,6 @@ iAp f e = IAps f [] [e]
 iAps :: IExpr a -> [IExpr a] -> IExpr a
 iAps f [] = f
 iAps f es = IAps f [] es
-
-mkNumConT :: Integer -> IType
-mkNumConT i =
-    if i < 0 then
-        internalError ("mkNumCon: " ++ show i)
-    else
-        ITNum i
 
 --------
 
