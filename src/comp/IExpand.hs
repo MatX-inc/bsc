@@ -4184,7 +4184,7 @@ evalHeap (ptr, ref) = do
         case pe' of
             P _ (IAps (ICon _ (ICUndet { })) _ _) -> internalError ("evalHeap: " ++ ppReadable (ptr, pe'))
             -- create IRefs for ICTuple fields to prevent repeat evaluation after selection
-            P p (IAps f@(ICon con_name (ICTuple { fieldIds = field_names })) ts as) -> do
+            P p e_ap@(IAps f@(ICon con_name (ICTuple { fieldIds = field_names })) ts as) -> do
                 let prefix | Just pfx <- expr_name = mkUSId (unQualId pfx)
                            | otherwise = id
                     struct_field_names =
@@ -4197,7 +4197,7 @@ evalHeap (ptr, ref) = do
                          zip4 [0..] argTys as struct_field_names
                 -- the stored tuple and its fields' cells (type links); a
                 -- copy of another cell's value is that cell's record
-                when (not copied) $ tlIO (\ l -> tlStored l ptr f ts ft as)
+                when (not copied) $ tlIO (\ l -> tlStored l ptr e_ap ft)
                 when doDebug $ traceM ("evalHeap move #1\n" ++ ppReadable (zip as' as))
                 let pe'' = P p (IAps f ts as')
                 {-           (mapIExprPosition cross
@@ -4208,7 +4208,7 @@ evalHeap (ptr, ref) = do
                 return pe''
             -- create IRefs for arguments of other potentially non-strict
             -- applications (e.g., ICCon) to prevent repeat evaluation later
-            P p (IAps f ts as) -> do
+            P p e_ap@(IAps f ts as) -> do
                 let isLazyOp (ICon _ (ICCon {})) = True
                     isLazyOp (ICon _ (ICTuple {})) = True
                     isLazyOp (ICon _ (ICPrim _ p)) | p == PrimChr ||
@@ -4231,7 +4231,7 @@ evalHeap (ptr, ref) = do
                 as' <- zipWithM th (zip [0..] argTys) as
                 -- the stored application and its arguments' cells, for
                 -- every head (type links)
-                when (not copied) $ tlIO (\ l -> tlStored l ptr f ts ft as)
+                when (not copied) $ tlIO (\ l -> tlStored l ptr e_ap ft)
                 when doDebug $ traceM ("evalHeap move #2\n" ++ ppReadable (zip as' as))
                 let pe'' = P p (IAps f ts as')
                 {-            (mapIExprPosition cross
