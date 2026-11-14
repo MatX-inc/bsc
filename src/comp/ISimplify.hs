@@ -1,6 +1,7 @@
 module ISimplify(iSimplify) where
 
 import Data.List((\\), findIndex)
+import Data.Graph(stronglyConnComp, SCC(..))
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Util(fromJustOrErr)
@@ -79,7 +80,7 @@ iSimpAp cyclic n (ILam i _ e) [] (a:as)
     | not (isKeepId i) && (isTriv a || countOcc i e <= 1) =
         let e' = eSubst i a e
         in iSimpAp cyclic n e' [] as
-iSimpAp cyclic _ (ICon _ (ICPrim _ prim)) ts es | m /= Nothing = r
+iSimpAp _ _ (ICon _ (ICPrim _ prim)) ts es | m /= Nothing = r
   where m = doPrim prim ts es
         r = fromJustOrErr "iSimpAp ICPrim Nothing" m
 -- Under -hack-eager-pack-unpack (a debugging aid, see IExpand), resolve
@@ -95,21 +96,21 @@ iSimpAp cyclic _ (ICon _ (ICPrim _ prim)) ts es | m /= Nothing = r
 -- otherwise permeate the condition machinery), so resolving them here
 -- restores the old static folding for Bool logic and does the unfold
 -- once per .bo instead of once per elaboration use.
-iSimpAp n (ICon _ (ICPrim _ p)) ts (dict : es)
+iSimpAp cyclic n (ICon _ (ICPrim _ p)) ts (dict : es)
     | p == PrimPack || p == PrimUnpack, n,
       doEagerPackUnpack || smallWidth ts,
-      Just meth <- selectDictMethod meth_i dict
-    = iSimpAp n meth [] es
+      Just meth <- selectDictMethod cyclic meth_i dict
+    = iSimpAp cyclic n meth [] es
   where meth_i = if p == PrimPack then idPack else idUnpack
         smallWidth [_, ITNum w] = w <= 1
         smallWidth _ = False
-iSimpAp n f@(ICon _ (ICSel { selNo = k })) ts
+iSimpAp cyclic n f@(ICon _ (ICSel { selNo = k })) ts
         es@(def : as) | n && m /= Nothing = {-trace (ppReadable (IAps f ts es, e'))-} e'
   where m = selectTuple cyclic (fromInteger k) def
         e = fromJustOrErr "iSimpAp ICSel Nothing" m
         e' = iSimpAp cyclic n e [] as
-iSimpAp cyclic n e [] [] = e -- iSimp has already been called
-iSimpAp cyclic n f ts es = IAps f ts es
+iSimpAp _ _ e [] [] = e -- iSimp has already been called
+iSimpAp _ _ f ts es = IAps f ts es
 
 selectTuple :: (NFData a) => S.Set Id -> Int -> IExpr a -> Maybe (IExpr a)
 selectTuple cyclic k (ICon di (ICDef { iConDef = def@(IAps (ICon _ (ICTuple { })) _ ms) }))
@@ -125,16 +126,16 @@ selectTuple _ _ _ = Nothing
 -- like selectTuple, but locating the field by name in the dictionary's
 -- fieldIds (used for the pack/unpack coercion primitives under
 -- -hack-eager-pack-unpack)
-selectDictMethod :: (NFData a) => Id -> IExpr a -> Maybe (IExpr a)
-selectDictMethod meth (ICon di (ICDef { iConDef = IAps (ICon _ (ICTuple { fieldIds = fs })) _ ms }))
+selectDictMethod :: (NFData a) => S.Set Id -> Id -> IExpr a -> Maybe (IExpr a)
+selectDictMethod cyclic meth (ICon di (ICDef { iConDef = IAps (ICon _ (ICTuple { fieldIds = fs })) _ ms }))
     | Just k <- findIndex (qualEq meth) fs, k < length ms,
-      let e = ms !! k, di `notElem` dVars e = Just e
-selectDictMethod meth (IAps (ICon _ (ICDef { iConDef = body })) ts []) =
-        case iSimpAp False body ts [] of
+      let e = ms !! k, di `S.notMember` cyclic || di `notElem` dVars e = Just e
+selectDictMethod cyclic meth (IAps (ICon _ (ICDef { iConDef = body })) ts []) =
+        case iSimpAp cyclic False body ts [] of
         IAps (ICon _ (ICTuple { fieldIds = fs })) _ ms
             | Just k <- findIndex (qualEq meth) fs, k < length ms -> Just (ms !! k)
         _ -> Nothing
-selectDictMethod _ _ = Nothing
+selectDictMethod _ _ _ = Nothing
 
 doEagerPackUnpack :: Bool
 doEagerPackUnpack = elem "-hack-eager-pack-unpack" progArgs
