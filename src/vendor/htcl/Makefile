@@ -10,6 +10,12 @@ GHCFLAGS += $(addprefix -optc-D,$(TCL_DEFS))
 # -----
 
 GHCFLAGS += -Wall ${TCL_INC_FLAGS}
+
+# The profiling build's larger stack cap (see RTSFLAGS in src/comp/Makefile)
+ifeq ($(BSC_BUILD),PROF)
+GHCFLAGS += -optc-DBSC_PROF
+endif
+
 GHC ?= ghc
 
 # -----
