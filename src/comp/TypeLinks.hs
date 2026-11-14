@@ -105,16 +105,24 @@ leafKindName 2 = "param"
 leafKindName 3 = "state"
 leafKindName _ = "other"
 
--- an application's name: text, or a method call's instance and method,
--- spelled after elaboration
+-- an application's name: text; a method call's instance and method,
+-- spelled after elaboration; a primitive; "k.n" (constructor or field k
+-- of n); a number
 data Name = NmStr String
           | NmCall Id Id
+          | NmPrim PrimOp
+          | NmOf !Integer !Integer
+          | NmNum !Int
+
+-- a numeric type argument: a number, or not a literal ("?")
+data NArg = NArg !Integer | NArgQ
+  deriving (Eq)
 
 -- The records that can name a leaf (N, C, D and M hold only numbers and
 -- are written at once).
 data Rec = RK !Char String !Int !Int End End
            -- view, node, kind, name, type, type arguments, ends
-         | RA !Char End String Name !Int [String] [End]
+         | RA !Char End String Name !Int [NArg] [End]
          | RV !Int End
            -- cell, type, creator (an N record; only inside RRaw)
          | RN !Int !Int String
@@ -400,7 +408,7 @@ tlNewLog mfile = do
 -- numeric type arguments, the cells), the concat as it was evaluated
 -- (type arguments and ends, the don't-care in place), and how many more
 -- stored values to look at before giving up.
-data PreRw = PreRw String [String] [Int] [String] [End] !Int
+data PreRw = PreRw PrimOp [NArg] [Int] [NArg] [End] !Int
 
 bump :: TLog -> Int -> IO ()
 bump l k = do
@@ -416,10 +424,21 @@ reading :: TLog -> a -> IO a -> IO a
 reading l dflt act =
     act `catch` \ (_ :: SomeException) -> bump l ctErr >> return dflt
 
--- text with no spaces or line ends (a token)
+-- text with no spaces or line ends (a token); the text itself when it
+-- has none
 word :: String -> String
 word "" = "-"
-word s = map (\ c -> if c == ' ' || c == '\n' || c == '\t' || c == '\r' then '_' else c) s
+word s | any gap s = map (\ c -> if gap c then '_' else c) s
+       | otherwise = s
+  where gap c = c == ' ' || c == '\n' || c == '\t' || c == '\r'
+
+-- the primitives' names, each spelled once
+primNames :: Array.Array Int String
+primNames = Array.listArray (0, fromEnum (maxBound :: PrimOp))
+                            [ show op | op <- [minBound .. maxBound :: PrimOp] ]
+
+primName :: PrimOp -> String
+primName op = primNames Array.! fromEnum op
 
 -- -----
 -- Types
@@ -513,12 +532,12 @@ atType (TidT tid (Just t)) r | tid == tidRaw = RRaw t r
 atType _ r = r
 
 -- a numeric type argument: a number, or "?"
-numArg :: TLog -> IType -> IO String
-numArg l t = reading l "?" $ do
+numArg :: TLog -> IType -> IO NArg
+numArg l t = reading l NArgQ $ do
   t' <- evaluate t
   case t' of
-    ITNum n -> return (show n)
-    _ -> return "?"
+    ITNum n -> return (NArg n)
+    _ -> return NArgQ
 
 numOf :: TLog -> IType -> IO Int
 numOf l t = reading l (-1) $ do
@@ -592,6 +611,16 @@ put l ct b = do
 sp :: B.Builder
 sp = B.char7 ' '
 
+-- a number in decimal
+integerB :: Integer -> B.Builder
+integerB n
+  | n >= toInteger (minBound :: Int) && n <= toInteger (maxBound :: Int) = B.intDec (fromInteger n)
+  | otherwise = B.string7 (show n)
+
+nargB :: NArg -> B.Builder
+nargB (NArg n) = integerB n
+nargB NArgQ = B.char7 '?'
+
 cellB :: Int -> B.Builder
 cellB p = B.char7 'c' <> B.intDec p
 
@@ -659,22 +688,27 @@ writeRec l (RRaw t r) = do
 writeRec l (RA vw node kind name tid nts ends) = do
   nb <- endB l node
   nm <- case name of
-          NmStr s -> return (word s)
-          NmCall inst meth ->
-              reading l "?" (evaluate (let s = word (getIdString inst ++ "." ++
-                                                     getIdBaseString meth)
-                                       in  length s `seq` s))
-  -- the calls of the final view that are written, by name (see Q)
-  when (vw == 'F' && kind == "call") $
-      modifyIORef' (tl_callsF l) (M.insertWith (+) nm 1)
+          NmStr s -> return (B.stringUtf8 (word s))
+          NmCall inst meth -> do
+              s <- reading l "?" (evaluate (let s = word (getIdString inst ++ "." ++
+                                                          getIdBaseString meth)
+                                            in  length s `seq` s))
+              -- the calls of the final view that are written, by name
+              -- (see Q)
+              when (vw == 'F' && kind == "call") $
+                  modifyIORef' (tl_callsF l) (M.insertWith (+) s 1)
+              return (B.stringUtf8 s)
+          NmPrim op -> return (B.string7 (primName op))
+          NmOf k n -> return (integerB k <> B.char7 '.' <> integerB n)
+          NmNum n -> return (B.intDec n)
   eb <- endsB l ends
   put l (case vw of
            'R' -> ctAR
            'S' -> ctAS
            _ -> ctAF)
         (B.string7 "A " <> B.char7 vw <> sp <> nb <> sp <> B.string7 kind <> sp <>
-         B.stringUtf8 nm <> sp <> B.intDec (written tid) <> sp <> B.intDec (length nts) <>
-         mconcat [ sp <> B.string7 t | t <- nts ] <> sp <> B.intDec (length ends) <> eb)
+         nm <> sp <> B.intDec (written tid) <> sp <> B.intDec (length nts) <>
+         mconcat [ sp <> nargB t | t <- nts ] <> sp <> B.intDec (length ends) <> eb)
 writeRec l (RV p e) = do
   eb <- endB l e
   put l ctV (B.string7 "V " <> cellB p <> sp <> eb)
@@ -893,8 +927,9 @@ describeSel l vw depth node mft mends msel e0 = do
                      Nothing -> Just (instLead (iConType ic) ts)
       resTid ic = reading l noTid (tidOfT l (funType ic >>= dropArr n))
       scrutTid ic = reading l noTid (tidOfT l (fmap fst (funType ic >>= arrowParts)))
-      ctiName cti = reading l "-" (evaluate (let s = show (conNo cti) ++ "." ++ show (numCon cti)
-                                              in  length s `seq` s))
+      ctiName cti = reading l (NmStr "-") (do k <- evaluate (conNo cti)
+                                              m <- evaluate (numCon cti)
+                                              return (NmOf k m))
   h <- evaluate h0
   case h of
     ICon hi ic0 -> do
@@ -903,10 +938,10 @@ describeSel l vw depth node mft mends msel e0 = do
         ICCon { conTagInfo = cti } -> do
             nm <- ctiName cti
             xs <- ends False
-            out "con" (NmStr nm) (resTid ic) [] xs
+            out "con" nm (resTid ic) [] xs
         ICTuple {} -> do
             xs <- ends False
-            out "tup" (NmStr (show n)) (resTid ic) [] xs
+            out "tup" (NmNum n) (resTid ic) [] xs
         ICSel { selNo = k, numSel = m } -> do
             -- A selection from a dictionary (a class method) is not
             -- logged: told by the selected value's cell, or else by its
@@ -947,11 +982,11 @@ describeSel l vw depth node mft mends msel e0 = do
         ICOut { conTagInfo = cti } -> do
             nm <- ctiName cti
             xs <- ends False
-            out "out" (NmStr nm) (scrutTid ic) [] xs
+            out "out" nm (scrutTid ic) [] xs
         ICIs { conTagInfo = cti } -> do
             nm <- ctiName cti
             xs <- ends False
-            out "is" (NmStr nm) (scrutTid ic) [] xs
+            out "is" nm (scrutTid ic) [] xs
         ICPrim { primOp = op } ->
             case op of
               PrimChr -> do
@@ -985,13 +1020,13 @@ describeSel l vw depth node mft mends msel e0 = do
                                Just (x : _) -> return x
                                _ -> argEnd l vw depth False arr
                         ants <- mapM (numArg l) ts
-                        out "prim" (NmStr (show op)) (return noTid) ants [a, ix]
+                        out "prim" (NmPrim op) (return noTid) ants [a, ix]
               PrimPack | n >= 2 -> coercion "pack" 'p'
               PrimUnpack | n >= 2 -> coercion "unpack" 'u'
               _ -> do
                   nts <- mapM (numArg l) ts
                   xs <- ends False
-                  out "prim" (NmStr (show op)) (return noTid) nts xs
+                  out "prim" (NmPrim op) (return noTid) nts xs
         ICForeign { fName = f } -> do
             nm <- reading l "?" (evaluate (let s = "foreign." ++ f in length s `seq` s))
             xs <- ends False
@@ -1000,8 +1035,10 @@ describeSel l vw depth node mft mends msel e0 = do
                 return False
      where
       sel k m tt xs = do
-          nm <- reading l "-" (evaluate (let s = show k ++ "." ++ show m in length s `seq` s))
-          out "sel" (NmStr nm) (return tt) [] xs
+          nm <- reading l (NmStr "-") (do k' <- evaluate k
+                                          m' <- evaluate m
+                                          return (NmOf k' m'))
+          out "sel" nm (return tt) [] xs
       -- pack or unpack at the type argument, of the argument after the
       -- dictionary; a one-bit (or narrower) coercion that is a cell's own
       -- expression is also a K record, since no hold arm sees it
@@ -1196,8 +1233,8 @@ tlOutPayload l out tys res mscrut = safely l $ do
               ECell p -> do
                 skip <- skippedCell l p
                 unless skip $ do
-                  nm <- reading l "-" (evaluate (let s = show (conNo cti) ++ "." ++ show n
-                                                 in  length s `seq` s))
+                  nm <- reading l (NmStr "-") (do k <- evaluate (conNo cti)
+                                                  return (NmOf k n))
                   tt@(TidT tid _) <- reading l noTid
                                          (tidOfT l (fmap fst (arrowParts (instLead ot tys))))
                   scrut <- case mscrut of
@@ -1206,7 +1243,7 @@ tlOutPayload l out tys res mscrut = safely l $ do
                                                     ECell _ -> en
                                                     _ -> ENone)
                              Nothing -> return ENone
-                  emit l (atType tt (RA 'R' node "out" (NmStr nm) tid [] [scrut]))
+                  emit l (atType tt (RA 'R' node "out" nm tid [] [scrut]))
                   bump l ctOutPayload
               _ -> return ()
         _ -> return ()
@@ -1245,7 +1282,7 @@ tlPreRewrite l ts vals heaped res = safely l $ do
 
 -- a primitive applied to cells only: its name, numeric type arguments
 -- and the cells
-primKey :: TLog -> IExpr a -> IO (Maybe (String, [String], [Int]))
+primKey :: TLog -> IExpr a -> IO (Maybe (PrimOp, [NArg], [Int]))
 primKey l e0 = reading l Nothing $ do
   e <- evaluate e0
   case e of
@@ -1259,8 +1296,7 @@ primKey l e0 = reading l Nothing $ do
               case mapM cell es of
                 Just cells@(_ : _) -> do
                     nts <- mapM (numArg l) ts
-                    name <- evaluate (let s = show op in length s `seq` s)
-                    return (Just (name, nts, cells))
+                    return (Just (op, nts, cells))
                 _ -> return Nothing
           _ -> return Nothing
     _ -> return Nothing
@@ -1279,7 +1315,7 @@ preRewriteAt l p e = do
       mkey <- primKey l e
       if mkey == Just (op, nts, cells)
         then do writeIORef (tl_prerw l) Nothing
-                emit l (RA 'R' (ECell p) "prim" (NmStr "PrimConcat") (-1) cts ends)
+                emit l (RA 'R' (ECell p) "prim" (NmPrim PrimConcat) (-1) cts ends)
                 bump l ctPreRewrite
         else writeIORef (tl_prerw l)
                  (if ttl <= 1 then Nothing else Just (PreRw op nts cells cts ends (ttl - 1)))
