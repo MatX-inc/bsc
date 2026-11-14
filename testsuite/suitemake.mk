@@ -38,8 +38,9 @@ export BLUESPECDIR
 TEST_BSC     ?= $(TEST_RELEASE)/bin/bsc
 TEST_BLUETCL ?= $(TEST_RELEASE)/bin/bluetcl
 
-# This tool will only be used if it exists
+# These tools will only be used if they exist
 TEST_SHOWRULES ?= $(TEST_RELEASE)/bin/showrules
+TEST_BLUEHS ?= $(TEST_RELEASE)/bluehs/bin/bluehs
 
 # These only need to exist when DO_INTERNAL_CHECKS=1
 TEST_BSC2BSV  ?= $(TEST_RELEASE)/bin/bsc2bsv
