@@ -96,10 +96,11 @@ instance PPrint VProgram where
     -- wrapper generator, but are printed at *module* scope (as VMDPI items in
     -- each module's body), not here at file/$unit scope -- see AVerilog and the
     -- VMDPI note in VMItem.
-    pPrint d p (VProgram ms _dpis cs) =
+    pPrint d p (VProgram ms _dpis cs strdef) =
         ppComment cs $+$
         assignment_delay_macro $+$
         reset_level_macro $+$
+        parameter_string_macro $+$
         vsepEmptyLine (map (pPrint d 0) ms) $+$
         text ""
       where -- define BSV_ASSIGNMENT_DELAY when the user does not override it
@@ -119,6 +120,17 @@ instance PPrint VProgram where
           text "  `define BSV_RESET_EDGE negedge" $+$
           text "`endif" $+$
           text ""
+        -- define BSV_PARAMETER_STRING when the user does not override it,
+        -- but only in a file that declares a String-typed parameter
+        -- (so that every other file is unchanged)
+        parameter_string_macro =
+          if any vmHasStringParam ms
+          then text "`ifdef BSV_PARAMETER_STRING" $+$
+               text "`else" $+$
+               text "  `define BSV_PARAMETER_STRING" <+> pPrint d 0 strdef $+$
+               text "`endif" $+$
+               text ""
+          else empty
 instance NFData VProgram where
     rnf (VProgram mods dpis cmt strdef) = rnf4 mods dpis cmt strdef
 
