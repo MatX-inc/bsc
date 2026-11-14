@@ -119,6 +119,7 @@ library
     ABinUtil
     ACheck
     ACleanup
+    AConditionalSourceTypes
     AConv
     ADropDefs
     ADropUndet
