@@ -60,6 +60,7 @@ initYState str flags doHardFail ds avis rs = do
                    stateMap = M.fromList [(avi_vname avi, avi_vmi avi)
                                             | avi <- avis],
                    proofMap = M.empty,
+                   satMap = M.empty,
 
                    anyId = 0,
                    unknownId = 0,
@@ -88,10 +89,14 @@ withTraceTest m =
 -- -------------------------
 
 checkDisjointExpr :: YState -> AExpr -> AExpr -> IO (Maybe Bool, YState)
-checkDisjointExpr s e1 e2 = runStateT (checkDisjointExprM e1 e2) s
+checkDisjointExpr s e1 e2 = runStateT (checkDisjointExprM True e1 e2) s
 
-checkDisjointExprM :: AExpr -> AExpr -> YM (Maybe Bool)
-checkDisjointExprM e1 e2 = withTraceTest $ do
+-- For expression queries (single = True; rule pairs pass False), a pair
+-- that is one condition with itself or with True is satisfiable exactly when
+-- that condition is, so the result is kept per condition (satMap) and the
+-- solver runs once for each.  The conversions are made as for any pair.
+checkDisjointExprM :: Bool -> AExpr -> AExpr -> YM (Maybe Bool)
+checkDisjointExprM single e1 e2 = withTraceTest $ do
   when traceTest $ traceM("comparing exprs: " ++ ppString (e1, e2))
   when traceConv $ traceM("   e1 = " ++ show e1)
   when traceConv $ traceM("   e2 = " ++ show e2)
@@ -102,19 +107,29 @@ checkDisjointExprM e1 e2 = withTraceTest $ do
         (ye2, _) <- convAExpr2YExpr_Force True e2
         --when traceTest $ traceM("conv2 done")
         ctx <- gets context
+        sat_memo <- gets satMap
+        let mcond = if single then singleCondition e1 e2 else Nothing
 
-        -- push a new ctx so that we can cleanly retract some assertions
-        -- (this is more efficient than retracting them individually)
-        liftIO $ Y.ctxPush ctx
-        liftIO $ Y.assert ctx ye1
-        --when traceTest $ traceM("assert1 done")
-        liftIO $ Y.assert ctx ye2
-        --when traceTest $ traceM("assert2 done")
+        sat_res <- case mcond of
+          Just c | Just r <- M.lookup c sat_memo -> return r
+          _ -> do
+            -- push a new ctx so that we can cleanly retract some assertions
+            -- (this is more efficient than retracting them individually)
+            liftIO $ Y.ctxPush ctx
+            liftIO $ Y.assert ctx ye1
+            --when traceTest $ traceM("assert1 done")
+            liftIO $ Y.assert ctx ye2
+            --when traceTest $ traceM("assert2 done")
 
-        sat_res <- liftIO $ Y.ctxStatus ctx
+            res <- liftIO $ Y.ctxStatus ctx
 
-        -- retract the assertions
-        liftIO $ Y.ctxPop ctx
+            -- retract the assertions
+            liftIO $ Y.ctxPop ctx
+            case mcond of
+              Just c | res == Y.Satisfiable || res == Y.Unsatisfiable ->
+                modify (\s -> s { satMap = M.insert c res (satMap s) })
+              _ -> return ()
+            return res
         -- memoize the result
         addToProofMap e1 e2 sat_res
         return sat_res
@@ -137,7 +152,15 @@ checkDisjointRulePairM (r1, r2) = do
   when traceTest $ traceM("comparing rules: " ++ ppString (r1,r2))
   c1 <- getRuleCond r1
   c2 <- getRuleCond r2
-  checkDisjointExprM c1 c2
+  checkDisjointExprM False c1 c2
+
+-- The condition whose satisfiability is that of the pair, if there is one.
+singleCondition :: AExpr -> AExpr -> Maybe AExpr
+singleCondition e1 e2
+  | isTrue e1 = Just e2
+  | isTrue e2 = Just e1
+  | e1 == e2 = Just e1
+  | otherwise = Nothing
 
 getRuleCond :: ARuleId -> YM AExpr
 getRuleCond rid = do
@@ -320,6 +343,8 @@ data YState =
                ruleMap       :: M.Map ARuleId RuleTriple,
                stateMap      :: M.Map AId VModInfo,
                proofMap      :: M.Map (AExpr, AExpr) Y.Status,
+               -- satisfiability of single conditions (checkDisjointExprM)
+               satMap        :: M.Map AExpr Y.Status,
 
                anyId         :: Integer,
                unknownId     :: Integer,
