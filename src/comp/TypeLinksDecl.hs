@@ -1,23 +1,28 @@
 -- Type links (prototype): the field types of a data or struct type, read
 -- from its declaration in the symbol table, for the F records of the .tl
--- file (TypeLinks).  Used only after elaboration.
+-- file (TypeLinks), and whether a type has an instance of Bits, read from
+-- the class's instance list, for the B records.  Used only after
+-- elaboration.
 --
 -- Nothing here makes an identifier or a string: a constructor's or
 -- field's scheme is instantiated at the type's own arguments by replacing
--- its generic variables, and converted as IConv converts any type.
-module TypeLinksDecl(tlFieldTypes) where
+-- its generic variables, and converted as IConv converts any type; an
+-- instance's head is only matched.
+module TypeLinksDecl(tlFieldTypes, tlBitsInstance) where
 
 import qualified Data.IntMap as IM
+import qualified Data.Set as S
 
 import Flags(Flags)
 import Position(noPosition)
 import Id(Id, getIdBaseString, getIdQual, setIdQual, qualEq)
-import PreIds(idArrow)
-import CType(Type(..), TyCon(..), CType, TISort(..), StructSubType(..), splitTAp)
+import PreIds(idArrow, idBits)
+import CType(Type(..), TyCon(..), CType, TISort(..), StructSubType(..), CTypeclass(..),
+             splitTAp)
 import Scheme(Scheme(..))
-import Pred(Qual(..))
+import Pred(Qual(..), Pred(..), Class(..), Inst(..))
 import Assump(Assump(..))
-import SymTab(SymTab, ConInfo(..), FieldInfo(..), findCon, findField)
+import SymTab(SymTab, ConInfo(..), FieldInfo(..), findCon, findField, findSClass)
 import ConTagInfo(ConTagInfo(..))
 import IConv(iConvT)
 import IType(IType(ITCon, ITNum, ITStr, ITAp), iToCK)
@@ -117,3 +122,27 @@ closedCT (ITCon i k s) = Just (TCon (TyCon i (Just (iToCK k)) s))
 closedCT (ITNum n) = Just (TCon (TyNum n noPosition))
 closedCT (ITStr s) = Just (TCon (TyStr s noPosition))
 closedCT _ = Nothing
+
+-- Whether the symbol table has an instance of the class Bits for the type
+-- constructor of t: Just True when the head of an instance is that
+-- constructor applied to anything (the instance's context is not looked
+-- at); Just False when no instance's head is, and no instance's head is a
+-- type variable (an instance for every type); otherwise Nothing, not
+-- known, as when t has no constructor or the class is not found.  The
+-- set of heads is built once for the symbol table, at the first use.
+tlBitsInstance :: SymTab -> IType -> Maybe Bool
+tlBitsInstance symt =
+    case findSClass symt (CTypeclass idBits) of
+      Nothing -> const Nothing
+      Just cls ->
+          let heads = [ fst (splitTAp t) | Inst _ _ (_ :=> IsIn _ (t : _)) _ <- getInsts cls ]
+              cons = S.fromList [ i | TCon (TyCon i _ _) <- heads ]
+              open = or [ True | h <- heads, isVar h ]
+              isVar (TVar _) = True
+              isVar (TGen _ _) = True
+              isVar _ = False
+          in  \ t -> case fst (splitITAp t) of
+                       ITCon i _ _ | i `S.member` cons -> Just True
+                                   | open -> Nothing
+                                   | otherwise -> Just False
+                       _ -> Nothing

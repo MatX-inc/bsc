@@ -10,8 +10,9 @@
 -- cell, F: the final expression of a surviving cell); V a cell whose value
 -- is a constant or a leaf; D, M the defs and merges at the end of
 -- elaboration; P the named ends; T the types; F the field types of the
--- data and struct types; I each state instance's Verilog module; Q the
--- number of calls of each instance method in the final expressions.
+-- data and struct types; B whether a type has an instance of Bits; I each
+-- state instance's Verilog module; Q the number of calls of each instance
+-- method in the final expressions.
 --
 -- Forcing.  A hook here may evaluate a type to weak head normal form, match
 -- an expression's constructor and read lazy fields of a constructor's info.
@@ -21,7 +22,10 @@
 -- argument, parameter, state instance) is held as its unread Id and type; a
 -- record that names one waits in the log and is written after elaboration,
 -- when the Id has been forced by the compiler itself.  Types are numbered
--- at their first use and spelled after elaboration.
+-- at their first use and spelled after elaboration.  A type that is not
+-- its own normal form (it applies a type function) is never normalized
+-- while the evaluator runs: a record at such a type waits in the log too,
+-- and is written after elaboration at the normal form's id.
 --
 -- Nothing in the compile reads the log, and a hook never fails the compile.
 module TypeLinks(
@@ -55,8 +59,10 @@ import qualified Data.ByteString.Builder as B
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import Numeric(showHex)
+import System.Environment(lookupEnv)
 import System.IO(Handle, IOMode(..), BufferMode(..), openBinaryFile,
                  hSetBuffering, hClose)
+import System.IO.Unsafe(unsafePerformIO)
 
 import FStringCompat(getFString)
 import Position(noPosition)
@@ -65,7 +71,7 @@ import PreIds(idArrow, idBit, idPrimPair)
 import IntLit(IntLit(..))
 import Prim(PrimOp(..))
 import CType(TISort(..), StructSubType(..))
-import IType(tCode)
+import IType(tCode, iTypeAtfFree)
 import ISyntax
 import ISyntaxSubst(tSubst)
 
@@ -111,6 +117,11 @@ data Rec = RK !Char String !Int !Int End End
            -- view, node, kind, name, type, type arguments, ends
          | RA !Char End String Name !Int [String] [End]
          | RV !Int End
+           -- cell, type, creator (an N record; only inside RRaw)
+         | RN !Int !Int String
+           -- a record at a type that is not its own normal form: written
+           -- after elaboration, at the id of the normalized type
+         | RRaw IType Rec
 
 endHeld :: End -> Bool
 endHeld (ELeaf _ _ _) = True
@@ -130,6 +141,8 @@ recHeld (RA _ n _ nm _ _ es) = endHeld n || nameHeld nm || any endHeld es
   where nameHeld (NmCall _ _) = True
         nameHeld _ = False
 recHeld (RV _ e) = endHeld e
+recHeld (RN _ _ _) = False
+recHeld (RRaw _ _) = True
 
 -- -----
 -- Classes of types (the T record's cls)
@@ -225,7 +238,8 @@ instLead t _ = t
 ctN, ctC, ctK, ctAS, ctAR, ctAF, ctV, ctD, ctM, ctP, ctT, ctErr, ctDeferred,
   ctSkipCell, ctSkipLink, ctSkipDictSel, ctSkipPlain, ctSelfLink, ctNoHead,
   ctInline, ctSkipConst, ctF, ctI, ctQ, ctFMissing, ctFCut, ctRootAlias,
-  ctDecided, ctOutPayload, ctFallInline, ctPreRewrite, ctPreRewriteSeen, ctClass0,
+  ctDecided, ctOutPayload, ctFallInline, ctPreRewrite, ctPreRewriteSeen,
+  ctB, ctNormRec, ctNormType, ctNormLeft, ctClass0,
   nCounters :: Int
 ctN = 0
 ctC = 1
@@ -259,7 +273,11 @@ ctOutPayload = 28   -- payloads tied to their constructor at a match-out
 ctFallInline = 29   -- one-bit unpacks that are not a cell's own expression
 ctPreRewrite = 30   -- concats written as evaluated, before a don't-care was absorbed
 ctPreRewriteSeen = 31 -- such rewrites seen (one don't-care operand, result changed)
-ctClass0 = 32       -- cells by class: ctClass0 + class
+ctB = 32
+ctNormRec = 33      -- records that waited for their type to be normalized
+ctNormType = 34     -- types that are not their own normal form, normalized
+ctNormLeft = 35     -- such types that the normalizer left with a type function
+ctClass0 = 36       -- cells by class: ctClass0 + class
 nCounters = ctClass0 + nClasses
 
 counterNames :: [(Int, String)]
@@ -275,7 +293,9 @@ counterNames =
       (ctFCut, "F-cut"), (ctRootAlias, "root-alias"),
       (ctDecided, "decided"), (ctOutPayload, "out-payload"),
       (ctFallInline, "fall-inline"), (ctPreRewrite, "pre-rewrite"),
-      (ctPreRewriteSeen, "pre-rewrite-seen") ] ++
+      (ctPreRewriteSeen, "pre-rewrite-seen"), (ctB, "B"),
+      (ctNormRec, "norm-records"), (ctNormType, "norm-types"),
+      (ctNormLeft, "norm-left") ] ++
     [ (ctClass0 + c, "cells-" ++ clsName c) | c <- [0 .. nClasses - 1] ]
 
 -- -----
@@ -285,9 +305,14 @@ data TLog = TLog {
     tlOn      :: !Bool,
     tl_h      :: Handle,
     -- type code -> (type id << 4) + class; the type id is the type's rank
-    -- by first use, so nothing written depends on the code
+    -- by first use, so nothing written depends on the code.  A type that
+    -- is not its own normal form has -1 - class (of the type as it
+    -- stands) until the normalizer is there, then its normal form's entry.
     tl_tids   :: !(IORef (IM.IntMap Int)),
     tl_types  :: !(IORef [IType]),               -- by type id, newest first
+    tl_ntypes :: !(IORef Int),                   -- the next type id
+    -- the type normalizer, there once elaboration has ended
+    tl_norm   :: !(IORef (Maybe (IType -> IType))),
     -- cell -> 1 + the class of its own type (0: not known)
     tl_cls    :: !(IORef (IOUArray Int Word8)),
     tl_node   :: !(IORef Int),                   -- the next inline node
@@ -316,11 +341,21 @@ data TLog = TLog {
     tl_counts :: !(IOUArray Int Int)
   }
 
--- A log writing to the file (with its header), or a log that is off.
+-- The switch: with BSC_TYPELINKS=0 in the environment no log is kept and
+-- no file is written.  Read once, at the first use.
+{-# NOINLINE tlEnabled #-}
+tlEnabled :: Bool
+tlEnabled = unsafePerformIO $ do
+  v <- lookupEnv "BSC_TYPELINKS"
+  return (v /= Just "0")
+
+-- A log writing to the file (with its header), or a log that is off (no
+-- file given, or the switch is off).
 tlNewLog :: Maybe (FilePath, String, String) -> IO TLog
 tlNewLog mfile = do
   mh <- case mfile of
           Nothing -> return Nothing
+          Just _ | not tlEnabled -> return Nothing
           Just (path, pkg, modname) -> do
             r <- try (do h <- openBinaryFile path WriteMode
                          hSetBuffering h (BlockBuffering (Just 1048576))
@@ -333,6 +368,8 @@ tlNewLog mfile = do
               Right h -> return (Just h)
   tids <- newIORef IM.empty
   types <- newIORef []
+  ntypes <- newIORef 0
+  norm <- newIORef Nothing
   cls <- newArray (0, 65535) 0 >>= newIORef
   node <- newIORef 0
   defer <- newIORef []
@@ -350,7 +387,8 @@ tlNewLog mfile = do
   counts <- newArray (0, nCounters - 1) 0
   return (TLog { tlOn = maybe False (const True) mh,
                  tl_h = maybe (error "TypeLinks: no file") id mh,
-                 tl_tids = tids, tl_types = types, tl_cls = cls,
+                 tl_tids = tids, tl_types = types, tl_ntypes = ntypes,
+                 tl_norm = norm, tl_cls = cls,
                  tl_node = node, tl_defer = defer, tl_args = args,
                  tl_final = final, tl_leafs = leafs, tl_leafl = leafl,
                  tl_roots = roots, tl_callsQ = callsQ, tl_callsF = callsF,
@@ -387,6 +425,14 @@ word s = map (\ c -> if c == ' ' || c == '\n' || c == '\t' || c == '\r' then '_'
 
 -- The id and class of a type, which is evaluated to weak head normal form
 -- here ((-1, other) when that fails or the type has no code).
+--
+-- Every id is the id of a normalized type.  A type that applies a type
+-- function (told by the node's own bit, with no walk) is not its own
+-- normal form.  After elaboration it is normalized here and gets its
+-- normal form's id and class.  While the evaluator runs it is not
+-- normalized (the normalizer can make names, and its cache belongs to the
+-- evaluator's state): the id is tidRaw, with the class of the type as it
+-- stands, and the caller holds its record with the type (RRaw).
 tlType :: TLog -> IType -> IO (Int, Int)
 tlType l t = reading l (-1, clsOther) $ do
   t' <- evaluate t
@@ -394,17 +440,76 @@ tlType l t = reading l (-1, clsOther) $ do
   if c < 0 then return (-1, clsOther) else do
     m <- readIORef (tl_tids l)
     case IM.lookup c m of
-      Just v -> return (v `shiftR` 4, v .&. 15)
-      Nothing -> do
-        cls <- reading l clsOther (evaluate (classOf t'))
-        let tid = IM.size m
-        writeIORef (tl_tids l) $! IM.insert c ((tid `shiftL` 4) .|. cls) m
-        modifyIORef' (tl_types l) (t' :)
-        return (tid, cls)
+      Just v | v >= 0 -> return (v `shiftR` 4, v .&. 15)
+             | otherwise -> notNormal t' c (-1 - v)
+      Nothing
+        | iTypeAtfFree t' -> newType l t' c
+        | otherwise -> do
+            cls <- reading l clsOther (evaluate (classOf t'))
+            writeIORef (tl_tids l) $! IM.insert c (-1 - cls) m
+            notNormal t' c cls
+  where
+    notNormal t' c cls = do
+      mnorm <- readIORef (tl_norm l)
+      case mnorm of
+        Nothing -> return (tidRaw, cls)
+        Just norm -> do
+          tn <- reading l t' (evaluate (norm t'))
+          let cn = tCode tn
+          if cn < 0 then return (-1, clsOther) else do
+            m <- readIORef (tl_tids l)
+            r@(tid, cls') <-
+                case IM.lookup cn m of
+                  Just v | v >= 0 -> do bump l ctNormType
+                                        return (v `shiftR` 4, v .&. 15)
+                  -- a new type, or the type itself when the normalizer
+                  -- could not reduce it (a type function of a variable)
+                  _ -> do bump l (if iTypeAtfFree tn then ctNormType else ctNormLeft)
+                          newType l tn cn
+            -- the type's own code gives its normal form's id from now on
+            modifyIORef' (tl_tids l) (IM.insert c ((tid `shiftL` 4) .|. cls'))
+            return r
+
+-- a new row of the type table
+newType :: TLog -> IType -> Int -> IO (Int, Int)
+newType l t c = do
+  cls <- reading l clsOther (evaluate (classOf t))
+  tid <- readIORef (tl_ntypes l)
+  writeIORef (tl_ntypes l) $! tid + 1
+  modifyIORef' (tl_tids l) (IM.insert c ((tid `shiftL` 4) .|. cls))
+  modifyIORef' (tl_types l) (t :)
+  return (tid, cls)
+
+-- the id of a type that is not its own normal form, while the evaluator
+-- runs: its record waits for the normalizer
+tidRaw :: Int
+tidRaw = -2
+
+-- a record's type: its id, and the type itself when the id is tidRaw
+data TidT = TidT !Int (Maybe IType)
+
+noTid :: TidT
+noTid = TidT (-1) Nothing
+
+tidOfT :: TLog -> Maybe IType -> IO TidT
+tidOfT _ Nothing = return noTid
+tidOfT l (Just t) = do
+  (tid, _) <- tlType l t
+  return (if tid == tidRaw then TidT tid (Just t) else TidT tid Nothing)
 
 tidOf :: TLog -> Maybe IType -> IO Int
-tidOf _ Nothing = return (-1)
-tidOf l (Just t) = fst <$> tlType l t
+tidOf l mt = do TidT tid _ <- tidOfT l mt
+                return (written tid)
+
+-- a type id as written: a record at tidRaw whose type was lost has none
+written :: Int -> Int
+written tid = if tid == tidRaw then -1 else tid
+
+-- the record r, whose type is this one: held with the type when the type
+-- has to be normalized first
+atType :: TidT -> Rec -> Rec
+atType (TidT tid (Just t)) r | tid == tidRaw = RRaw t r
+atType _ r = r
 
 -- a numeric type argument: a number, or "?"
 numArg :: TLog -> IType -> IO String
@@ -534,8 +639,22 @@ writeRec :: TLog -> Rec -> IO ()
 writeRec l (RK dir how tid w bits val) = do
   bb <- endB l bits
   vb <- endB l val
-  put l ctK (B.string7 "K " <> B.char7 dir <> sp <> B.string7 how <> sp <> B.intDec tid <>
+  put l ctK (B.string7 "K " <> B.char7 dir <> sp <> B.string7 how <> sp <> B.intDec (written tid) <>
              sp <> B.intDec w <> sp <> bb <> sp <> vb)
+writeRec l (RN p tid how) =
+  put l ctN (B.string7 "N " <> cellB p <> sp <> B.intDec (written tid) <> sp <> B.string7 (word how))
+-- after elaboration the type's id is its normal form's
+writeRec l (RRaw t r) = do
+  (tid, cls) <- tlType l t
+  bump l ctNormRec
+  case r of
+    RK dir how _ w bits val -> writeRec l (RK dir how tid w bits val)
+    RA vw node kind name _ nts ends
+      -- a selection that turns out to be from a dictionary is not logged
+      | kind == "sel" && cls == clsClass -> bump l ctSkipDictSel
+      | otherwise -> writeRec l (RA vw node kind name tid nts ends)
+    RN p _ how -> writeRec l (RN p tid how)
+    _ -> writeRec l r
 writeRec l (RA vw node kind name tid nts ends) = do
   nb <- endB l node
   nm <- case name of
@@ -553,7 +672,7 @@ writeRec l (RA vw node kind name tid nts ends) = do
            'S' -> ctAS
            _ -> ctAF)
         (B.string7 "A " <> B.char7 vw <> sp <> nb <> sp <> B.string7 kind <> sp <>
-         B.stringUtf8 nm <> sp <> B.intDec tid <> sp <> B.intDec (length nts) <>
+         B.stringUtf8 nm <> sp <> B.intDec (written tid) <> sp <> B.intDec (length nts) <>
          mconcat [ sp <> B.string7 t | t <- nts ] <> sp <> B.intDec (length ends) <> eb)
 writeRec l (RV p e) = do
   eb <- endB l e
@@ -760,19 +879,19 @@ describeSel l vw depth node mft mends msel e0 = do
         | vw /= 'F' && kind /= "call" && not (any linkable xs) = do
             bump l ctSkipConst
             return False
-        | otherwise = do tid <- tidAct
-                         emit l (RA vw node kind name tid nts xs)
+        | otherwise = do tt@(TidT tid _) <- tidAct
+                         emit l (atType tt (RA vw node kind name tid nts xs))
                          return True
       tyArg k = case drop k ts of
                   (t : _) -> Just t
                   [] -> Nothing
       -- the head's function type: the caller's, or its own type at the
-      -- type arguments (not normalized)
+      -- type arguments (not normalized here: see tlType)
       funType ic = case mft of
                      Just ft -> Just ft
                      Nothing -> Just (instLead (iConType ic) ts)
-      resTid ic = reading l (-1) (tidOf l (funType ic >>= dropArr n))
-      scrutTid ic = reading l (-1) (tidOf l (fmap fst (funType ic >>= arrowParts)))
+      resTid ic = reading l noTid (tidOfT l (funType ic >>= dropArr n))
+      scrutTid ic = reading l noTid (tidOfT l (fmap fst (funType ic >>= arrowParts)))
       ctiName cti = reading l "-" (evaluate (let s = show (conNo cti) ++ "." ++ show (numCon cti)
                                               in  length s `seq` s))
   h <- evaluate h0
@@ -800,11 +919,14 @@ describeSel l vw depth node mft mends msel e0 = do
             dictCell <- case peek of
                           Just (Right (ECell p)) -> (== clsClass) <$> cellClass l p
                           _ -> return False
-            (stid, scls) <- if dictCell then return (-1, clsClass)
-                            else reading l (-1, clsOther) $
+            (stid, scls) <- if dictCell then return (noTid, clsClass)
+                            else reading l (noTid, clsOther) $
                                    case funType ic >>= arrowParts of
-                                     Just (t, _) -> tlType l t
-                                     Nothing -> return (-1, clsOther)
+                                     Just (t, _) -> do
+                                         (tid, cls) <- tlType l t
+                                         return (if tid == tidRaw then TidT tid (Just t)
+                                                 else TidT tid Nothing, cls)
+                                     Nothing -> return (noTid, clsOther)
             if scls == clsClass
               then do bump l ctSkipDictSel
                       return False
@@ -818,7 +940,7 @@ describeSel l vw depth node mft mends msel e0 = do
                           Nothing -> argEnds l vw depth False (drop 1 es)
                 case first of
                   Just (ELeaf lk inst _) | lk == lkState ->
-                      out "call" (NmCall inst hi) (return (-1)) [] rest
+                      out "call" (NmCall inst hi) (return noTid) [] rest
                   Just x -> sel k m stid (x : rest)
                   Nothing -> sel k m stid []
         ICOut { conTagInfo = cti } -> do
@@ -833,17 +955,17 @@ describeSel l vw depth node mft mends msel e0 = do
             case op of
               PrimChr -> do
                   xs <- ends False
-                  out "chr" (NmStr "-") (tidOf l (tyArg 1)) [] xs
+                  out "chr" (NmStr "-") (tidOfT l (tyArg 1)) [] xs
               PrimOrd -> do
                   xs <- ends False
-                  out "ord" (NmStr "-") (tidOf l (tyArg 0)) [] xs
+                  out "ord" (NmStr "-") (tidOfT l (tyArg 0)) [] xs
               PrimIf | n == 3 -> do
                   xs <- endsArms
-                  out "if" (NmStr "-") (tidOf l (tyArg 0)) [] xs
+                  out "if" (NmStr "-") (tidOfT l (tyArg 0)) [] xs
               PrimCase -> do
                   nts <- mapM (numArg l) (take 1 ts)
                   xs <- endsArms
-                  out "case" (NmStr "-") (tidOf l (tyArg 1)) nts xs
+                  out "case" (NmStr "-") (tidOfT l (tyArg 1)) nts xs
               PrimArrayDynSelect | [arr, idx] <- es -> do
                   nts <- mapM (numArg l) (take 1 (drop 1 ts))
                   ix <- case (mends, msel) of
@@ -851,30 +973,40 @@ describeSel l vw depth node mft mends msel e0 = do
                           (_, Just s) -> do bump l ctDecided
                                             return s
                           _ -> argEnd l vw depth False idx
-                  els <- arrayEnds arr
-                  out "asel" (NmStr "-") (tidOf l (tyArg 0)) nts (ix : els)
+                  mels <- arrayEnds arr
+                  case mels of
+                    Just els -> out "asel" (NmStr "-") (tidOfT l (tyArg 0)) nts (ix : els)
+                    -- The array is not an array of cells or of written
+                    -- elements: the record is the primitive's own (array,
+                    -- index), so that the array is not read as an element.
+                    Nothing -> do
+                        a <- case mends of
+                               Just (x : _) -> return x
+                               _ -> argEnd l vw depth False arr
+                        ants <- mapM (numArg l) ts
+                        out "prim" (NmStr (show op)) (return noTid) ants [a, ix]
               PrimPack | n >= 2 -> coercion "pack" 'p'
               PrimUnpack | n >= 2 -> coercion "unpack" 'u'
               _ -> do
                   nts <- mapM (numArg l) ts
                   xs <- ends False
-                  out "prim" (NmStr (show op)) (return (-1)) nts xs
+                  out "prim" (NmStr (show op)) (return noTid) nts xs
         ICForeign { fName = f } -> do
             nm <- reading l "?" (evaluate (let s = "foreign." ++ f in length s `seq` s))
             xs <- ends False
-            out "other" (NmStr nm) (return (-1)) [] xs
+            out "other" (NmStr nm) (return noTid) [] xs
         _ -> do bump l ctNoHead
                 return False
      where
-      sel k m tid xs = do
+      sel k m tt xs = do
           nm <- reading l "-" (evaluate (let s = show k ++ "." ++ show m in length s `seq` s))
-          out "sel" (NmStr nm) (return tid) [] xs
+          out "sel" (NmStr nm) (return tt) [] xs
       -- pack or unpack at the type argument, of the argument after the
       -- dictionary; a one-bit (or narrower) coercion that is a cell's own
       -- expression is also a K record, since no hold arm sees it
       coercion kind dir = do
           let mta = tyArg 0
-          tid <- tidOf l mta
+          tt@(TidT tid _) <- tidOfT l mta
           operand <- case mends of
                        Just xs -> return (drop 1 xs)
                        Nothing -> argEnds l vw depth False (drop 1 es)
@@ -886,20 +1018,20 @@ describeSel l vw depth node mft mends msel e0 = do
           when (vw == 'R' && (w == 0 || w == 1) && not isBit) $
               case (node, operand) of
                 (ECell _, x : _) | linkable x ->
-                    emit l (if dir == 'p' then RK 'p' "fall" tid w node x
-                            else RK 'u' "fall" tid w x node)
+                    emit l (atType tt (if dir == 'p' then RK 'p' "fall" tid w node x
+                                       else RK 'u' "fall" tid w x node))
                 _ -> return ()
-          out kind (NmStr "-") (return tid) [] operand
-      -- the element cells of an array argument
-      arrayEnds arr = reading l [] $ do
+          out kind (NmStr "-") (return tt) [] operand
+      -- the element cells of an array argument (Nothing: the argument is
+      -- not an array of cells or an array built of written elements)
+      arrayEnds arr = reading l Nothing $ do
           a <- evaluate arr
           case a of
             ICon _ (ICLazyArray { iArray = cells }) ->
-                return [ ECell (ac_ptr c) | c <- Array.elems cells ]
+                return (Just [ ECell (ac_ptr c) | c <- Array.elems cells ])
             IAps (ICon _ (ICPrim { primOp = PrimBuildArray })) _ els ->
-                argEnds l vw depth False els
-            _ -> do en <- argEnd l vw depth False arr
-                    return [en]
+                Just <$> argEnds l vw depth False els
+            _ -> return Nothing
     _ -> return False
 
 -- -----
@@ -918,7 +1050,9 @@ newCell l p t how = do
   bump l (ctClass0 + cls)
   if clsSkipped cls then do bump l ctSkipCell
                             return False
-    else do put l ctN (B.string7 "N " <> cellB p <> sp <> B.intDec tid <> sp <> B.string7 (word how))
+    else do if tid == tidRaw then emit l (RRaw t (RN p tid how))
+              else put l ctN (B.string7 "N " <> cellB p <> sp <> B.intDec tid <> sp <>
+                              B.string7 (word how))
             return True
 
 -- a cell made with no type in hand
@@ -951,11 +1085,11 @@ tlCopy l how dst src = safely l $
 tlCoerce :: TLog -> Char -> String -> IType -> IType ->
             (Int, Maybe (IExpr a)) -> (Int, Maybe (IExpr a)) -> IO ()
 tlCoerce l dir how ta tn (bp, be) (vp, ve) = safely l $ do
-  (tid, _) <- tlType l ta
+  tt@(TidT tid _) <- tidOfT l (Just ta)
   w <- numOf l tn
   bits <- ptrOrEnd l bp be
   val <- ptrOrEnd l vp ve
-  emit l (RK dir how tid w bits val)
+  emit l (atType tt (RK dir how tid w bits val))
 
 -- The value held by the cell p: an application (A S), a constant or leaf
 -- (V), or a held coercion (C hold).
@@ -1063,14 +1197,15 @@ tlOutPayload l out tys res mscrut = safely l $ do
                 unless skip $ do
                   nm <- reading l "-" (evaluate (let s = show (conNo cti) ++ "." ++ show n
                                                  in  length s `seq` s))
-                  tid <- reading l (-1) (tidOf l (fmap fst (arrowParts (instLead ot tys))))
+                  tt@(TidT tid _) <- reading l noTid
+                                         (tidOfT l (fmap fst (arrowParts (instLead ot tys))))
                   scrut <- case mscrut of
                              Just x -> do en <- endOf l x
                                           return (case en of
                                                     ECell _ -> en
                                                     _ -> ENone)
                              Nothing -> return ENone
-                  emit l (RA 'R' node "out" (NmStr nm) tid [] [scrut])
+                  emit l (atType tt (RA 'R' node "out" (NmStr nm) tid [] [scrut]))
                   bump l ctOutPayload
               _ -> return ()
         _ -> return ()
@@ -1162,9 +1297,9 @@ tlFallUnpack l ta tn x = safely l $ do
   unless isBit $ do
     bits <- argEnd l 'R' liveDepth False x
     when (linkable bits) $ do
-      (tid, _) <- tlType l ta
+      tt@(TidT tid _) <- tidOfT l (Just ta)
       w <- numOf l tn
-      emit l (RK 'u' "fall" tid w bits ENone)
+      emit l (atType tt (RK 'u' "fall" tid w bits ENone))
       bump l ctFallInline
 
 -- -----
@@ -1249,10 +1384,12 @@ constValue r0 = do
 -- The end of elaboration
 
 -- Elaboration has ended and the compiler has forced the module: write the
--- held records.  From here a leaf is read as it is met.
-tlFinalBegin :: TLog -> IO ()
-tlFinalBegin l = safely l $ do
+-- held records.  From here a leaf is read as it is met, and a type that
+-- is not its own normal form is normalized by norm as it is met.
+tlFinalBegin :: TLog -> (IType -> IType) -> IO ()
+tlFinalBegin l norm = safely l $ do
   writeIORef (tl_final l) True
+  writeIORef (tl_norm l) (Just norm)
   rs <- readIORef (tl_defer l)
   writeIORef (tl_defer l) []
   forM_ (reverse rs) $ \ r -> safely l (writeRec l r)
@@ -1414,9 +1551,12 @@ tlNamed l kname declared width name =
 -- and the counts; and close the file.  fieldsOf gives a data or struct
 -- type's constructor payloads and fields as (constructor number, field
 -- number, name, type), or Nothing when it has no declaration to read.
+-- bitsOf says whether a type's constructor has an instance of Bits
+-- (Nothing: not known), for the B records.
 tlFinalEnd :: TLog -> (String -> String -> Maybe IType) ->
-              (IType -> Maybe [(Int, Int, String, Maybe IType)]) -> [String] -> IO ()
-tlFinalEnd l declared fieldsOf methods = do
+              (IType -> Maybe [(Int, Int, String, Maybe IType)]) ->
+              (IType -> Maybe Bool) -> [String] -> IO ()
+tlFinalEnd l declared fieldsOf bitsOf methods = do
   safely l $ do
     leafs <- reverse <$> readIORef (tl_leafl l)
     forM_ leafs $ \ (n, kname, name, own, width) -> safely l $ do
@@ -1445,9 +1585,20 @@ tlFinalEnd l declared fieldsOf methods = do
                   M.empty listed
     forM_ (M.toList counted) $ \ (name, n) ->
         unless (M.member name seen) $ qline name n
-  -- the field types, which add types; then every type
-  frecs <- reading l [] (fieldRecords l fieldsOf)
+  -- the field types, which add types; then whether each type that can
+  -- have a bit representation has an instance of Bits; then every type
+  frecs <- reading l [] (fieldRecords l fieldsOf bitsOf)
   safely l $ forM_ frecs $ \ b -> put l ctF b
+  safely l $ do
+    ts <- reverse <$> readIORef (tl_types l)
+    forM_ (zip [0 :: Int ..] ts) $ \ (tid, t) -> safely l $ do
+      cls <- reading l clsOther (evaluate (classOf t))
+      when (cls == clsData || cls == clsStruct || cls == clsDcon || cls == clsIface) $ do
+        mb <- reading l Nothing (evaluate (bitsOf t))
+        case mb of
+          Just b -> put l ctB (B.string7 "B " <> B.intDec tid <> sp <>
+                               B.char7 (if b then '1' else '0'))
+          Nothing -> return ()
   safely l $ do
     ts <- reverse <$> readIORef (tl_types l)
     forM_ (zip [0 :: Int ..] ts) $ \ (tid, t) -> safely l $ do
@@ -1492,11 +1643,15 @@ tlFinalEnd l declared fieldsOf methods = do
 
 -- The field records: for every type of class data, struct or dcon (a
 -- constructor's payload struct) one line a constructor payload or field,
--- with the field's type as a type of its own.  The field types can be
+-- with the field's type as a type of its own.  A type of class iface gets
+-- them when it has an instance of Bits: a struct of data that was
+-- declared with "interface" (a real interface, a struct of methods, has
+-- none and gets no field records).  The field types can be
 -- new types, which are looked at in turn, to a limit on the nesting (a
 -- type whose fields are ever larger instances of itself would not end).
-fieldRecords :: TLog -> (IType -> Maybe [(Int, Int, String, Maybe IType)]) -> IO [B.Builder]
-fieldRecords l fieldsOf = rounds (0 :: Int) 0 []
+fieldRecords :: TLog -> (IType -> Maybe [(Int, Int, String, Maybe IType)]) ->
+                (IType -> Maybe Bool) -> IO [B.Builder]
+fieldRecords l fieldsOf bitsOf = rounds (0 :: Int) 0 []
   where
     maxRounds = 24
     rounds r done acc = do
@@ -1506,15 +1661,20 @@ fieldRecords l fieldsOf = rounds (0 :: Int) 0 []
       if n == done then return (reverse acc)
         else if r >= maxRounds
         then do forM_ new $ \ (_, t) -> do
-                  cls <- reading l clsOther (evaluate (classOf t))
-                  when (hasFields cls) $ bump l ctFCut
+                  has <- hasFields t
+                  when has $ bump l ctFCut
                 return (reverse acc)
         else do acc' <- foldM row acc new
                 rounds (r + 1) n acc'
-    hasFields cls = cls == clsData || cls == clsStruct || cls == clsDcon
-    row acc (tid, t) = do
+    hasFields t = do
       cls <- reading l clsOther (evaluate (classOf t))
-      if not (hasFields cls) then return acc else do
+      if cls == clsData || cls == clsStruct || cls == clsDcon then return True
+        else if cls == clsIface
+        then reading l False (evaluate (bitsOf t == Just True))
+        else return False
+    row acc (tid, t) = do
+      has <- hasFields t
+      if not has then return acc else do
         mfs <- reading l Nothing $ do
                  r <- evaluate (fieldsOf t)
                  case r of
