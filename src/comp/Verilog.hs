@@ -395,6 +395,8 @@ data VMItem
         --          if no spaces needed, use a list of one list.
         | VMGroup { vg_translate_off :: Bool, vg_body :: [[VMItem]]}
         | VMFunction VFunction
+        -- items guarded by `ifdef <macro>
+        | VMIfdef String [VMItem]
         -- an import "DPI-C" declaration, emitted at *module* scope (rather
         -- than file/$unit scope) so that multiple modules using the same
         -- foreign function don't produce duplicate $unit declarations that
@@ -439,9 +441,13 @@ instance Ord VMItem where
          compare (VMStmt {}) _                       = LT
 
          compare (VMFunction _) (VMFunction _)      = EQ
+         compare (VMFunction _) (VMIfdef _ _)       = LT
+         compare (VMFunction _) (VMGroup _ _)       = LT
          compare (VMFunction _) _                   = GT
 
+         compare (VMIfdef _ _) (VMFunction _)       = GT
          compare (VMIfdef _ _) (VMIfdef _ _)        = EQ
+         compare (VMIfdef _ _) (VMGroup _ _)        = LT
          compare (VMIfdef _ _) _                    = GT
 
          compare (VMGroup _ _) (VMGroup _ _)        = EQ
@@ -477,6 +483,9 @@ instance PPrint VMItem where
                 | otherwise = vsepEmptyLine (map (ppLines d) stmtss)
 
         pPrint d p (VMFunction f) = pPrint d p f
+        pPrint d p (VMIfdef m is) = text ("`ifdef " ++ m) $$
+                                    vsepEmptyLine (map (pPrint d p) is) $$
+                                    text "`endif"
         pPrint d p (VMDPI dpi) = pPrint d p dpi
         pPrint d p (VMRegGroup inst_id def_name cs stmt) =
             text "// register" <+>
@@ -493,6 +502,7 @@ instance NFData VMItem where
     rnf (VMRegGroup vid s cmt item) = rnf4 vid s cmt item
     rnf (VMGroup toff body) = rnf2 toff body
     rnf (VMFunction vfun) = rnf vfun
+    rnf (VMIfdef m items) = rnf2 m items
     rnf (VMDPI dpi) = rnf dpi
 
 -- Decide where to place blank spaces between VMItems, by grouping
