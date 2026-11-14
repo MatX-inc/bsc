@@ -39,10 +39,11 @@ import Pred
 import SymTab
 import Type(tPrimPair, tBit, HasKind(..))
 import CType(cTVarKind, typeclassId, cTVarNum, typeCanonId)
-import TIMonad(CATFCache)
 import VModInfo(mkVModInfo, VName(..), VFieldInfo(..))
 import Type(tString, fn, tName, tAttributes)
 import TCMisc(expandSynN)
+import ATFRules(buildATFRules, atfReduceInType)
+import IType(iTypeAtfFree)
 import GroundCType(groundCTypeEnabled, internGroundCType)
 import ISyntax
 import ISyntaxSubst
@@ -65,22 +66,19 @@ type Env a = M.Map Id (IExpr a)
 -- the env knot below) references to them from the ordinary definitions
 -- resolve exactly like references to any other top-level definition.
 iConvPackage :: ErrorHandle -> Flags -> SymTab ->
-               CATFCache -> [IDef a] -> CPackage -> IO (IPackage a)
-iConvPackage errh flags r ctypeATFCache liftedDefs (CPackage pi _ _ _ _ ds _) =
-    return (IPackage pi [] ps ds' itypeATFCache)
+               [IDef a] -> CPackage -> IO (IPackage a)
+iConvPackage errh flags r liftedDefs (CPackage pi _ _ _ _ ds _) =
+    return (IPackage pi [] ps ds')
   where ds' = concatMap (iConvD errh flags pi r env pvs) ds ++ liftedDefs
         env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds'])
         pvs = map IVar tmpVarIds
         ps = [ qualP p | CPragma p <- ds ]
         qualP (Pproperties i ps) = Pproperties (qualId pi i) ps
         qualP (Pnoinline is)     = Pnoinline (map (qualId pi) is)
-        convT = iConvT flags r
-        itypeATFCache = M.mapKeys (\(i, ts) -> (i, map convT ts))
-                                  (M.map convT ctypeATFCache)
 
 
 iConvDef :: ErrorHandle -> Flags -> SymTab -> IPackage a -> CDefn -> IDef a
-iConvDef errh flags r (IPackage pi _ _ ds _) def =
+iConvDef errh flags r (IPackage pi _ _ ds) def =
     let env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds])
         pvs = map IVar tmpVarIds
     in  case iConvD errh flags pi r env pvs def of
@@ -262,8 +260,15 @@ iConvT flags s t
         return (iConvTUncached flags s t)
   | otherwise = iConvTUncached flags s t
 
+-- Ground ATF applications are reduced purely from the instance equations.
+-- Types still carrying a dormant ATF application fall back to expandSynN.
 iConvTUncached :: Flags -> SymTab -> Type -> IType
-iConvTUncached flags s t = iConvT' (expandSynN flags s t)
+iConvTUncached flags s t =
+    let it = iConvT' (expandSyn t)
+    in  if iTypeAtfFree it then it
+        else case atfReduceInType (buildATFRules s) it of
+               Just it' -> it'
+               Nothing  -> iConvT' (expandSynN flags s t)
 
 -- Per-canonical-node conversion memo: iConvT' is a function of
 -- structure alone, and a canonical CType may be a shared DAG that the
