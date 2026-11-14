@@ -319,6 +319,7 @@ library
     SolvedBinds
     Sort
     SpeedyString
+    StaleUtils
     StdPrel
     Subst
     SymTab
@@ -347,6 +348,7 @@ library
     Util
     VCD
     VFileName
+    VFileUtils
     VFinalCleanup
     VIOProps
     VModInfo
