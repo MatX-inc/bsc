@@ -47,6 +47,7 @@ module Id(
         isHideId, setHideId, rmHideId,
         isHideAllId, setHideAllId, rmHideAllId,
         isBadId, setBadId,
+        isLibraryId,
         idQuality,
         isFromRHSId, setFromRHSId,
         isSignedId, setSignedId,
@@ -171,6 +172,9 @@ data IdProp = IdPCanFire
                                         -- a top-level nullary binding, which is
                                         -- what lifted dictionaries become
                                         -- (introduced by LiftDicts)
+              | IdPLibraryBinder        -- a binder written in a bsc library,
+                                        -- moved to a use site in the design
+                                        -- (ISyntaxXRef.moveBinder)
         deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
 
 -- #############################################################################
@@ -545,12 +549,22 @@ isBadId idx = hasIdProp idx IdP_bad_name
 -- | Quality score for an optional Id: higher = preferred as canonical.
 -- Used wherever we pick the "best" Id from a group of equivalent ones
 -- (e.g. ITransform.runCSE's pickId, IExpand.eqPtrs's pass-2).
--- An IdP_keep'd Id beats a non-bad Id beats a bad Id beats no name at all.
+-- An IdP_keep'd Id beats a non-bad Id beats a bad Id beats no name at all,
+-- and within the IdP_keep'd and the non-bad Ids, a name written in a bsc
+-- library (isLibraryId) loses to any other.
 idQuality :: Maybe Id -> Int
-idQuality (Just i) | isKeepId i      = 2
-                   | not (isBadId i) = 1
+idQuality (Just i) | isKeepId i      = 3 + other
+                   | not (isBadId i) = 1 + other
                    | otherwise       = 0
+  where other = if isLibraryId i then 0 else 1
 idQuality Nothing                    = -1
+
+-- Written in a bsc library: the Id has a library position, or it is a
+-- library binder that FixupDefs or ISimplify moved to a use site in the
+-- design (IdPLibraryBinder).
+isLibraryId :: Id -> Bool
+isLibraryId i = isPreludePosition (getIdPosition i) ||
+                hasIdProp i IdPLibraryBinder
 
 isFromRHSId :: Id -> Bool
 isFromRHSId idx = hasIdProp idx IdP_from_rhs

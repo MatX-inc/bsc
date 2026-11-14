@@ -2469,10 +2469,34 @@ extendHeap = do s <- get
                 mapM_ copycell ((uncurry enumFromTo) (bounds oldheap))
 -}
 
+-- A name written in a bsc library (Id.isLibraryId) ranks below the
+-- design's own names.  A library binder still at its library position
+-- names nothing, so the cell takes any name inferred from its expression.
+-- A library binder moved to a use site in the design yields to a name
+-- inferred from the expression that is not itself a library name, and
+-- otherwise names the cell: pDef keeps a named cell as a def that AExpand
+-- does not inline, which keeps, for example, the reduction tree of a fold.
 improveCellName :: HExpr -> Maybe Id -> G (Maybe Id)
-improveCellName _ mi@(Just i)
-  | not $ isPreludePosition $ getPosition i = return mi
-improveCellName e _ = inferName e
+improveCellName e mi@(Just i)
+  | not (isLibraryId i) = return mi
+  | isPreludePosition (getPosition i) = inferName e
+  | otherwise = do
+      mn <- inferName e
+      return $ case mn of
+                 Just n | not (isLibraryId n) -> mn
+                 _ -> mi
+improveCellName e Nothing = inferName e
+
+-- A binder bound to a value that is already a heap cell renames the cell
+-- when the cell's name is a library name and the binder's name ranks above
+-- it (Id.idQuality).  Otherwise the cell keeps the name it was given first.
+nameHeapRef :: HeapPointer -> HeapData -> Id -> G ()
+nameHeapRef p r i = do
+  cell <- getHeap r
+  case hc_name cell of
+    Just old | isLibraryId old && idQuality (Just i) > idQuality (Just old) ->
+      updHeap "name-ref" (p, r) (cell { hc_name = Just i })
+    _ -> return ()
 
 -- Cells enter the heap only here and in updHeap, so forcing the name at
 -- both places ensures that the heap never stores a name thunk.  Names can
@@ -2843,6 +2867,9 @@ toHeap tag t (ICon i (ICDef t' e)) cell_name = do
   e' <- cacheDef i t' e
   toHeap tag t e' cell_name
 toHeap _   _ e@(ICon _ _)      _ = return e
+toHeap _   _ e@(IRefT _ p _ r) (Just i) | not (isLibraryId i) = do
+  nameHeapRef p r i
+  return e
 toHeap _   _ e@(IRefT _ _ _ _) _ = return e
 toHeap tag t e cell_name = do
         -- these errors have never happened, disable checks for now.
@@ -2868,6 +2895,10 @@ toHeapCon tag t e cell_name = toHeap tag t e cell_name
 {-# INLINE toHeapWHNF #-}
 toHeapWHNF :: String -> IType -> PExpr -> Maybe Id -> G HExpr
 toHeapWHNF _  _ (P p e@(ICon _ _)) _ | p == pTrue = return e
+toHeapWHNF _  _ (P p e@(IRefT _ ptr _ r)) (Just i)
+  | p == pTrue, not (isLibraryId i) = do
+      nameHeapRef ptr r i
+      return e
 toHeapWHNF _  _ (P p e@(IRefT _ _ _ _)) _ | p == pTrue = return e
 toHeapWHNF tag _ (P p e) cell_name
   | IAps (ICon _ (ICPrim _ PrimWhenPred)) [t] [ICon _ (ICPred _ p'), e'] <- e =

@@ -1,0 +1,41 @@
+package LibraryNames where
+
+import Vector
+
+interface Out = o :: Bit 16
+
+-- The user's total and the parameter x of Prelude's max name the same
+-- value; the signal takes the user's name.
+{-# verilog sysUserName #-}
+sysUserName :: Module Out
+sysUserName = module
+  a :: Reg (Bit 16) <- mkReg 1
+  b :: Reg (Bit 16) <- mkReg 2
+  rules
+    "step": when True ==> action { a := a + 3; b := b + 5 }
+  interface
+    o = let total = a + b
+        in  (max (a + b) (a - b)) ^ total ^ (total << 1)
+
+-- Nothing names the arguments of max but its parameters x and y, so they
+-- stay named, as wires.
+{-# verilog sysLibraryName #-}
+sysLibraryName :: Module Out
+sysLibraryName = module
+  a :: Reg (Bit 16) <- mkReg 1
+  b :: Reg (Bit 16) <- mkReg 2
+  rules
+    "step": when True ==> action { a := a + 3; b := b + 5 }
+  interface
+    o = max (a + b) (a - b)
+
+-- The parameters x and y of the Bit instance's (^) name the partial
+-- results, which keeps fold's reduction tree.
+{-# verilog sysFoldTree #-}
+sysFoldTree :: Module Out
+sysFoldTree = module
+  rs :: Vector 4 (Reg (Bit 16)) <- mapM (\ i -> mkReg (fromInteger i)) genList
+  rules
+    "step": when True ==> (head rs) := (head rs)._read + 1
+  interface
+    o = fold (^) (map readReg rs)
