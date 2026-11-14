@@ -450,7 +450,15 @@ instance PPrint HeapCell where
         pPrint d p (HLoop name) =
             text "HLoop" <+> pPrint d 0 name
 
-newtype HeapData = HeapData (IORef (HeapCell))
+-- Metadata is separate from the evaluated cell, so replacing HUnev with
+-- HWHNF/HNF cannot discard it. Aliases share a union-find set: a coercion
+-- observed after an alias was copied must still annotate both references.
+-- The union-find contains only types and metadata refs, never expressions,
+-- so dead heap cells can be collected as before.
+data HeapSourceTypes = HeapSourceTypes !Int !(S.Set IType)
+                     | HeapSourceAlias (IORef HeapSourceTypes)
+
+data HeapData = HeapData (IORef HeapCell) (IORef HeapSourceTypes)
 
 {-
 instance Eq HeapData where
