@@ -34,7 +34,7 @@ import qualified Data.ByteString as B
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261113-2"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261113-3"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -550,7 +550,7 @@ instance Bin Flags where
     writeBytes (Flags
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
-                a_020 a_021 a_dumpFormats a_022 a_023 a_024 a_025 a_026 a_027 a_028 a_029
+                a_020 a_021 a_022 a_023 a_024 a_025 a_026 a_027 a_028 a_029
                 a_030 a_031 a_032 a_033 a_034 a_035 a_036 a_037 a_038 a_039
                 a_040 a_041 a_042 a_043 a_044 a_045 a_046 a_047 a_048 a_049
                 a_050 a_051 a_052 a_053 a_054 a_055 a_056 a_057 a_058 a_059
@@ -561,12 +561,12 @@ instance Bin Flags where
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
-                a_130 a_131 a_132 a_133 a_134) =
+                a_130 a_131 a_132 a_133 a_134 a_135) =
        do
           wr_chunk0; wr_chunk1; wr_chunk2; wr_chunk3; wr_chunk4;
-          wr_chunk5; wr_chunk6; wr_chunk7; wr_chunk8
+          wr_chunk5; wr_chunk6; wr_chunk7; wr_chunk8; wr_chunk9
       where
-        -- The 135-field serialization is split into NOINLINE chunks so
+        -- The 136-field serialization is split into NOINLINE chunks so
         -- that GHC optimizes bounded pieces: compiling it as a single
         -- monadic chain needs more than 15GB of heap.
         {-# NOINLINE wr_chunk0 #-}
@@ -623,11 +623,15 @@ instance Bin Flags where
              toBin a_120; toBin a_121; toBin a_122; toBin a_123; toBin a_124;
              toBin a_125; toBin a_126; toBin a_127; toBin a_128; toBin a_129;
              toBin a_130; toBin a_131; toBin a_132; toBin a_133; toBin a_134
+        {-# NOINLINE wr_chunk9 #-}
+        wr_chunk9 =
+          do
+             toBin a_135
     readBytes =
        do
           (a_000, a_001, a_002, a_003, a_004, a_005, a_006, a_007,
            a_008, a_009, a_010, a_011, a_012, a_013, a_014) <- rd_chunk0
-          (a_015, a_016, a_017, a_018, a_019, a_020, a_021, a_dumpFormats, a_022,
+          (a_015, a_016, a_017, a_018, a_019, a_020, a_021, a_022,
            a_023, a_024, a_025, a_026, a_027, a_028, a_029) <- rd_chunk1
           (a_030, a_031, a_032, a_033, a_034, a_035, a_036, a_037,
            a_038, a_039, a_040, a_041, a_042, a_043, a_044) <- rd_chunk2
@@ -643,10 +647,11 @@ instance Bin Flags where
            a_113, a_114, a_115, a_116, a_117, a_118, a_119) <- rd_chunk7
           (a_120, a_121, a_122, a_123, a_124, a_125, a_126, a_127,
            a_128, a_129, a_130, a_131, a_132, a_133, a_134) <- rd_chunk8
+          (a_135) <- rd_chunk9
           return (Flags
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
-                a_020 a_021 a_dumpFormats a_022 a_023 a_024 a_025 a_026 a_027 a_028 a_029
+                a_020 a_021 a_022 a_023 a_024 a_025 a_026 a_027 a_028 a_029
                 a_030 a_031 a_032 a_033 a_034 a_035 a_036 a_037 a_038 a_039
                 a_040 a_041 a_042 a_043 a_044 a_045 a_046 a_047 a_048 a_049
                 a_050 a_051 a_052 a_053 a_054 a_055 a_056 a_057 a_058 a_059
@@ -657,7 +662,7 @@ instance Bin Flags where
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
-                a_130 a_131 a_132 a_133 a_134)
+                a_130 a_131 a_132 a_133 a_134 a_135)
       where
         {-# NOINLINE rd_chunk0 #-}
         rd_chunk0 =
@@ -673,7 +678,7 @@ instance Bin Flags where
              a_015 <- fromBin; a_016 <- fromBin; a_017 <- fromBin; a_018 <- fromBin; a_019 <- fromBin;
              a_020 <- fromBin; a_021 <- fromBin; a_022 <- fromBin; a_023 <- fromBin; a_024 <- fromBin;
              a_025 <- fromBin; a_026 <- fromBin; a_027 <- fromBin; a_028 <- fromBin; a_029 <- fromBin
-             return (a_015, a_016, a_017, a_018, a_019, a_020, a_021, a_dumpFormats, a_022,
+             return (a_015, a_016, a_017, a_018, a_019, a_020, a_021, a_022,
                      a_023, a_024, a_025, a_026, a_027, a_028, a_029)
         {-# NOINLINE rd_chunk2 #-}
         rd_chunk2 =
@@ -731,6 +736,11 @@ instance Bin Flags where
              a_130 <- fromBin; a_131 <- fromBin; a_132 <- fromBin; a_133 <- fromBin; a_134 <- fromBin
              return (a_120, a_121, a_122, a_123, a_124, a_125, a_126, a_127,
                      a_128, a_129, a_130, a_131, a_132, a_133, a_134)
+        {-# NOINLINE rd_chunk9 #-}
+        rd_chunk9 =
+          do
+             a_135 <- fromBin
+             return (a_135)
 
 -- ----------
 
