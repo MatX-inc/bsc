@@ -28,6 +28,7 @@ extern char *TclSetPreInitScript (char *string);
 //   foreign export ccall "blueshell_Init_Foreign" blueshell_Init :: TclInterp -> IO Int
 // Declared here rather than through the generated FFI header.
 extern int blueshell_Init_Foreign(Tcl_Interp *interp);
+extern void bluetcl_flush_stdio(void);
 
 int bluetcl_AppInit(Tcl_Interp *interp);
 int Bluespec_Init(Tcl_Interp *interp);
@@ -53,6 +54,7 @@ int Bluespec_Init(Tcl_Interp *interp);
 void
 run_bluetcl(int argc, char **argv)
 {
+  atexit(bluetcl_flush_stdio);
   Tcl_Main(argc, argv, bluetcl_AppInit);
 }
 
