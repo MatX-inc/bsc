@@ -43,6 +43,18 @@ Most of the file is Cabal's explicit inventory of modules, dependencies, and
 components. Common stanzas share their settings; the module list and
 dependency bounds need updating when those inputs change.
 
+[`cabal.project`](../cabal.project) also lists a second package,
+[`util/bluehs/bsc-json`](../util/bluehs/bsc-json/bsc-json.cabal): a library
+with `build-type: Simple` for scripts run against the compiler library
+([util/bluehs](../util/bluehs/README.md)), holding readers of the JSON
+files `bsc` writes. It keeps its `aeson` dependency out of the compiler
+library, whose generated `Warmup` imports every exposed module of the
+library's direct dependencies (section 4). A sub-library of `bsc.cabal`
+cannot do this: Cabal builds a `build-type: Hooks` package as a whole, and
+an internal library needs per-component builds. No program of `bsc.cabal`
+depends on it, and `make install-src` does not build it; `make
+install-bluehs` does, as does `make -C src/comp bsc-json`.
+
 ## 3. Building
 
 After installing the [prerequisites](../INSTALL.md), build from the repository

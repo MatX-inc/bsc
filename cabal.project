@@ -1,4 +1,6 @@
-packages: .
+-- util/bluehs/bsc-json: JSON readers for scripts, apart from the bsc
+-- library so that aeson stays out of it (doc/cabal.md section 2).
+packages: . util/bluehs/bsc-json
 
 -- Pin the Hackage snapshot used to resolve dependencies (doc/cabal.md).
 index-state: 2026-10-15T20:00:00Z
