@@ -1,13 +1,13 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving, PatternGuards, DeriveDataTypeable #-}
-{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE PatternSynonyms, ViewPatterns #-}
 -- | The CType package defines the concrete representation of types and kinds.
 module CType(
   -- * Types
   -- TAp and TCon are bidirectional pattern synonyms over the hidden
   -- real constructors (the IType idiom); see the consing note below.
   Type(TVar, TCon, TAp, TGen, TDefMonad),
-  CType, TyVar(..), TyCon(..),
+  CType, TyVar(TyVar, tv_name, tv_num, tv_kind), TyCon(..),
   TISort(TItype, TIdata, TIstruct, TIabstract, TIatf,
          tidata_cons, tidata_enum, atf_class_id, atf_param_idxs, atf_target_idx),
   StructSubType(..),
@@ -26,7 +26,7 @@ module CType(
   isTypeActionValue, isTypeActionValue_,
   isTypePolyBit, bitWidth,
   isTypeUnit,
-  noTyVarNo, isGeneratedTVar,
+  noTyVarNo, isGeneratedTVar, isBadTyVar,
   getArrows,  getRes,
   seqCType,
   -- if the above are not sufficient, use these:
@@ -37,6 +37,7 @@ module CType(
   -- ** Constructing Types
   noType, tVar, tVarKind, cTVar, cTVarKind, cTVarNum, cTCon, cTNum, cTStr,
   cTApplys, setTypePosition,
+  mkGenTyVar, loadedTyVar, setTyVarKind,
 
   -- * Kinds
   Kind(..), PartialKind(..),
@@ -173,12 +174,59 @@ instance Show Type where
 -- a Type.  TISort and TyCon drop their Data derivings too, since they
 -- embed Type.
 
--- | Representation of a type variable
-data TyVar = TyVar { tv_name :: Id    -- ^ name of the type variable
-                   , tv_num  :: Int   -- ^ number for a generated type variable
-                   , tv_kind :: Kind  -- ^ kind of the type variable
-                   }
-    deriving (Show, Generic.Data, Generic.Typeable)
+-- Representation of a type variable.
+--
+-- TyVarG is a variable the typechecker drew (TIMonad.newTVar), or one
+-- read from a .bo under that spelling: its name is _tctyvarN for its
+-- number N, and the last field holds that Id lazily.  Two TyVarGs are
+-- compared by number alone, so the Id is built and its spelling
+-- interned only where tv_name is demanded (printing or ISyntax
+-- conversion).  TyVarU is every other variable.
+data TyVar = TyVarU Id Int Kind
+           | TyVarG Position {-# UNPACK #-} !Int Kind Id
+    deriving (Generic.Data, Generic.Typeable)
+
+pattern TyVar :: Id -> Int -> Kind -> TyVar
+pattern TyVar {tv_name, tv_num, tv_kind} <- (tyVarView -> (tv_name, tv_num, tv_kind))
+  where TyVar i n k = TyVarU i n k
+
+{-# COMPLETE TyVar #-}
+
+{-# INLINE tyVarView #-}
+tyVarView :: TyVar -> (Id, Int, Kind)
+tyVarView (TyVarU i n k) = (i, n, k)
+tyVarView (TyVarG _ n k i) = (i, n, k)
+
+instance Show TyVar where
+    showsPrec d (TyVar i n k) = showParen (d >= 11) $
+        showString "TyVar {tv_name = " . showsPrec 0 i .
+        showString ", tv_num = " . showsPrec 0 n .
+        showString ", tv_kind = " . showsPrec 0 k . showString "}"
+
+-- A variable drawn by the typechecker, numbered n.
+mkGenTyVar :: Position -> Int -> Kind -> TyVar
+mkGenTyVar pos n k = TyVarG pos n k (enumId "tctyvar" pos n)
+
+-- A variable decoded from a .bo: a generated spelling with its own
+-- number and newTVar's properties becomes a TyVarG holding the decoded Id.
+loadedTyVar :: Id -> Int -> Kind -> TyVar
+loadedTyVar i n k
+    | n /= noTyVarNo, isUnqualId i, getIdProps i == [IdP_bad_name],
+      getIdBaseString i == "_tctyvar" ++ itos n = TyVarG (getIdPosition i) n k i
+    | otherwise = TyVarU i n k
+
+setTyVarKind :: TyVar -> Kind -> TyVar
+setTyVarKind (TyVarU i n _) k = TyVarU i n k
+setTyVarKind (TyVarG p n _ i) k = TyVarG p n k i
+
+setTyVarPosition :: Position -> TyVar -> TyVar
+setTyVarPosition pos (TyVarU i n k) = TyVarU (setIdPosition pos i) n k
+setTyVarPosition pos (TyVarG _ n k i) = TyVarG pos n k (setIdPosition pos i)
+
+-- Whether the variable's Id is a generated (bad) name; TIMonad.isNewTVar.
+isBadTyVar :: TyVar -> Bool
+isBadTyVar (TyVarU i _ _) = isBadId i
+isBadTyVar (TyVarG {}) = True
 
 
 -- | Representation of a type constructor
@@ -641,7 +689,8 @@ instance Eq Type where
     x == y  =  cmp x y == EQ
 
 instance Eq TyVar where
-    TyVar i n _ == TyVar i' n' _  =  (n, i) == (n', i')
+    TyVarG _ n _ _ == TyVarG _ n' _ _  =  n == n'
+    a == b  =  (tv_num a, tv_name a) == (tv_num b, tv_name b)
 
 -- TyCon comparison and the one-tycon-per-qualified-name invariant
 --
@@ -682,11 +731,12 @@ instance Ord Type where
     compare x y = cmp x y
 
 instance Ord TyVar where
-    TyVar i n _ <= TyVar i' n' _  =  (n, i) <= (n', i')
-    TyVar i n _ <  TyVar i' n' _  =  (n, i) <  (n', i')
-    TyVar i n _ >= TyVar i' n' _  =  (n, i) >= (n', i')
-    TyVar i n _ >  TyVar i' n' _  =  (n, i) >  (n', i')
-    TyVar i n _ `compare` TyVar i' n' _  =  (n, i) `compare` (n', i')
+    a <= b  =  compare a b /= GT
+    a <  b  =  compare a b == LT
+    a >= b  =  compare a b /= LT
+    a >  b  =  compare a b == GT
+    compare (TyVarG _ n _ _) (TyVarG _ n' _ _) = compare n n'
+    compare a b  =  (tv_num a, tv_name a) `compare` (tv_num b, tv_name b)
 
 instance Ord TyCon where
     -- lexicographic on (base, qual); within a (base, qual) bucket either
@@ -759,10 +809,12 @@ instance HasPosition Type where
     getPosition (TDefMonad pos) = pos
 
 instance NFData TyVar where
-    rnf (TyVar i n k) = rnf3 i n k
+    rnf (TyVarU i n k) = rnf3 i n k
+    rnf (TyVarG p n k _) = rnf3 p n k
 
 instance HasPosition TyVar where
-    getPosition (TyVar name _ _) = getPosition name
+    getPosition (TyVarU name _ _) = getPosition name
+    getPosition (TyVarG p _ _ _) = p
 
 getTyVarId :: TyVar -> Id
 getTyVarId = tv_name
@@ -1171,7 +1223,7 @@ seqCType t@(TDefMonad _) = t
 -- since it writes positions that consing would otherwise replace.
 setTypePosition :: Position -> Type -> Type
 setTypePosition _ t | isCanonType t = t
-setTypePosition pos (TVar (TyVar id n k)) = (TVar (TyVar (setIdPosition pos id) n k))
+setTypePosition pos (TVar v) = TVar (setTyVarPosition pos v)
 setTypePosition pos (TCon (TyCon id k s)) = (TCon_ (-1) (TyCon (setIdPosition pos id) k s))
 setTypePosition pos (TCon (TyNum n _)) = (TCon_ (-1) (TyNum n pos))
 setTypePosition pos (TCon (TyStr s _)) = (TCon_ (-1) (TyStr s pos))

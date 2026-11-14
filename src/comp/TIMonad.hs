@@ -455,7 +455,7 @@ newTVar msg k x = do
   bvss <- gets tsBoundTyVarStack
   let loopVar = do
         n <- getTyVarNum
-        let v = TyVar (enumId "tctyvar" pos n) n k
+        let v = mkGenTyVar pos n k
         if any (v `elem`) bvss then loopVar
          else do
            when doVarTrace $ traceM ("newTVar: " ++ show n ++ " " ++ msg);
@@ -473,9 +473,7 @@ newTVarId msg k x = do
 
 -- distinguish TyVars with generated names from those with user-given names
 isNewTVar :: TyVar -> Bool
-isNewTVar (TyVar i _ _) =
-    -- new tvars are created with "enumId" which marks the Id as bad
-    isBadId i
+isNewTVar = isBadTyVar
 
 newDict :: TI Id
 newDict = do
