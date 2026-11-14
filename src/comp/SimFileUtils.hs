@@ -46,7 +46,14 @@ codeGenOptionDescr flags is_top =
               -- SimBlocksToC read unSpecTo), so an object generated under
               -- a different -unspecified-to must not be reused: its bytes
               -- would silently dishonor the link's requested lowering
-              [ "unspec-" ++ unSpecTo flags ]
+              [ "unspec-" ++ unSpecTo flags ] ++
+              -- with -dump-formats none the per-signal waveform dumping
+              -- code is not generated, so such objects cannot be reused
+              -- when a format is enabled (or vice versa); the generated
+              -- code is the same for all formats, so which format does
+              -- not matter, only whether any is enabled
+              (if (any (`elem` ["vcd", "fst"]) (dumpFormats flags))
+               then [] else ["no-wave-dump"])
 
 readCodeGenOptionDescr :: FilePath -> IO (Maybe String)
 readCodeGenOptionDescr f =

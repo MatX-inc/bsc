@@ -96,7 +96,7 @@ library
   -- Link stp and yices by name without embedding a build-time library path:
   -- `make install-src` passes inst/lib/SAT via LIBRARY_PATH, and at run time
   -- the relative rpath resolves ../lib/SAT beside the executable (doc/cabal.md).
-  extra-libraries: stp, yices
+  extra-libraries: stp, yices, z
   if os(osx)
     extra-libraries: c++
     ld-options: -Wl,-rpath,@loader_path/../lib/SAT
@@ -104,7 +104,14 @@ library
     extra-libraries: stdc++
     ld-options: -Wl,-rpath,$ORIGIN/../lib/SAT
   c-sources:
+    src/comp/fstscopes_hier.c,
     src/vendor/htcl/haskell.c,
+    src/vendor/libfst/src/fastlz.c,
+    src/vendor/libfst/src/fstapi.c,
+    src/vendor/libfst/src/lz4.c,
+  include-dirs:
+    src/libfst_config,
+    src/vendor/libfst/src,
   exposed-modules:
     AAddSchedAssumps
     AAddScheduleDefs
@@ -184,6 +191,7 @@ library
     ErrorUtil
     Eval
     Exceptions
+    FSTRead
     FStringCompat
     FileIOUtil
     FileNameUtil
@@ -348,6 +356,7 @@ library
     Verilog
     Version
     Warmup
+    WaveCheck
     Wires
     Yices
     YicesFFI
@@ -404,3 +413,13 @@ executable tconcheck
   import: common_exes
   ghc-options: -main-is Main_tconcheck
   main-is: tconcheck.hs
+
+executable fstcheck
+  import: common_exes
+  ghc-options: -main-is Main_fstcheck
+  main-is: fstcheck.hs
+
+executable fstscopes
+  import: common_exes
+  ghc-options: -main-is Main_fstscopes
+  main-is: fstscopes.hs
