@@ -24,7 +24,7 @@ import DictAliases(dictAlias)
 import CSyntaxTypes
 import CFreeVars(getFVDl)
 import Id
-import PreStrings(fsTilde)
+import PreStrings(fsMangleSep)
 import PreIds
 
 import Scheme
@@ -162,11 +162,14 @@ iConvD errh flags pi r env pvs (CValueSign (CDef i qt cs)) =
 iConvD _ _ _ _ _ _ _ = []
 
 -- only qualify non-instance names
+-- (instance dictionary names are the only ids that can contain the
+-- mangling separator, because it can never appear in a user-written
+-- identifier or operator; see PreStrings.fsMangleSep)
 qualId' :: Id -> Id -> Id
-qualId' pi i = if tilde `elem` getIdString i then i else qualId pi i
-  where tilde = case getFString fsTilde of
+qualId' pi i = if sep `elem` getIdString i then i else qualId pi i
+  where sep = case getFString fsMangleSep of
                   [c] -> c
-                  _ -> internalError "IConv.qualId': unexpected tilde string"
+                  _ -> internalError "IConv.qualId': unexpected mangling separator"
 
 iConvVS :: ErrorHandle
            -> Flags
