@@ -39,7 +39,7 @@ DummyInDo.dummyInDo =
 	 in  Prelude.return=
 	       ·Prelude.ActionValue
 	       ·(Prelude.Bit 12)
-	       _tcdict1024
+	       _tcdict1020
 	       (PrimBuildUndefined ·(Prelude.Bit 12) _ 1))
 next def..........................................................
 

@@ -204,7 +204,7 @@ satisfyXStream dvs es ps = assertPredsExpanded "satisfyXStream" ps $ do
 --      SolveResult rs sbs s <- satisfy' dvs es ps
         -- satTraceM ("satisfy exit: " ++ ppString (rs,sbs,s) ++ "\n")
         extSubst "satisfyX" s
-        return $ (rs, apSub s sbs)
+        return $ (rs, apSub s sbs, apSub s solved)
 
 -- break up preds into those affected by a substitution and those not
 -- in order to loop more efficiently in satisfy'
@@ -227,6 +227,8 @@ satisfy' dvs es ps = do
         -- Arguments:
         --   dvs - dependent vars, when attempting "last resort" satisfying
         --   es - given preds, which can be assumed for satisfying other preds
+        --   solved - dictionaries already solved or committed during this
+        --            satisfy pass, available for discharging equal preds
         --   rs - preds which we tried to satisfy but couldn't
         --   bs - bindings resulting from satisfying
         --   s  - substitution resulting from satisfying
@@ -280,7 +282,8 @@ satisfy' dvs es ps = do
                               (x_sbs <++ sbs) (x_s @@ s)
                               (apSub x_s (needed ++ changed_rs ++ ps))
                 -- if the predicate failed to reduce away completely,
-                -- put it aside and ignore its result,
+                -- put it aside and ignore its result (including x_solved,
+                -- whose bindings are being discarded with x_sbs),
                 -- except when it's a numeric typeclass and we're not doing
                 -- "last resort" satisfying
                 (_:_) | not (vpIsPreClass p) || isJust dvs ->
@@ -474,7 +477,7 @@ sat dvs ps p =
        let this_point :: TSSatElement
            this_point = (mkTSSatElement dvs ps p)
        incrementSatStack this_point
-       return_val <- case lookfor bound_tyvars p (concatMap bySuperE ps) of
+       return_val <- case lookfor bound_tyvars p (concatMap bySuperE ps ++ solved) of
          Just (b, (s, [])) -> do
              satTrace ("sat in super: " ++ ppReadable (p, concatMap bySuperE ps)) $ return ()
              let sb = mkSolvedBind b False -- Satisfied via superclass from source, not recursive
@@ -723,8 +726,8 @@ satMany :: DVS -> [EPred] -> [VPred] -> SolvedBinds -> Subst -> [VPred] ->
 -- predicates (e.g. Bits (UInt 32) n) resolve type variables before
 -- predicates that depend on those variables (e.g. Bits a n), avoiding
 -- expensive scans of all instances for unresolvable predicates.
-satMany dvs es rs_accum sbs s ps =
-    satMany' dvs es rs_accum sbs s (sortBy cmpPredConcreteness ps)
+satMany dvs es solved pool rs_accum sbs s ps =
+    satMany' dvs es solved pool rs_accum sbs s (sortBy cmpPredConcreteness ps)
     where
         cmpPredConcreteness :: VPred -> VPred -> Ordering
         cmpPredConcreteness (VPred _ (PredWithPositions (IsIn _ ts1) _ _))
@@ -766,20 +769,20 @@ satMany' dvs es rs_accum sbs s (p:ps) = do
             -- Since we apply "s" to "needed", we also apply it to the not-yet-
             -- processed preds "ps".
             rtrace ("satMany Right: " ++ ppReadable needed) $
-            satMany' dvs es ((apSub s' needed) ++ rs_accum) (sbs' <++ sbs) (s' @@ s) (apSub s' ps)
+            satMany' dvs es (apSub s' solved') (apSub s' pool) ((apSub s' needed) ++ rs_accum) (sbs' <++ sbs) (s' @@ s) (apSub s' ps)
         ([], sbs', s') ->
             -- If p is satisfied, we "drop" it, but add its binding and
             -- substitution.
             if isNullSubst s' then
                 -- Straight-up drop it
                 rtrace ("satMany Left True") $
-                satMany' dvs es rs_accum (sbs' <++ sbs) s ps
+                satMany' dvs es solved' pool rs_accum (sbs' <++ sbs) s ps
             else do
               let (changed_rs, unchanged_rs) = split_rs s' rs_accum
               if null changed_rs then
                  -- no impact on accumulated predicates
                  rtrace ("satMany Left False True") $
-                 satMany' dvs es rs_accum (sbs' <++ sbs) (s' @@ s) (apSub s' ps)
+                 satMany' dvs es (apSub s' solved') (apSub s' pool) rs_accum (sbs' <++ sbs) (s' @@ s) (apSub s' ps)
                else
                 -- Drop it, but try from the beginning again to see if any of
                 -- the accumulated rs's can now be
@@ -790,7 +793,7 @@ satMany' dvs es rs_accum sbs s (p:ps) = do
                 let rs' = (apSub s' changed_rs) ++ unchanged_rs
                 (rs'', s1, sbs1) <- joinNeededCtxs rs'
                 let s2 = s1 @@ s'
-                satMany (dvsSub s2 dvs) (apSub s2 es) [] (sbs1 <++ sbs' <++ sbs)
+                satMany (dvsSub s2 dvs) (apSub s2 es) (apSub s2 solved') (apSub s2 pool) [] (sbs1 <++ sbs' <++ sbs)
                         (s2 @@ s) (rs'' ++ apSub s2 ps)
 
 
@@ -801,7 +804,7 @@ reducePredsAggressive dvs es vps0 = do
   -- traceM ("reducePredsAggressive (enter): " ++ ppReadable vps0)
   (vps1, s1, sbs1) <- joinNeededCtxs vps0
   checkJoinCtxs "reducePredsAggressive 1" vps0 s1 vps1
-  reducePredsAggressive' dvs es sbs1 s1 vps1
+  reducePredsAggressive' dvs es [] sbs1 s1 vps1
 
 reducePredsAggressive' :: DVS -> [EPred] -> SolvedBinds -> Subst -> [VPred] ->
                           TI SolveResult
@@ -825,7 +828,7 @@ reducePredsAggressive' dvs es sbs1 s1 vps1 = do
   if (any badCon allPredTyCons) then do
     -- loop to keep synonyms and type functions out of instance heads
     vps2' <- concatMapM (expTConPred . expandSynVPred) vps2
-    reducePredsAggressive' dvs es (sbs2 <++ sbs1) s2 vps2'
+    reducePredsAggressive' dvs es solved2 (sbs2 <++ sbs1) s2 vps2'
    else do
     -- satMany is inside a loop, so it doesn't consistently apply
     -- its accumulated substitution to the reduced predicates.
@@ -2108,11 +2111,27 @@ expandTCons (orig_qs :=> orig_t) =
 -- propagation and matching are the same thing).
 
 -- propagateFunDeps returns the supplied predicates updated with
--- any information learned by matching instances. It does not
--- drop any matched predicates because it doesn't bind dictionaries.
+-- any information learned by matching instances.
 -- propagateFunDeps also returns the (possibly smaller) list of
 -- unsatisfied predicates for use in fail-fast context reduction
 -- (see updateContexts)
+--
+-- Rather than discarding the dictionary bindings of this satisfy pass,
+-- fully solved predicates (whose binding closures are complete) are
+-- deposited into the solved-dictionary pool: the bindings are emitted
+-- with the enclosing binding group's letseq (see push/popSolvedPool),
+-- later occurrences of the same predicate discharge against the pooled
+-- dictionary instead of re-deriving the reduction (see "sat"), and the
+-- deposited predicates are dropped from the returned list since their
+-- dictionaries are now permanently bound.  Closures through bindings
+-- marked incoherent are refused (an incoherent match is
+-- information-dependent and must not be frozen); ground predicates
+-- cannot match incoherently at all (from ground inputs, unification
+-- with an instance head is the same as matching, so an earlier
+-- unifiable instance would have been selected).  Non-ground entries
+-- are frame-local -- a nested definition could generalize over their
+-- free type variables -- while ground entries stay visible in nested
+-- frames (see tsSolvedPoolNG).
 propagateFunDeps :: [VPred] -> TI ([VPred], [VPred])
 propagateFunDeps ps0 =
   do
@@ -2127,13 +2146,125 @@ propagateFunDeps ps0 =
     flags <- getFlags
     setFlags (flags { useProvisoSAT = False })
 
-    (ps_unsat, _) <- satisfy eps ps
+    (ps_unsat, sbs, solved_out) <- satisfyEx Nothing eps ps
 
     -- restore the flags
     setFlags flags
 
+    deposits_ok <- getPoolDepositsOK
+    dropped <-
+      if legacyDeferInstances || not deposits_ok
+      then return S.empty
+      else do
+        let -- A dictionary typed at a stuck type-function application
+            -- is not self-contained evidence: this pass solved the
+            -- predicate in its raw form, treating the application as an
+            -- opaque constant, but the definition-level solve expands
+            -- it (expTConPred) into a rewritten predicate plus the
+            -- application's defining predicate (e.g. Bits t sz for
+            -- SizeOf t) -- a strictly stronger goal.  Pooling the weak
+            -- derivation would discharge the strong obligation, and a
+            -- stuck application must never reach emitted code.  Refuse
+            -- such candidates entirely.
+            candidates = [ (v, pr) | EPred (CVar v) pr <- solved_out,
+                                     not (predHasATF pr) ]
+            -- A closure is refused if it references the dictionary of
+            -- an unsolved predicate (incomplete), or of ANY in-scope
+            -- given (pool entries must be pure instance derivations: a
+            -- given-derived entry would carry evidence into nested
+            -- explicitly-typed definitions whose own solve is not
+            -- entitled to that given, making program acceptance depend
+            -- on whether an earlier apply node happened to solve the
+            -- same pred -- and given-derived solves are cheap lookups
+            -- anyway), or through a binding marked incoherent (that
+            -- choice is information-dependent and must not be frozen;
+            -- checked inside extractClosures).
+            given_ids = S.fromList [ v | EPred e _ <- eps,
+                                         CVar v <- [e] ]
+            forbidden = S.fromList [ v | VPred v _ <- ps_unsat ]
+                        `S.union` given_ids
+            (_, ok) =
+                extractClosures forbidden (map fst candidates) sbs
+        pool <- getSolvedPool
+        s_dedup <- getSubst
+        bvs <- getBoundTVs
+        let pool_entries = [ (e_v, apSub s_dedup e_pr)
+                           | EPred (CVar e_v) e_pr <- pool ]
+            in_pool pr = listToMaybe [ e_v | (e_v, e_pr) <- pool_entries,
+                                             e_pr == pr ]
+            ok_pairs = [ (v, pr) | (v, pr) <- candidates,
+                                   v `S.member` ok ]
+            -- Only a CLOSED predicate -- no free unification variables;
+            -- rigid signature-bound variables are pinned by their
+            -- binder and do not count -- may be dropped from the flow
+            -- when deposited: it is substitution-proof, defaulting
+            -- never involves it, and any join improvement it would
+            -- have given a later sibling is reproduced by that
+            -- sibling's own instance walk.  A predicate with free
+            -- metavariables must KEEP FLOWING even though its
+            -- derivation is pooled: dropping it removes it from every
+            -- future join and defaulting set, and a metavariable whose
+            -- only carrier predicates were dropped is never improved
+            -- at all (e.g. the module-monad variable of an
+            -- array-of-modules).  Since such a kept predicate will
+            -- re-solve and re-bind its own dictionary ids, the pooled
+            -- copy of its closure is renamed to wholly fresh ids
+            -- (definitions and references), and is emitted only if a
+            -- consult actually uses it (see addSolvedPoolNG).
+            closed pr = all (`elem` bvs) (tv pr)
+            (c_pairs, o_pairs) = partition (closed . snd) ok_pairs
+            -- A CLOSED candidate equal to an existing pool entry is
+            -- fully spent evidence: drop it from the flow with an
+            -- alias binding to the entry (keeping it flowing would let
+            -- a later solve discharge it a second time, double-binding
+            -- its dictionary id).  Open duplicates keep flowing like
+            -- any open predicate.  Only genuinely new predicates
+            -- become pool entries.
+            -- XXX in_pool duplicates keep flowing (alias-dropping them
+            -- against the existing entry produced emission-scope
+            -- violations not yet localized; see the open-deposit XXX)
+            (c_dups, c_new) =
+                ([], filter (\ (_, pr) -> isNothing (in_pool pr)) c_pairs)
+            dup_binds =
+                foldr ((<++) . fromSB) emptySBs
+                      [ mkSolvedBind (v, predToType pr, CVar e_v) False
+                      | (v, pr) <- c_dups,
+                        Just e_v <- [in_pool pr] ]
+            (c_sbs0, _) = extractClosures forbidden (map fst c_new) sbs
+            c_sbs = dup_binds <++ c_sbs0
+            -- XXX Open-predicate alias deposits are disabled: reusing
+            -- a metavariable-bearing derivation requires every consult
+            -- and emission invariant to hold at once (fresh renaming,
+            -- used-marking, frame scoping), and the full-suite run
+            -- found emission-scope violations that are not yet
+            -- localized.  Open predicates keep flowing and are simply
+            -- not pooled; only their re-derivation cost is lost.
+            o_new = [ (v, pr) | (v, pr) <- [], isNothing (in_pool pr) ]
+            (o_sbs0, _) = extractClosures forbidden (map fst o_new) sbs
+            o_ids = S.toList (allBindIds o_sbs0)
+        -- the alias binds reference pool entries; mark them used so
+        -- that entries backed by emit-if-used closures are emitted
+        mapM_ addPoolUsed [ e_v | (_, pr) <- c_dups,
+                                  Just e_v <- [in_pool pr] ]
+        o_fresh <- mapM (const newDict) o_ids
+        let ren_map = M.fromList (zip o_ids o_fresh)
+            o_sbs = renameBinds ren_map o_sbs0
+            nubByPred = nubBy (\ (EPred _ a) (EPred _ b) -> a == b)
+            c_entries = nubByPred [ EPred (CVar v) pr | (v, pr) <- c_new ]
+            o_entries = nubByPred
+                        [ EPred (CVar (M.findWithDefault v v ren_map)) pr
+                        | (v, pr) <- o_new ]
+        when (not (null c_entries && null o_entries && null c_dups)) $
+            satTraceM ("propagateFunDeps deposits: " ++
+                       ppReadable ([ pr | EPred _ pr <- c_entries ++ o_entries ]
+                                   ++ [ pr | (_, pr) <- c_dups ]))
+        addSolvedPool c_entries c_sbs
+        addSolvedPoolNG o_entries o_sbs
+        return (S.fromList (map fst (c_new ++ c_dups)))
+
     s' <- getSubst
-    return (apSub s' ps, ps_unsat)
+    let ps_kept = [ p | p@(VPred v _) <- ps, not (v `S.member` dropped) ]
+    return (apSub s' ps_kept, ps_unsat)
 
 -------
 

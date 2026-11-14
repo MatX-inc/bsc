@@ -1,7 +1,10 @@
 -- | SolvedBinds are sets of solved dictionary bindings.
--- They group recursive and non-recursive dictionary bindings separately, ensure there are
--- no references to recursive bindings from non-recursive bindings and keep non-recursive
--- bindings in topologically sorted order.
+-- They group recursive and non-recursive dictionary bindings separately.
+-- At emission time (getRecursiveDefls/getNonRecursiveDefls) the groups are
+-- normalized: non-recursive bindings that reference recursive ones are
+-- promoted into the recursive group, and the remaining non-recursive
+-- bindings are put in dependency order (definitions before uses), as
+-- required by the positional scoping of the Cletseq they are emitted into.
 module SolvedBinds(SolvedBind, mkSolvedBind, SolvedBinds, Bind,
                    markIncoherent, isIncoherent, solvedClass,
                    DirectIncoherence(..), addDirectIncoherence,
@@ -24,6 +27,7 @@ import Id
 import CSyntax
 import CSyntaxTypes()
 import CFreeVars(getFVE)
+import CSubst(cSubst)
 import PPrint
 import Position
 import Pred(Class, Pred)
@@ -79,7 +83,8 @@ addBindDeps :: [Id] -> SolvedBind -> SolvedBind
 addBindDeps is sb = sb { freeVars = foldr S.insert (freeVars sb) is }
 
 -- Collection of bindings categorized by recursion
--- nonRecursiveBinds are maintained in topologically sorted order
+-- Both lists accumulate newest-first; categorization and dependency
+-- order are normalized at emission time (see normalizeSBs)
 data SolvedBinds = SolvedBinds {
   recursiveBinds :: [(Bind, S.Set Id)], -- binding and free variables
   nonRecursiveBinds :: [(Bind, S.Set Id)],
@@ -133,9 +138,14 @@ fromSB (SolvedBind b@(i, t, _) fv isRec isInc cls) =
 
 infixl 6 <++ -- directional append new <++ old
 
--- Merge bindings, maintaining categorization and topological order
--- CRITICAL: Always merge as (new <++ old), never swap!
--- Invariant: new.nonRec doesn't depend on old
+-- Merge bindings: plain accumulation, newest first.  During solving a
+-- binding's rhs references the fresh dictionary ids of its subgoals,
+-- which are solved and merged later -- i.e. sit earlier in the
+-- newest-first list -- so accumulation order is already close to
+-- dependency order.  A binding that discharges against a previously
+-- solved (committed) dictionary references an id merged before it;
+-- such out-of-chronology references are repaired at emission time
+-- (normalizeSBs), not here.
 (<++) :: SolvedBinds -> SolvedBinds -> SolvedBinds
 new <++ old
     -- Check invariant here
@@ -232,6 +242,76 @@ emptySBs = SolvedBinds {
              directIncoherences = M.empty
            }
 
+-- All binding ids in the collection
+allBindIds :: SolvedBinds -> S.Set Id
+allBindIds sbs = recursiveIds sbs `S.union` nonRecursiveIds sbs
+
+-- Rename binding ids -- definitions and references -- throughout the
+-- collection.  Used when depositing a copy of a solved closure whose
+-- source predicates keep flowing: the flow will re-solve those
+-- predicates and re-bind their original dictionary ids in an inner
+-- scope, so the deposited copy must not share them.
+renameBinds :: M.Map Id Id -> SolvedBinds -> SolvedBinds
+renameBinds m sbs | M.null m = sbs
+renameBinds m sbs = SolvedBinds {
+    recursiveBinds = map renB (recursiveBinds sbs),
+    nonRecursiveBinds = map renB (nonRecursiveBinds sbs),
+    recursiveIds = S.map ren (recursiveIds sbs),
+    nonRecursiveIds = S.map ren (nonRecursiveIds sbs)
+  }
+  where
+    ren i = M.findWithDefault i i m
+    env = (M.empty, M.empty,
+           M.fromList [ (i, CVar i') | (i, i') <- M.toList m ], M.empty)
+    renB ((i, t, e), fv) = ((ren i, t, cSubst env e), S.map ren fv)
+
+-- Extract the transitive closure of bindings reachable from the given
+-- root ids, for reuse elsewhere.  A root is accepted only if its
+-- closure never references an id in the forbidden set (the dictionary
+-- of an unsolved predicate -- such a closure is incomplete) and never
+-- passes through a binding marked incoherent (evidence from an
+-- incoherent instance match is information-dependent and must not be
+-- frozen for reuse).  References to ids bound nowhere in this
+-- collection (top-level instance ids, lambda-bound given dictionaries)
+-- are permitted; their validity is the caller's scoping concern.
+-- Returns the closure bindings of all accepted roots (each binding
+-- once) and the set of accepted roots.
+extractClosures :: S.Set Id -> [Id] -> SolvedBinds -> (SolvedBinds, S.Set Id)
+extractClosures forbidden roots sbs = (closure_sbs, S.fromList ok_roots)
+  where
+    tagged = [ (b, fv, True)  | (b, fv) <- recursiveBinds sbs ] ++
+             [ (b, fv, False) | (b, fv) <- nonRecursiveBinds sbs ]
+    bind_map = M.fromList [ (i, x) | x@((i, _, _), _, _) <- tagged ]
+    -- reachability check for one root: True if no forbidden id or
+    -- incoherent-marked binding is reached
+    ok seen [] = True
+    ok seen (i:is)
+      | i `S.member` forbidden = False
+      | i `S.member` seen = ok seen is
+      | otherwise =
+          case M.lookup i bind_map of
+            Nothing -> ok (S.insert i seen) is
+            Just ((i', _, _), fv, _)
+              | hasIdProp i' IdPIncoherent -> False
+              | otherwise -> ok (S.insert i seen) (S.toList fv ++ is)
+    ok_roots = [ r | r <- roots, ok S.empty [r] ]
+    -- joint collection over the accepted roots (each binding once)
+    collect seen [] acc = acc
+    collect seen (i:is) acc
+      | i `S.member` seen = collect seen is acc
+      | otherwise =
+          case M.lookup i bind_map of
+            Nothing -> collect (S.insert i seen) is acc
+            Just x@(_, fv, _) ->
+                collect (S.insert i seen) (S.toList fv ++ is) (x : acc)
+    collected = collect S.empty ok_roots []
+    closure_sbs = SolvedBinds {
+        recursiveBinds = [ (b, fv) | (b, fv, True) <- collected ],
+        nonRecursiveBinds = [ (b, fv) | (b, fv, False) <- collected ],
+        recursiveIds = S.fromList [ i | ((i, _, _), _, True) <- collected ],
+        nonRecursiveIds = S.fromList [ i | ((i, _, _), _, False) <- collected ]
+      }
+
 instance PPrint SolvedBinds where
   pPrint d p sbs =
     text "SolvedBinds" <+> braces (
@@ -240,7 +320,7 @@ instance PPrint SolvedBinds where
     )
 
 getRecursiveDefls :: SolvedBinds -> [CDefl]
-getRecursiveDefls = map (mkDefl . fst) . recursiveBinds
+getRecursiveDefls = map mkDefl . fst . normalizeSBs
 
 getNonRecursiveDefls :: SolvedBinds -> [CDefl]
 getNonRecursiveDefls = map (mkDefl . fst) . nonRecursiveBinds
