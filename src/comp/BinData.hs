@@ -34,7 +34,7 @@ module BinData ( Byte
 -}
 
 import ErrorUtil(internalError)
-import Data.IORef(IORef, newIORef, readIORef, modifyIORef')
+import Data.IORef(IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 import IOUtil(progArgs)
 
@@ -348,17 +348,38 @@ section s action = do { beginSection s; action; endSection }
 -- -------------------------------------------------------------
 -- The In monad makes it easy to parse a byte stream
 
--- The In monad state keeps tables for shared structures
--- in addition to unconsumed bytes and an optional hash of
--- consumed bytes. Whether to hash or not is decided once
--- per call to runIn, so the two modes have separate constructors
--- for efficiency.
+-- The In monad reads from a fixed environment: the byte string, a small
+-- mutable block holding the read offset and the running hash, and the
+-- tables for shared structures. Whether to hash or not is decided once
+-- per call to runIn. Keeping the per-byte state mutable means reading a
+-- byte allocates nothing.
 
-data IS = ISPlain  !BinTable !BS.ByteString !Int
-        | ISHashed !BinTable !BS.ByteString !Int {-# UNPACK #-} !Hash
+data Env = Env { envBytes  :: !BS.ByteString
+               , envState  :: !(Ptr Word8) -- see stateOffset .. stateSize
+               , envTable  :: !(IORef BinTable)
+               , envHashed :: !Bool
+               }
 
--- In monad is a state transformer type monad
-newtype In a = In (IS -> (a,IS))
+-- Layout of the mutable state block: the read offset (Int), then the
+-- two Word32 halves of the running hash.
+stateOffset, stateHashX, stateHashY, stateSize :: Int
+stateOffset = 0
+stateHashX  = 8
+stateHashY  = 12
+stateSize   = 16
+
+{-# INLINE peekHash #-}
+peekHash :: Ptr Word8 -> IO Hash
+peekHash st = do x <- peekByteOff st stateHashX
+                 y <- peekByteOff st stateHashY
+                 return (Hash x y)
+
+{-# INLINE pokeHash #-}
+pokeHash :: Ptr Word8 -> Hash -> IO ()
+pokeHash st (Hash x y) = do pokeByteOff st stateHashX x
+                            pokeByteOff st stateHashY y
+
+newtype In a = In (Env -> IO a)
 
 instance Monad In where
   return = pure
@@ -407,41 +428,24 @@ hashWith env f = when (envHashed env) $ do
 
 {-# INLINE getB #-}
 getB :: In Byte
-getB = In $ \is ->
-  case is of
-    -- specialized for reading without hashing
-    ISPlain bt bs off ->
-      case BS.indexMaybe bs off of
-        Nothing -> internalError "BinData.getB: unexpected end of byte stream"
-        Just b -> let !off' = off + 1
-                  in (b, ISPlain bt bs off')
-    -- specialized for reading w/ hash computation
-    ISHashed bt bs off h ->
-      case BS.indexMaybe bs off of
-        Nothing -> internalError "BinData.getB: unexpected end of byte stream"
-        Just b -> let !off' = off + 1
-                      !h' = nextHashByte h b
-                  in (b, ISHashed bt bs off' h')
+getB = In $ \env -> do
+  off <- advance "getB" env 1
+  let !b = BSU.unsafeIndex (envBytes env) off
+  hashWith env (\h -> nextHashByte h b)
+  return b
+
+-- Read n bytes as a slice of the input, without building a list.
+getBS :: Int -> In BS.ByteString
+getBS n = In $ \env -> do
+  off <- advance "getBS" env n
+  let !s = BSU.unsafeTake n (BSU.unsafeDrop off (envBytes env))
+  hashWith env (\h -> BS.foldl' nextHashByte h s)
+  return s
 
 -- get an Int value (between 0 and 255)
 getI :: In Int
 getI = do { b <- getB; return (fromEnum b) }
 
--- table access shared by both hashing and non-hashing variants
-{-# INLINE getTable #-}
-getTable :: IS -> BinTable
-getTable (ISPlain bt _ _) = bt
-getTable (ISHashed bt _ _ _) = bt
-
-{-# INLINE setTable #-}
-setTable :: IS -> BinTable -> IS
-setTable (ISPlain _ bs off) bt = ISPlain bt bs off
-setTable (ISHashed _ bs off h) bt = ISHashed bt bs off h
-
-{-
-getBytesRead :: In Integer
-getBytesRead = In $ \is@(IS _ _ _ n) -> (n,is)
--}
 -- ------------------------------------------------------------------
 -- The Shared typeclass simplifies the process of creating shared
 -- structures in the output byte stream.
@@ -485,11 +489,11 @@ mkNewVal :: (BinTable -> (Table v)) ->
             (BinTable -> (Table v) -> BinTable) ->
             In (Int,v)
 mkNewVal get set =
-  In $ \is ->
-          let bt = getTable is
-              (Known n m) = get bt
-              bt' = set bt (Known (n+1) m)
-          in ((n, undefined), setTable is bt')
+  In $ \env -> do
+          bt <- readIORef (envTable env)
+          let (Known n m) = get bt
+          writeIORef (envTable env) $! set bt (Known (n+1) m)
+          return (n, undefined)
 
 -- get the right table, add a mapping from the index to the value,
 -- and put back the updated table while returning ()
@@ -497,22 +501,22 @@ mkRecordVal ::(BinTable -> (Table v)) ->
               (BinTable -> (Table v) -> BinTable) ->
               (Int -> v -> In ())
 mkRecordVal get set idx v =
-  In $ \is ->
-          let bt = getTable is
-              (Known n m) = get bt
-              bt' = v `seq` set bt (Known n (M.insert idx v m))
-          in ((), setTable is bt')
+  In $ \env -> do
+          bt <- readIORef (envTable env)
+          let (Known n m) = get bt
+          writeIORef (envTable env) $! (v `seq` set bt (Known n (M.insert idx v m)))
 
 
 -- get the right table and look up the value for the given index
 mkLookupIdx ::(BinTable -> (Table v)) ->
               (Int -> In v)
 mkLookupIdx get idx =
-  In $ \is ->
-          let (Known _ m) = get (getTable is)
-          in case (M.lookup idx m) of
-               (Just v) -> (v, is)
-               Nothing  -> internalError $ "BinData.lookupIdx: invalid index " ++ (show idx)
+  In $ \env -> do
+          bt <- readIORef (envTable env)
+          let (Known _ m) = get bt
+          case (M.lookup idx m) of
+            (Just v) -> return v
+            Nothing  -> internalError $ "BinData.lookupIdx: invalid index " ++ (show idx)
 
 
 -- This is a convenience function that groups the sequence of operations
@@ -1651,14 +1655,18 @@ encode :: (Bin a) => a -> [Byte]
 encode x = runOut (toBin x)
 
 runIn :: In a -> BS.ByteString -> Bool -> (a, Int, String)
-runIn (In f) bs do_hash =
-  if do_hash
-    then case f (ISHashed unknownTable bs 0 hashInit) of
-           (x, ISHashed _ _ off h) -> (x, off, showHash h)
-           _ -> internalError "BinData.runIn: hashed run changed state shape"
-    else case f (ISPlain unknownTable bs 0) of
-           (x, ISPlain _ _ off) -> (x, off, "")
-           _ -> internalError "BinData.runIn: plain run changed state shape"
+runIn (In f) bs do_hash = unsafePerformIO $ do
+  fp <- mallocForeignPtrBytes stateSize
+  withForeignPtr fp $ \st -> do
+    pokeByteOff st stateOffset (0 :: Int)
+    pokeHash st hashInit
+    tbl <- newIORef unknownTable
+    x <- f (Env bs st tbl do_hash)
+    off <- peekByteOff st stateOffset
+    h <- if do_hash
+         then showHash <$> peekHash st
+         else return ""
+    return (x, off, h)
 
 decode :: (Bin a) => BS.ByteString -> a
 decode s = let (x, off, _) = runIn fromBin s False
