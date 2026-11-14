@@ -212,12 +212,12 @@ satisfyEx dvs es ps = assertPredsExpanded "satisfyEx" ps $ do
 
 -- break up preds into those affected by a substitution and those not
 -- in order to loop more efficiently in satisfy'
-split_rs :: Subst -> [VPred] -> ([VPred], [VPred])
+split_rs :: JoinGoal g => Subst -> [g] -> ([g], [g])
 split_rs s' rs  = partition affected_pred rs
           -- should only be a few since classes are small
           -- and the substitution comes from a single reducePred
           -- or joinCtx (at the end)
-    where affected_pred r = not (substDomainDisjoint s' (vpredFVs r))
+    where affected_pred r = not (substDomainDisjoint s' (vpredFVs (goalPred r)))
 
 satisfy' :: DVS -> [EPred] -> [EPred] -> [VPred] -> TI SolveResult
 satisfy' dvs es pool ps = do
@@ -366,26 +366,71 @@ expTFun t = return ([], t)
 -- i.e. attempt to merge possible substitutions
 -- so that we can handle more than one duplicate pred at once
 joinCtxs :: [TyVar] -> [VPred] -> Maybe ([VPred], Subst, SolvedBind)
-joinCtxs bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
-  where blob_list = [((c, n, boolCompress (map not bs) ts), vp) |
-                     vp@(VPred _ (PredWithPositions (IsIn c ts) _ _)) <- vps,
-                     (n, bs) <- zip [0..] (funDeps c)]
+joinCtxs bound_tyvars vps =
+    fmap (\ ((rs, s, sb, _), _) -> (rs, s, sb)) (joinCtxsNG bound_tyvars vps)
+
+-- A goal of the join rounds, carrying per-fundep-row sort keys lazily across
+-- rounds once a join occurs.
+class JoinGoal g where
+    goalPred :: g -> VPred
+    goalBlobs :: g -> [((Class, Int, [Type]), VPred)]
+    toGoal :: VPred -> g
+
+instance JoinGoal VPred where
+    goalPred = id
+    goalBlobs = predBlobs
+    toGoal = id
+
+data JGoal = JGoal VPred [((Class, Int, [Type]), VPred)]
+
+instance JoinGoal JGoal where
+    goalPred (JGoal vp _) = vp
+    goalBlobs (JGoal _ bs) = bs
+    toGoal vp = JGoal vp (predBlobs vp)
+
+instance Types JGoal where
+    apSub s g = fromMaybe g (apSubM s g)
+    apSubM s (JGoal vp _) = fmap toGoal (apSubM s vp)
+    tv (JGoal vp _) = tv vp
+
+{-# INLINE predBlobs #-}
+predBlobs :: VPred -> [((Class, Int, [Type]), VPred)]
+predBlobs vp@(VPred _ (PredWithPositions (IsIn c ts) _ _)) =
+    [ ((c, n, boolCompress (map not bs) ts), vp) | (n, bs) <- zip [0..] (funDeps c) ]
+
+{-# SPECIALIZE joinCtxsNG :: [TyVar] -> [VPred] ->
+      Maybe (([VPred], Subst, SolvedBind, VPred), (Int, [VPred], VPred, VPred)) #-}
+{-# SPECIALIZE joinCtxsNG :: [TyVar] -> [JGoal] ->
+      Maybe (([JGoal], Subst, SolvedBind, VPred), (Int, [VPred], VPred, VPred)) #-}
+joinCtxsNG :: JoinGoal g => [TyVar] -> [g] ->
+              Maybe (([g], Subst, SolvedBind, VPred), (Int, [VPred], VPred, VPred))
+joinCtxsNG bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
+  where blob_list = [ b | g <- vps, b <- goalBlobs g ]
         joined_blob_list = joinByFst blob_list
-        matchPreds n (VPred i pp@(PredWithPositions (IsIn c ts) pos anc))
-                     (VPred i' pp'@(PredWithPositions (IsIn _ ts') pos' anc')) = do
+        matchBlobs ((_,n,_), gvs) =
+            fmap (\ (r, (v1, v2)) -> (r, (n, gvs, v1, v2))) (joinInGroup bound_tyvars vps n gvs)
+
+-- uniquePairs because we need to try every possible pair of matching VPreds
+joinInGroup :: JoinGoal g => [TyVar] -> [g] -> Int -> [VPred] ->
+               Maybe (([g], Subst, SolvedBind, VPred), (VPred, VPred))
+joinInGroup bound_tyvars vps n gvs =
+    listToMaybe $ mapMaybe (\ (v1, v2) -> fmap (\ r -> (r, (v1, v2)))
+                                                (joinPair bound_tyvars vps n v1 v2)) $
+        uniquePairs gvs
+
+joinPair :: JoinGoal g => [TyVar] -> [g] -> Int -> VPred -> VPred ->
+            Maybe ([g], Subst, SolvedBind, VPred)
+joinPair bound_tyvars vps n (VPred i pp@(PredWithPositions (IsIn c ts) pos anc))
+                            (VPred i' (PredWithPositions (IsIn _ ts') pos' anc')) = do
           let bs = funDeps c !! n
-          -- we could try to capture and use numeric equalities here
-          -- but that would require being on the TI monad,
-          -- which doesn't seem worth it
           (s, []) <- mgu bound_tyvars (boolCompress bs ts) (boolCompress bs ts')
           let p'' = VPred i' (PredWithPositions (IsIn c ts') (pos' ++ pos) (anc' ++ anc))
-              rs  = p'':[ vp | vp@(VPred j _) <- vps, j /= i && j /= i']
+              rs  = toGoal p'' : [ g | g <- vps, residual (goalPred g) ]
+              residual (VPred j _) = j /= i && j /= i'
               pr = removePredPositions pp
               b = (i, predToType (apSub s pr), CVar i')
               sb = mkSolvedBind b False -- Joining equivalent predicates, not recursive
-          return (rs, s, sb)
-        -- uniquePairs because we need to try every possible pair of matching VPreds
-        matchBlobs ((_,n,_), vps) = listToMaybe $ mapMaybe (uncurry (matchPreds n)) $ uniquePairs vps
+          return (rs, s, sb, p'')
 
 -- This function is successful if the list of VPred is empty, indicating
 -- that the pred was fully satisfied.  In which case, the bindings and subst
@@ -663,18 +708,59 @@ batchSolveNumericPreds es rs = do
             return (residualsWithout (hits ++ proven), sbs)
 
 joinNeededCtxs :: [VPred] -> TI ([VPred], Subst, SolvedBinds)
-joinNeededCtxs = joinNeededCtxs' nullSubst emptySBs
+joinNeededCtxs ps = do
+  bvs <- getBoundTVs
+  case (joinCtxsNG bvs ps) of
+    Nothing ->
+        return (ps, nullSubst, emptySBs)
+    Just ((ps', s', sb, p''), g) -> do
+        (ps'', s, sbs) <- joinNext bvs nullSubst emptySBs
+                                   ((map toGoal ps', s', sb, p''), g)
+        return (map goalPred ps'', s, sbs)
 
-joinNeededCtxs' :: Subst -> SolvedBinds -> [VPred] -> TI ([VPred], Subst, SolvedBinds)
+joinNeededCtxs' :: Subst -> SolvedBinds -> [JGoal] -> TI ([JGoal], Subst, SolvedBinds)
 joinNeededCtxs' s sbs ps = do
   bvs <- getBoundTVs
-  case (joinCtxs bvs ps) of
+  case (joinCtxsNG bvs ps) of
     Nothing ->
         return (ps, s, sbs)
-    Just (ps', s', sb) ->
-        let (changed_rs, unchanged_rs) = split_rs s' ps'
-            rs' = (apSub s' changed_rs) ++ unchanged_rs
-        in joinNeededCtxs' (s' @@ s) (fromSB sb <++ sbs) rs'
+    Just j -> joinNext bvs s sbs j
+
+joinNext :: [TyVar] -> Subst -> SolvedBinds
+         -> (([JGoal], Subst, SolvedBind, VPred), (Int, [VPred], VPred, VPred))
+         -> TI ([JGoal], Subst, SolvedBinds)
+joinNext bvs s sbs ((ps', s', sb, p''), (n, gvs, v1, v2)) =
+  let sbs1 = fromSB sb <++ sbs
+  in  if isNullSubst s'
+      then joinBatch bvs s sbs1 ps' n (groupAfter v1 v2 p'' gvs)
+      else let (changed_rs, unchanged_rs) = splitGoals s' ps'
+               rs' = (apSub s' changed_rs) ++ unchanged_rs
+           in  joinNeededCtxs' (s' @@ s) sbs1 rs'
+
+-- Rounds after a join with a null substitution: only the joined group can
+-- produce a new join, so retry it directly before re-sorting all goals.
+joinBatch :: [TyVar] -> Subst -> SolvedBinds -> [JGoal] -> Int -> [VPred]
+          -> TI ([JGoal], Subst, SolvedBinds)
+joinBatch bvs s sbs cur n gm =
+  case joinInGroup bvs cur n gm of
+    Nothing -> joinNeededCtxs' s sbs cur
+    Just ((ps', s', sb, p''), (v1, v2)) ->
+      let sbs1 = fromSB sb <++ sbs
+      in  if isNullSubst s'
+          then joinBatch bvs s sbs1 ps' n (groupAfter v1 v2 p'' gm)
+          else let (changed_rs, unchanged_rs) = splitGoals s' ps'
+                   rs' = (apSub s' changed_rs) ++ unchanged_rs
+               in  joinNeededCtxs' (s' @@ s) sbs1 rs'
+
+splitGoals :: Subst -> [JGoal] -> ([JGoal], [JGoal])
+splitGoals s' rs
+    | any affected rs = partition affected rs
+    | otherwise = ([], rs)
+  where affected r = not (substDomainDisjoint s' (vpredFVs (goalPred r)))
+
+groupAfter :: VPred -> VPred -> VPred -> [VPred] -> [VPred]
+groupAfter (VPred i _) (VPred i' _) p'' gm =
+    p'' : [ vp | vp@(VPred j _) <- gm, j /= i && j /= i' ]
 
 -- as we commit to substitutions, we extend the monad with them
 -- we preserve them this far so we can efficiently decide which
