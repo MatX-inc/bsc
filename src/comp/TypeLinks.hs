@@ -31,7 +31,7 @@ module TypeLinks(
         -- links
         tlCopy, tlCoerce, tlStoredValue, tlFixValue,
         tlArgsReset, tlArgPush, tlStored, tlRedex,
-        tlOutPayload, tlFallUnpack,
+        tlOutPayload, tlFallUnpack, tlPreRewrite,
         -- decided conditionals
         tlCondBegin, tlCondTake, tlCondEnd, tlCondDecided,
         -- roots
@@ -307,6 +307,9 @@ data TLog = TLog {
     -- and the literal selector that decided a cell's own conditional
     tl_pending :: !(IORef Int),
     tl_decided :: !(IORef (IM.IntMap End)),
+    -- a concat whose don't-care operand the evaluator's rewrite absorbed,
+    -- waiting for the cell that stores the rewritten value
+    tl_prerw  :: !(IORef (Maybe PreRw)),
     tl_counts :: !(IOUArray Int Int)
   }
 
@@ -340,6 +343,7 @@ tlNewLog mfile = do
   absent <- newIORef M.empty
   pending <- newIORef (-1)
   decided <- newIORef IM.empty
+  prerw <- newIORef Nothing
   counts <- newArray (0, nCounters - 1) 0
   return (TLog { tlOn = maybe False (const True) mh,
                  tl_h = maybe (error "TypeLinks: no file") id mh,
@@ -348,7 +352,13 @@ tlNewLog mfile = do
                  tl_final = final, tl_leafs = leafs, tl_leafl = leafl,
                  tl_roots = roots, tl_callsQ = callsQ, tl_callsF = callsF,
                  tl_absent = absent, tl_pending = pending,
-                 tl_decided = decided, tl_counts = counts })
+                 tl_decided = decided, tl_prerw = prerw, tl_counts = counts })
+
+-- The value a rewrite gave (a primitive applied to cells: its name, its
+-- numeric type arguments, the cells), the concat as it was evaluated
+-- (type arguments and ends, the don't-care in place), and how many more
+-- stored values to look at before giving up.
+data PreRw = PreRw String [String] [Int] [String] [End] !Int
 
 bump :: TLog -> Int -> IO ()
 bump l k = do
@@ -955,7 +965,8 @@ storedValue :: TLog -> Int -> IExpr a -> IO ()
 storedValue l p e0 = do
   e <- evaluate e0
   case e of
-    IAps _ _ _ -> do _ <- describe l 'S' liveDepth (ECell p) Nothing Nothing e
+    IAps _ _ _ -> do preRewriteAt l p e
+                     _ <- describe l 'S' liveDepth (ECell p) Nothing Nothing e
                      return ()
     ICon i ic0 -> do
       ic <- evaluate ic0
@@ -997,6 +1008,7 @@ tlStored l p f ts ft as = safely l $ do
   skip <- skippedCell l p
   if skip then bump l ctSkipLink else do
     xs <- reverse <$> readIORef (tl_args l)
+    preRewriteAt l p (IAps f ts as)
     _ <- describe l 'S' 0 (ECell p) (Just ft) (Just xs) (IAps f ts as)
     return ()
 
@@ -1060,6 +1072,77 @@ tlOutPayload l out tys res mscrut = safely l $ do
               _ -> return ()
         _ -> return ()
     _ -> return ()
+
+-- The evaluator's rewrite turned a concat with a don't-care operand into
+-- res (for example, "select 4 8 16 w ++ _" into "select 8 4 16 w": the
+-- don't-care bits become neighbouring bits of the selected word).  ts are
+-- the concat's type arguments, vals its two operands as evaluated, heaped
+-- the same operands as heaped.  When exactly one operand is a don't-care
+-- and res is a primitive applied to cells, the concat as it was evaluated
+-- is kept for the cell that stores res (preRewriteAt).
+tlPreRewrite :: TLog -> [IType] -> [IExpr a] -> [IExpr a] -> IExpr a -> IO ()
+tlPreRewrite l ts vals heaped res = safely l $ do
+  undets <- mapM isUndet vals
+  case (undets, heaped) of
+    ([u1, u2], [h1, h2]) | u1 /= u2 -> do
+        mkey <- primKey l res
+        case mkey of
+          Just (op, nts, cells) -> do
+              cts <- mapM (numArg l) ts
+              e1 <- if u1 then return EUndet else endOf l h1
+              e2 <- if u2 then return EUndet else endOf l h2
+              writeIORef (tl_prerw l) (Just (PreRw op nts cells cts [e1, e2] 16))
+          Nothing -> return ()
+    _ -> return ()
+  where isUndet v = reading l False $ do
+            v' <- evaluate v
+            case v' of
+              ICon _ ic0 -> do ic <- evaluate ic0
+                               case ic of
+                                 ICUndet {} -> return True
+                                 _ -> return False
+              _ -> return False
+
+-- a primitive applied to cells only: its name, numeric type arguments
+-- and the cells
+primKey :: TLog -> IExpr a -> IO (Maybe (String, [String], [Int]))
+primKey l e0 = reading l Nothing $ do
+  e <- evaluate e0
+  case e of
+    IAps (ICon _ ic0) ts es -> do
+        ic <- evaluate ic0
+        case ic of
+          ICPrim { primOp = op } -> do
+              let cell x = case x of
+                             IRefT _ p _ _ -> Just p
+                             _ -> Nothing
+              case mapM cell es of
+                Just cells@(_ : _) -> do
+                    nts <- mapM (numArg l) ts
+                    name <- evaluate (let s = show op in length s `seq` s)
+                    return (Just (name, nts, cells))
+                _ -> return Nothing
+          _ -> return Nothing
+    _ -> return Nothing
+
+-- The application e is the value stored in the cell p: when it is the
+-- value a rewrite gave for a concat with a don't-care operand, write the
+-- concat as evaluated for the cell (A R prim PrimConcat, with "x" for the
+-- don't-care).  The record is a second description of the cell's bits:
+-- the range it gives to "x" was written as a don't-care in the source.
+preRewriteAt :: TLog -> Int -> IExpr a -> IO ()
+preRewriteAt l p e = do
+  m <- readIORef (tl_prerw l)
+  case m of
+    Nothing -> return ()
+    Just (PreRw op nts cells cts ends ttl) -> do
+      mkey <- primKey l e
+      if mkey == Just (op, nts, cells)
+        then do writeIORef (tl_prerw l) Nothing
+                emit l (RA 'R' (ECell p) "prim" (NmStr "PrimConcat") (-1) cts ends)
+                bump l ctPreRewrite
+        else writeIORef (tl_prerw l)
+                 (if ttl <= 1 then Nothing else Just (PreRw op nts cells cts ends (ttl - 1)))
 
 -- A one-bit unpack at the type ta of the operand x took the fall-through
 -- path (one-bit coercions are never held) and is not a cell's own

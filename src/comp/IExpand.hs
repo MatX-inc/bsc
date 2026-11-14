@@ -95,7 +95,7 @@ import CaptureRebuild(typeObservations)
 import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlStoredValue, tlFixValue, tlArgsReset, tlStored, tlRedex,
                  tlCondBegin, tlCondEnd, tlCondDecided, tlOutPayload,
-                 tlFallUnpack,
+                 tlFallUnpack, tlPreRewrite,
                  tlRoot, tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr,
                  tlFinalTuple, tlNamed, tlRootAliases, tlAlias, tlClosedExpr,
                  tlClosed, tlUnitExpr, tlInstance, tlFinalEnd)
@@ -5326,6 +5326,12 @@ conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
                     -- we used to evaluate further here, but that shouldn't
                     -- be necessary (and probably indicates a bug elsewhere)
                     when (doDebug || doTrans) $ traceM ("conAp: iTransform result: " ++ ppReadable e')
+                    -- a concat whose don't-care operand the rewrite
+                    -- absorbed: keep the concat as evaluated (type links)
+                    case op of
+                      PrimConcat -> tlIO (\ l -> tlPreRewrite l [ t | T t <- as' ] [ x | E x <- as' ]
+                                                              [ x | E x <- ees ] e')
+                      _ -> return ()
                     return (P p e')
                   _ -> bldAp' "Prim 2" fe ees
 
