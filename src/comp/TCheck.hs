@@ -2244,12 +2244,8 @@ tiQuals as ps r (q:quals) = do
     tiQuals (as' ++ as) (rs++ps) (q':r) quals
 
 -- Qualifier code is emitted outside the enclosing group's dictionary
--- letseq (IConv evaluates it in the scope where the definition is
--- bound), so its predicates must defer upward rather than being solved
--- into the current pool frame -- and they must not CONSULT the pool
--- either: a qualifier predicate discharged against a pool entry would
--- reference a dictionary bound inside the group's letseq from code
--- that is emitted outside it.
+-- letseq, so its predicates must defer upward without consulting or
+-- depositing into the current pool frame.
 tiQual :: [Assump] -> CQual -> TI ([VPred], [Assump], CQual)
 tiQual as q = withoutSolvedPool (tiQual' as q)
 
@@ -2427,10 +2423,6 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
     etrace ("tiExpl: " ++ ppReadable (i, getIdPosition i, length as0, sc)) $
         return ()
 
-    -- Dictionaries pooled while checking this definition's body (see
-    -- propagateFunDeps) are emitted with this definition's letseq;
-    -- open their frame.  (Error paths need no cleanup: thrown errors
-    -- restore the monad state at the recovery point.)
     pool_frame <- pushSolvedPool
 
     -- Typecheck the implicit condition (only for interfaces)
@@ -2698,10 +2690,12 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
                  then return []
                  else fst <$> satisfy eqs uds
 
+    pool_sbs <- popSolvedPool pool_frame
+
     -- Apply the substitution to the code fragments
     let alts'' = apSub s alts'                  -- new alternatives
         me''   = apSub s me'                    -- update guards
-    asbs <- warnTransitiveIncoherent (apSub s sbs1)  -- new dict bindings
+    asbs <- warnTransitiveIncoherent (apSub s (pool_sbs <++ sbs1))  -- new dict bindings
 
     -- Determine the generic variables and produce the inferred type scheme
     let
@@ -2910,9 +2904,6 @@ tiImpls recursive as ibs = do
         as_initial | recursive = zipWith (:>:) is scs ++ as
                    | otherwise = as
 
-    -- Dictionaries pooled while checking this group's bodies (see
-    -- propagateFunDeps) are emitted with this group's letseq; open
-    -- their frame
     pool_frame <- pushSolvedPool
 
     -- typecheck all the defs
@@ -2955,7 +2946,7 @@ tiImpls recursive as ibs = do
     -- be resolved).  so we do that reduction here.
 
     let eqs = []
-    SolveResult ps'' sbs2 s_agg <- reducePredsAggressive Nothing eqs ps'
+    SolveResult ps'' sbs2 s_agg _ <- reducePredsAggressive Nothing eqs ps'
 
     when (not . null $ ps') $ do
       if (not . null $ ps'') then
@@ -2997,13 +2988,11 @@ tiImpls recursive as ibs = do
         let pos = getPosition (fst (headOrErr "tiImpls: pos" ibs))
         in  handleAmbiguousContext pos amb_vars rs2
 
-    -- Close the pool frame: the dictionaries deposited while checking
-    -- this group join its letseq
     pool_sbs <- popSolvedPool pool_frame
 
     -- update the info we computed above
     s <- getSubst
-    sbs_final <- warnTransitiveIncoherent (apSub s (sbs3 <++ sbs2 <++ sbs1))
+    sbs_final <- warnTransitiveIncoherent (apSub s (pool_sbs <++ sbs3 <++ sbs2 <++ sbs1))
     let ts_final = apSub s ts'
         fs_final = tv (apSub s as) `union` bvs
         vss_final = map tv ts_final

@@ -12,15 +12,15 @@ IPackage DummyInDeflQual
 DummyInDeflQual.dummyInDeflQual :: Prelude.Bit 12
 DummyInDeflQual.dummyInDeflQual =
   let f ::
-	\/(_tctyvar1063 :: *) .
-	\/(_tctyvar1064 :: *) . Prelude.Literal _tctyvar1063 -> _tctyvar1064 -> _tctyvar1063
+	\/(_tctyvar1054 :: *) .
+	\/(_tctyvar1055 :: *) . Prelude.Literal _tctyvar1054 -> _tctyvar1055 -> _tctyvar1054
       f =
-	/\ (_tctyvar1063 :: *) .
-	/\ (_tctyvar1064 :: *) .
-	\ (_tcdict1050 :: Prelude.Literal _tctyvar1063) .
-	\ (x :: _tctyvar1064) .
+	/\ (_tctyvar1054 :: *) .
+	/\ (_tctyvar1055 :: *) .
+	\ (_tcdict1050 :: Prelude.Literal _tctyvar1054) .
+	\ (x :: _tctyvar1055) .
 	PrimIf
-	  ·_tctyvar1063
+	  ·_tctyvar1054
 	  (PrimOrd
 	     ·Prelude.Bool
 	     ·1
@@ -29,8 +29,8 @@ DummyInDeflQual.dummyInDeflQual =
 		DummyInDeflQual._lifted_dict2=
 		(PrimBuildUndefined ·(Prelude.Bit 2) _ 1)
 		(.Prelude.fromInteger ·(Prelude.Bit 2) DummyInDeflQual._lifted_dict1= 0b11)))
-	  (.Prelude.fromInteger ·_tctyvar1063 _tcdict1050 0)
-	  (PrimBuildUndefined ·_tctyvar1063 (PrimGetEvalPosition ·_tctyvar1064 x) 2)
+	  (.Prelude.fromInteger ·_tctyvar1054 _tcdict1050 0)
+	  (PrimBuildUndefined ·_tctyvar1054 (PrimGetEvalPosition ·_tctyvar1055 x) 2)
   in  f ·(Prelude.Bit 12) ·Prelude.Bool DummyInDeflQual._lifted_dict0= (Prelude.True Prelude.PrimUnit)
 next def..........................................................
 DummyInDeflQual._lifted_dict0 :: Prelude.Literal (Prelude.Bit 12)
