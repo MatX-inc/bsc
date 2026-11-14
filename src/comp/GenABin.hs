@@ -10,6 +10,7 @@ import Position
 import Backend
 import Wires
 import ASyntax
+import FStringCompat(mkFString, getFString)
 import AUses(MethodId(..), UniqueUse(..), UseCond(..), RuleUses(..), ucTrue)
 import AScheduleInfo
 import ADumpScheduleInfo(RuleConflictType)
@@ -149,6 +150,8 @@ instance Bin APackage where
                apkg_external_wires = wi,
                apkg_external_wire_types = wpt,
                apkg_expr_types = ets,
+               apkg_final_wire_names = names,
+               apkg_final_wire_types = finalTypes,
                apkg_reset_list = rsts,
                apkg_state_instances = avis,
                apkg_local_defs = ds,
@@ -169,6 +172,13 @@ instance Bin APackage where
                         toBin wi
                         toBin wpt
                         toBin ets
+                        -- Share names with the existing identifier strings.
+                        -- Sort before interning: FString ordering depends on
+                        -- process history. Identity pairs prove wire liveness.
+                        toBin (fmap (map (\(a,b) -> (mkFString a, mkFString b)) .
+                                     M.toAscList) names)
+                        toBin (fmap (map (\(n,ts) -> (mkFString n,ts)) .
+                                     M.toAscList) finalTypes)
                         toBin rsts
                         toBin avis
                         toBin ds
@@ -188,6 +198,13 @@ instance Bin APackage where
                    wi <- fromBin
                    wpt <- fromBin
                    ets <- fromBin
+                   sharedNames <- fromBin
+                   let names = fmap (M.fromList .
+                                     map (\(a,b) -> (getFString a, getFString b)))
+                                    sharedNames
+                   sharedTypes <- fromBin
+                   let finalTypes = fmap (M.fromList . map (\(n,ts) -> (getFString n,ts)))
+                                         sharedTypes
                    rsts <- fromBin
                    avis <- fromBin
                    ds <- fromBin
@@ -206,6 +223,8 @@ instance Bin APackage where
                              apkg_external_wires = wi,
                              apkg_external_wire_types = wpt,
                              apkg_expr_types = ets,
+                             apkg_final_wire_names = names,
+                             apkg_final_wire_types = finalTypes,
                              apkg_reset_list = rsts,
                              apkg_state_instances = avis,
                              apkg_local_defs = ds,

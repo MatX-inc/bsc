@@ -19,9 +19,10 @@ import Data.Char(isSpace, ord)
 import Data.List(intersect, nub, partition, intersperse, sort,
             isPrefixOf, isSuffixOf, unzip5, intercalate, foldl', tails)
 import Data.Time.Clock.POSIX(getPOSIXTime)
-import Data.Maybe(isJust, isNothing)
+import Data.Maybe(isJust, isNothing, fromMaybe)
 import Numeric(showOct)
 
+import Control.DeepSeq(force)
 import Control.Monad(when, unless, filterM, liftM, foldM)
 import Control.Monad.Except(runExceptT)
 import Control.Concurrent(forkIO)
@@ -91,7 +92,7 @@ import GenSign(genUserSign, genEverythingSign)
 import CQualifyClassDefaults(qualifyClassDefaults)
 import Simplify(simplify)
 import ISyntax(IPackage(..), IModule(..), IATFCache, mergeIATFCaches,
-               IEFace(..), IDef(..), IExpr(..), fdVars)
+               IEFace(..), IDef(..), IExpr(..), IType, fdVars)
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef, iConvTStats)
@@ -142,6 +143,8 @@ import ABin(ABin(..), ABinModInfo(..), ABinForeignFuncInfo(..),
            ABinModSchedErrInfo(..))
 import ABinUtil(readAndCheckABin, readAndCheckABinPathCatch, getABIHierarchy,
                 assertNoSchedErr)
+import ASourceTypes(anchorASPackage)
+import WireAnalysis(getFinalWireTypeCandidates)
 import GenABin(genABinFile)
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap,
                         mkImportDeclarations, isPoly)
@@ -1210,7 +1213,8 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Generate muxes etc.
        start flags DFastate
-       asmod <- aState errh flags pprops scheduleInfo atsPackage
+       asmod0 <- aState errh flags pprops scheduleInfo atsPackage
+       let asmod = anchorASPackage asmod0
        -- after aState, method calls should no longer exist
        asMethCheck flags asmod "astate"
        t <- dump errh flags t DFastate dumpnames asmod
@@ -1260,7 +1264,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Expand some primitives
        start flags DFsynthesize
-       let asynmod = (aSynthesize flags aomod)
+       let asynmod = aSynthesize flags (anchorASPackage aomod)
        asCheck flags asynmod "asynthesize"
        -- Check that referenced signal names exist
        asSignalCheck flags asynmod "synthesize"
@@ -1269,7 +1273,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Transform to adapt to Verilog quirks
        start flags DFveriquirks
-       let aqmod = aVeriQuirks flags asynmod
+       let aqmod = aVeriQuirks flags (anchorASPackage asynmod)
        -- this check is too strict on plus operator output size
        -- XXX fix the check, don't disable it
        when (not (keepAddSize flags))
@@ -1279,7 +1283,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Transform to adapt to Verilog quirks
        start flags DFfinalcleanup
-       let aumod =  finalCleanup flags aqmod
+       let aumod =  finalCleanup flags (anchorASPackage aqmod)
        -- this check is too strict on plus operator output size
        -- XXX fix the check, don't disable it
        when (not (keepAddSize flags))
