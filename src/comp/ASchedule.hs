@@ -4179,11 +4179,14 @@ mkConflictMap :: Flags -> DisjointTestState ->
                  SM (ConflictMap, S.Set (ARuleId, ARuleId), DisjointTestState)
 mkConflictMap flags dtstate rule_meth_map cands ncset ignore_conflicts =
     let
-        checkOneUse :: AExpr -> AExpr ->
+        checkOneUse :: Bool -> AExpr -> AExpr ->
                        ([(MethodId, MethodId)], Bool, DisjointTestState) ->
                        ((MethodId, AExpr), (MethodId, AExpr)) ->
                        SM ([(MethodId, MethodId)], Bool, DisjointTestState)
-        checkOneUse p1 p2 (cs, b, dts) ((m1,c1), (m2,c2)) = do
+        checkOneUse distinct_rules _ _ (cs, b, dts) ((m1,c1), (m2,c2))
+          | distinct_rules && isTrue c1 && isTrue c2
+          = return ((m1,m2):cs, b, dts)
+        checkOneUse _ p1 p2 (cs, b, dts) ((m1,c1), (m2,c2)) = do
           (res, dts') <- convIO $ checkDisjointExprWithCtx dts p1 p2 c1 c2
           case res of
             Just True -> return (cs, True, dts')
@@ -4208,7 +4211,8 @@ mkConflictMap flags dtstate rule_meth_map cands ncset ignore_conflicts =
                            es' = ((rule2, [CUse cs']):es)
                        in  return (es', igns, dts)
                   else do (cs', ignored, dts')
-                              <- foldM (checkOneUse p1 p2) ([], False, dts) cs
+                              <- foldM (checkOneUse (rule1 /= rule2) p1 p2)
+                                       ([], False, dts) cs
                           let igns' = if ignored
                                       then S.insert (rule1, rule2) igns
                                       else igns
