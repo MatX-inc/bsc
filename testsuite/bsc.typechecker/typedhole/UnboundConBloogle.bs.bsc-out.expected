@@ -1,0 +1,6 @@
+checking package dependencies
+compiling UnboundConBloogle.bs
+Error: "UnboundConBloogle.bs", line 4, column 4: (T0003)
+  Unbound constructor `Juust'
+  bloogle found these exact name matches:
+    FakeMaybe Juust :: a -> FakeMaybe a

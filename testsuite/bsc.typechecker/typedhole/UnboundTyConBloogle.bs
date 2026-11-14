@@ -1,0 +1,4 @@
+package UnboundTyConBloogle(y) where
+
+y :: Vecktor 3 (Bit 8)
+y = 0
