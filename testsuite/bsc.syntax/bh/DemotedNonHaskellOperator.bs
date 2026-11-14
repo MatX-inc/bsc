@@ -1,6 +1,6 @@
 package DemotedNonHaskellOperator((»»), result) where
 
--- With -demote-errors P0225, an operator containing characters that
+-- With -demote-errors P0227, an operator containing characters that
 -- GHC's lexer rejects is accepted with a warning, as a migration
 -- escape hatch.
 
