@@ -156,6 +156,7 @@ library
     BinData
     BinParse
     BinUtil
+    Bloogle
     BluesimLoader
     Bluetcl
     BoolExp

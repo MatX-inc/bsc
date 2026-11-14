@@ -1,5 +1,6 @@
 module Bloogle(bloogleTypeMatches, bloogleNameMatches) where
 
+import Warmup ()
 import Control.Exception(SomeException, try)
 import Data.Char(isSpace)
 import Data.List(isPrefixOf, isSuffixOf)

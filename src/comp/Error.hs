@@ -186,6 +186,7 @@ initErrorState = ErrorState {
                    demotionSet = SomeMsgs S.empty,
                    suppressionSet = SomeMsgs S.empty,
                    suppressedCount = 0,
+                   bloogleDbPath = Nothing,
                    openHandles = []
                  }
 
@@ -727,7 +728,7 @@ data ErrMsg =
 
         | EUndefinedTask String
         | EUnboundCon String (Maybe String)
-        | EUnboundVar String [String] -- ^ var name, bloogle exact name matches
+        | EUnboundVar String [String] -- var name, bloogle exact name matches
         | EUnboundField String
         | EUnboundClCon String
         | EUnboundTyCon String
@@ -1250,7 +1251,7 @@ data ErrMsg =
         | EConMismatchNumArgs  String{-String-}      Integer Integer
         | EPartialConMismatchNumArgs  String String{-String-}Integer Integer Integer
 
-        -- | a diagnostic decorated with bloogle exact-name matches
+        -- a diagnostic decorated with bloogle exact-name matches
         --   (see -bloogle-db); keeps the wrapped message's tag
         | EBloogleMatches ErrMsg [String]
         deriving (Eq,Show)
