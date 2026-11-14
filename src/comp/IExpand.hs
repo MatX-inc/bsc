@@ -94,7 +94,8 @@ import CaptureEvents(CapLogF, MoveSpec(..), moveSpec,
 import CaptureRebuild(typeObservations)
 import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlValue, tlFixValue, tlArgsReset, tlStored,
-                 tlFinalBegin, tlFinalEnd)
+                 tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr, tlNamed,
+                 tlFinalEnd)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
 
@@ -975,12 +976,97 @@ iExpandTypeLinks :: TLog -> IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
 iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules_clean)
                  ifc port_types = do
     tlFinalBegin l
-    let own_types = M.findWithDefault M.empty Nothing port_types
+    let cellExpr p = case IM.lookup p iheap of
+                       Just (HNF { hc_pexpr = P _ e }) -> Just e
+                       _ -> Nothing
+        isConst (Just (ICon _ ic)) =
+            case ic of
+              ICInt {} -> True
+              ICReal {} -> True
+              ICString {} -> True
+              ICChar {} -> True
+              ICUndet {} -> True
+              _ -> False
+        isConst _ = False
+        own_types = M.findWithDefault M.empty Nothing port_types
         -- the declared source type of one of the module's own inputs
         declared kind name
           | kind == "port" || kind == "arg" || kind == "param" =
               M.lookup (VName name) own_types
           | otherwise = Nothing
+    -- the canonical cells: defs and final expressions
+    mapM_ (\ (c, (_, md)) -> do
+               case md of
+                 Just (IDef i t _ _) -> tlDef l c t (getIdString i)
+                 Nothing -> return ()
+               case cellExpr c of
+                 Just e -> tlFinalExpr l (tlCellEnd c) e
+                 Nothing -> return ())
+          ptr_info
+    -- the cells merged into them
+    mapM_ (\ (q, c) -> tlMerge l q c (isConst (cellExpr c))) (IM.toList ptr_map)
+    -- rules: the condition and the body (the cleaned-up names, when the
+    -- two lists line up)
+    let rule_names | length rules_clean == length rules = map irule_name rules_clean
+                   | otherwise = map irule_name rules
+    mapM_ (\ (i, r) -> do
+               let name = getIdString i
+               np <- tlNamed l "rule" Nothing 1 (name ++ ".pred")
+               tlFinalExpr l np (irule_pred r)
+               nb <- tlNamed l "rule" Nothing (-1) (name ++ ".body")
+               tlFinalExpr l nb (irule_body r))
+          (zip rule_names rules)
+    -- methods: the value, with the saved type of a single output port
+    mapM_ (\ ief ->
+               case ief_value ief of
+                 Just (e, t) -> do
+                     let decl = case ief_fieldinfo ief of
+                                  Method { vf_outputs = [(vn, _)] } -> M.lookup vn own_types
+                                  _ -> Nothing
+                         width = case t of
+                                   ITAp c (ITNum n) | c == itBit -> fromInteger n
+                                   _ -> -1
+                     n <- tlNamed l "out" decl width (getIdString (ief_name ief))
+                     tlFinalExpr l n e
+                 Nothing -> return ())
+          ifc
+    -- instance arguments
+    mapM_ (\ (inst, sv) ->
+               mapM_ (\ (k, e) -> do
+                          n <- tlNamed l "instarg" Nothing (-1)
+                                       (getIdString inst ++ ".arg" ++ show (k :: Int))
+                          tlFinalExpr l n e)
+                     (zip [0 ..] (isv_iargs sv)))
+          insts
+    -- each instance's method ports, named as a call record names the
+    -- method (inputs by their position among the call's arguments), with
+    -- the saved port type
+    mapM_ (\ (inst, sv) ->
+               let itypes = M.findWithDefault M.empty (Just inst) port_types
+                   iname = getIdString inst
+                   port kind vn name = tlNamed l kind (M.lookup vn itypes) (-1) name
+               in  mapM_ (\ f ->
+                              case f of
+                                Method { vf_name = m, vf_inputs = ins, vf_outputs = outs } -> do
+                                    let mname = iname ++ "." ++ getIdBaseString m
+                                    mapM_ (\ (k, (vn, _)) ->
+                                               port "instin" vn (mname ++ "." ++ show (k :: Int)))
+                                          (zip [0 ..] (concat ins))
+                                    case outs of
+                                      [(vn, _)] -> port "instout" vn mname >> return ()
+                                      _ -> return ()
+                                _ -> return ())
+                         (vFields (isv_vmi sv)))
+          insts
+    -- every saved port type: the module's own, and each instance's
+    mapM_ (\ (minst, m) ->
+               mapM_ (\ (VName port, t) ->
+                          case minst of
+                            Nothing -> tlNamed l "ptype" (Just t) (-1) port
+                            Just inst -> tlNamed l "inst" (Just t) (-1)
+                                                 (getIdString inst ++ "$" ++ port))
+                     (M.toList m))
+          (M.toList port_types)
     tlFinalEnd l declared
 
 -----------------------------------------------------------------------------
