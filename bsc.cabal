@@ -342,6 +342,7 @@ library
     TypeAnalysisTclUtil
     TypeCheck
     TypeLinks
+    TypeLinksDecl
     TypeOps
     Undefined
     Unify

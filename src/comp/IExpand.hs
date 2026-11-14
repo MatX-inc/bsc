@@ -94,8 +94,10 @@ import CaptureEvents(CapLogF, MoveSpec(..), moveSpec,
 import CaptureRebuild(typeObservations)
 import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlStoredValue, tlFixValue, tlArgsReset, tlStored, tlRedex,
-                 tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr, tlNamed,
-                 tlFinalEnd)
+                 tlRoot, tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr,
+                 tlFinalTuple, tlNamed, tlRootAliases, tlAlias, tlClosedExpr,
+                 tlClosed, tlUnitExpr, tlInstance, tlFinalEnd)
+import TypeLinksDecl(tlFieldTypes)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
 
@@ -465,6 +467,7 @@ iExpandTL tl_file errh flags symt alldefs atf_cache is_noinlined_func pps def@(I
   let tl_end = when (tlOn tl_log) $
                    iExpandTypeLinks tl_log iheap ptr_map ptr_info insts rules
                                     rules_cleanup ifc (go_port_types go)
+                                    (tlFieldTypes flags symt (changedOrId norm))
   return (imod, tl_end)
 
 -- iExpandStrings
@@ -972,22 +975,18 @@ iExpandCapture iheap ptr_map ptrm0 ptr_info args caplog =
 iExpandTypeLinks :: TLog -> IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
                     [(HeapPointer, (HExpr, Maybe HDef))] ->
                     [(Id, HStateVar)] -> HRules -> HRules -> [HEFace] ->
-                    PortTypeMap -> IO ()
+                    PortTypeMap ->
+                    (IType -> Maybe [(Int, Int, String, Maybe IType)]) -> IO ()
 iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules_clean)
-                 ifc port_types = do
+                 ifc port_types field_types = do
     tlFinalBegin l
     let cellExpr p = case IM.lookup p iheap of
                        Just (HNF { hc_pexpr = P _ e }) -> Just e
                        _ -> Nothing
-        isConst (Just (ICon _ ic)) =
-            case ic of
-              ICInt {} -> True
-              ICReal {} -> True
-              ICString {} -> True
-              ICChar {} -> True
-              ICUndet {} -> True
-              _ -> False
-        isConst _ = False
+        -- the canonical cells whose final expression is a closed constant
+        -- (no cell reference and no leaf at any depth)
+        closed_cells = IS.fromList [ c | (c, _) <- ptr_info,
+                                         Just e <- [cellExpr c], tlClosedExpr e ]
         own_types = M.findWithDefault M.empty Nothing port_types
         -- the declared source type of one of the module's own inputs
         declared kind name
@@ -1000,11 +999,17 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
                  Just (IDef i t _ _) -> tlDef l c t (getIdString i)
                  Nothing -> return ()
                case cellExpr c of
-                 Just e -> tlFinalExpr l (tlCellEnd c) e
+                 Just e -> do
+                     tlFinalExpr l (tlCellEnd c) e
+                     -- a closed application is a constant too (a bare
+                     -- constant has its V record already)
+                     case e of
+                       IAps _ _ _ | IS.member c closed_cells -> tlClosed l c
+                       _ -> return ()
                  Nothing -> return ())
           ptr_info
     -- the cells merged into them
-    mapM_ (\ (q, c) -> tlMerge l q c (isConst (cellExpr c))) (IM.toList ptr_map)
+    mapM_ (\ (q, c) -> tlMerge l q c (IS.member c closed_cells)) (IM.toList ptr_map)
     -- rules: the condition and the body (the cleaned-up names, when the
     -- two lists line up)
     let rule_names | length rules_clean == length rules = map irule_name rules_clean
@@ -1016,20 +1021,50 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
                nb <- tlNamed l "rule" Nothing (-1) (name ++ ".body")
                tlFinalExpr l nb (irule_body r))
           (zip rule_names rules)
-    -- methods: the value, with the saved type of a single output port
+    -- methods: the value, with the saved type of a single output port,
+    -- and the cell that held the value before it was walked
+    aliases <- tlRootAliases l
     mapM_ (\ ief ->
                case ief_value ief of
                  Just (e, t) -> do
-                     let decl = case ief_fieldinfo ief of
+                     let name = getIdString (ief_name ief)
+                         decl = case ief_fieldinfo ief of
                                   Method { vf_outputs = [(vn, _)] } -> M.lookup vn own_types
                                   _ -> Nothing
-                         width = case t of
-                                   ITAp c (ITNum n) | c == itBit -> fromInteger n
-                                   _ -> -1
-                     n <- tlNamed l "out" decl width (getIdString (ief_name ief))
-                     tlFinalExpr l n e
+                         bitw ty = case ty of
+                                     ITAp c (ITNum n) | c == itBit -> fromInteger n
+                                     _ -> -1
+                         -- the cell, unless the final expression is that
+                         -- cell (which is written as it is)
+                         alias part x = case (M.lookup (name, part) aliases, x) of
+                                          (Just q, IRefT _ p _ _) | p == q -> Nothing
+                                          (mq, _) -> mq
+                     case e of
+                       -- an action method with a value: the value is a
+                       -- named end of its own, with the output port's type
+                       IAps (ICon _ (ICTuple {})) _ [v, _] | not (tlUnitExpr v) -> do
+                           let vwidth = case t of
+                                          ITAp _ vt -> bitw vt
+                                          _ -> -1
+                           n <- tlNamed l "out" Nothing (-1) name
+                           nv <- tlNamed l "out" decl vwidth (name ++ ".value")
+                           tlFinalExpr l nv v
+                           tlAlias l (alias 1 v) nv
+                           tlFinalTuple l n nv e
+                       -- an action method with no value
+                       IAps (ICon _ (ICTuple {})) _ [_, _] -> do
+                           n <- tlNamed l "out" decl (bitw t) name
+                           tlFinalExpr l n e
+                       _ -> do
+                           n <- tlNamed l "out" decl (bitw t) name
+                           tlFinalExpr l n e
+                           tlAlias l (alias 0 e) n
                  Nothing -> return ())
           ifc
+    -- instances: the Verilog module
+    mapM_ (\ (inst, sv) ->
+               tlInstance l (getIdString inst) (getVNameString (vName (isv_vmi sv))))
+          insts
     -- instance arguments
     mapM_ (\ (inst, sv) ->
                mapM_ (\ (k, e) -> do
@@ -1067,7 +1102,12 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
                                                  (getIdString inst ++ "$" ++ port))
                      (M.toList m))
           (M.toList port_types)
-    tlFinalEnd l declared
+    -- every instance method, by the name a call record gives it (for the
+    -- call counts)
+    let meth_names = [ getIdString inst ++ "." ++ getIdBaseString m
+                     | (inst, sv) <- insts,
+                       Method { vf_name = m } <- vFields (isv_vmi sv) ]
+    tlFinalEnd l declared field_types meth_names
 
 -----------------------------------------------------------------------------
 
@@ -1608,7 +1648,7 @@ iExpandMethod :: Id -> Integer -> [Id] -> HPred ->
                     (HDef, HWireSet, VFieldInfo))
 iExpandMethod modId n args implicitCond clkRst@(curClk, _) (i, bi, ins, outs, e) = do
     when doDebug $ traceM ("iExpandMethod " ++ ppString i ++ " " ++ ppReadable e)
-    P p e' <- evalUHV e
+    (P p e', tl_root) <- evalUHVP e
     case e' of
      ILAM li ki eb ->
         -- must be due to a type which wasn't in Bits class
@@ -1617,7 +1657,10 @@ iExpandMethod modId n args implicitCond clkRst@(curClk, _) (i, bi, ins, outs, e)
         -- should only be adding Bits)
         errG (reportNonSynthTypeInMethod modId i e')
      ILam li ty eb -> iExpandMethodLam modId n args implicitCond clkRst (i, bi, ins, outs, eb) li ty p
-     _ -> iExpandMethod' implicitCond curClk (i, bi, outs, e') p
+     _ -> do
+        -- the method's value was this cell's (type links)
+        tlIO (\ l -> tlRoot l i 0 tl_root)
+        iExpandMethod' implicitCond curClk (i, bi, outs, e') p
 
 iExpandMethodLam :: Id -> Integer -> [Id] -> HPred ->
                  (HClock, HReset) -> (Id, BetterInfo.BetterInfo, [[String]], [String], HExpr) ->
@@ -1681,7 +1724,12 @@ iExpandMethod' implicitCond curClk (i, bi, outs, e0) p0 = do
                          -- tuples are allowable for ActionValue methods only
                          IAps f@(ICon _ (ICTuple {})) ts [e1, e2] |
                                 isActionType methType ->
-                             do (P p1 e1', ws_a) <- evalUHNF e1
+                             do -- evalUHNF e1, keeping the cell that held
+                                -- the value half (type links)
+                                (P p1a e1a, tl_root) <- evalUHVP e1
+                                tlIO (\ l -> tlRoot l i 1 tl_root)
+                                (P p1b e1', ws_a) <- walkNF e1a
+                                let p1 = pConj p1a p1b
                                 (P p2 e2', ws_b) <- evalUHNF e2
                                 return (P (pConjs [p0, p1, p2]) (IAps f ts [e1', e2']),
                                         wsJoin ws_a ws_b)
@@ -3368,6 +3416,29 @@ evalUHV e = do
             pe' <- uhUnheap e pe
             _ <- uhCellLater pe
             return pe'
+
+-- evalUHV for a root (a method's value), also giving the cell whose value
+-- it returns: the reference eval1 gave, or the applied cell of the held
+-- coercion it gave, else -1 (for the type-links log; eval1's result is
+-- matched here as evalUHV and then walkNF match it)
+evalUHVP :: HExpr -> G (PExpr, HeapPointer)
+evalUHVP e = do
+        pe@(P p0 e0) <- eval1 e
+        when (doTraceHeapAlloc && isRefUH e) $
+            traceM ("wasted re-heap: " ++ ppReadable (e, pe))
+        case e0 of
+          ICon _ (ICLazyArray t arr u) | specialArr t u -> do
+            (_, pe') <- uhArray e e0 t p0
+            return (pe', -1)
+          _ -> do
+            pe' <- uhUnheap e pe
+            _ <- uhCellLater pe
+            let q = case e0 of
+                      IRefT _ ptr _ _ -> ptr
+                      ICon _ (ICLazyPack { lzAppliedPtr = a }) -> a
+                      ICon _ (ICLazyUnpack { lzAppliedPtr = a }) -> a
+                      _ -> -1
+            return (pe', q)
 
 -- evalUH made one new cell (since the counter was h0) for the value of
 -- the reference e: the cell that e names evaluated to a constant under a
