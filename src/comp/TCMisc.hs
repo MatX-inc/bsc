@@ -311,8 +311,12 @@ warnTransitiveIncoherent sbs = do
       case M.lookup i clsMap >>= allowIncoherent of
         Just True -> return ()   -- incoherent class: suppress
         mallow    ->
-          let msg = (pos, WTransitiveIncoherentMatch tStr rootPredStr rootInstStr)
-          in  if fromMaybe ai mallow then twarn msg else err msg
+          -- Distinct codes let warning waivers leave coherent violations intact.
+          if fromMaybe ai mallow
+            then twarn (pos, WTransitiveIncoherentMatch
+                                 tStr rootPredStr rootInstStr)
+            else err   (pos, ECoherentTransitiveIncoherentMatch
+                                 tStr rootPredStr rootInstStr)
       where
         t  = fromJustOrErr "warnTransitiveIncoherent: id not in bindTypes"
                            (M.lookup i typeMap)
