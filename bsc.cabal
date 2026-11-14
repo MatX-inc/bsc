@@ -343,6 +343,7 @@ library
     TypeCheck
     TypeLinks
     TypeLinksDecl
+    TypeLinksOut
     TypeOps
     Undefined
     Unify

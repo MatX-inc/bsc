@@ -55,13 +55,11 @@ import Data.Word(Word8)
 import Data.Array.IO(IOUArray)
 import Data.Array.MArray(newArray, readArray, writeArray, getBounds)
 import qualified Data.Array as Array
-import qualified Data.ByteString.Builder as B
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import Numeric(showHex)
 import System.Environment(lookupEnv)
-import System.IO(Handle, IOMode(..), BufferMode(..), openBinaryFile,
-                 hSetBuffering, hClose)
+import System.IO(IOMode(..), BufferMode(..), openBinaryFile, hSetBuffering)
 import System.IO.Unsafe(unsafePerformIO)
 
 import FStringCompat(getFString)
@@ -74,6 +72,7 @@ import CType(TISort(..), StructSubType(..))
 import IType(tCode, iTypeAtfFree)
 import ISyntax
 import ISyntaxSubst(tSubst)
+import qualified TypeLinksOut as B
 
 -- -----
 -- Ends and records
@@ -303,7 +302,7 @@ counterNames =
 
 data TLog = TLog {
     tlOn      :: !Bool,
-    tl_h      :: Handle,
+    tl_out    :: B.Out,                          -- the file (TypeLinksOut)
     -- type code -> (type id << 4) + class; the type id is the type's rank
     -- by first use, so nothing written depends on the code.  A type that
     -- is not its own normal form has -1 - class (of the type as it
@@ -358,14 +357,16 @@ tlNewLog mfile = do
           Just _ | not tlEnabled -> return Nothing
           Just (path, pkg, modname) -> do
             r <- try (do h <- openBinaryFile path WriteMode
-                         hSetBuffering h (BlockBuffering (Just 1048576))
-                         B.hPutBuilder h (B.string7 "tl 1 " <> B.stringUtf8 (word pkg) <>
-                                          B.char7 ' ' <> B.stringUtf8 (word modname) <>
-                                          B.char7 '\n')
-                         return h)
+                         -- the writer has the buffer
+                         hSetBuffering h NoBuffering
+                         o <- B.newOut h
+                         B.write o (B.string7 "tl 1 " <> B.stringUtf8 (word pkg) <>
+                                    B.char7 ' ' <> B.stringUtf8 (word modname) <>
+                                    B.char7 '\n')
+                         return o)
             case r of
               Left (_ :: SomeException) -> return Nothing
-              Right h -> return (Just h)
+              Right o -> return (Just o)
   tids <- newIORef IM.empty
   types <- newIORef []
   ntypes <- newIORef 0
@@ -386,7 +387,7 @@ tlNewLog mfile = do
   prerw <- newIORef Nothing
   counts <- newArray (0, nCounters - 1) 0
   return (TLog { tlOn = maybe False (const True) mh,
-                 tl_h = maybe (error "TypeLinks: no file") id mh,
+                 tl_out = maybe (error "TypeLinks: no file") id mh,
                  tl_tids = tids, tl_types = types, tl_ntypes = ntypes,
                  tl_norm = norm, tl_cls = cls,
                  tl_node = node, tl_defer = defer, tl_args = args,
@@ -585,7 +586,7 @@ skippedCell l p = do
 
 put :: TLog -> Int -> B.Builder -> IO ()
 put l ct b = do
-  B.hPutBuilder (tl_h l) (b <> B.char7 '\n')
+  B.write (tl_out l) (b <> B.char7 '\n')
   bump l ct
 
 sp :: B.Builder
@@ -1620,8 +1621,8 @@ tlFinalEnd l declared fieldsOf bitsOf methods = do
   safely l $ do
     forM_ counterNames $ \ (k, name) -> do
       v <- readArray (tl_counts l) k
-      B.hPutBuilder (tl_h l) (B.string7 "# count " <> B.string7 name <> sp <> B.intDec v <>
-                              B.char7 '\n')
+      B.write (tl_out l) (B.string7 "# count " <> B.string7 name <> sp <> B.intDec v <>
+                          B.char7 '\n')
     -- calls of the final view: counted, written, and counted but not
     -- written (per name, the count less the records)
     counted <- readIORef (tl_callsQ l)
@@ -1630,8 +1631,8 @@ tlFinalEnd l declared fieldsOf bitsOf methods = do
         wtotal = sum (M.elems written)
         missing = sum [ max 0 (n - M.findWithDefault 0 name written)
                       | (name, n) <- M.toList counted ]
-        cline name v = B.hPutBuilder (tl_h l) (B.string7 "# count " <> B.stringUtf8 name <> sp <>
-                                               B.intDec v <> B.char7 '\n')
+        cline name v = B.write (tl_out l) (B.string7 "# count " <> B.stringUtf8 name <> sp <>
+                                           B.intDec v <> B.char7 '\n')
     cline "calls-final" total
     cline "calls-final-written" wtotal
     cline "calls-final-not-written" missing
@@ -1639,7 +1640,7 @@ tlFinalEnd l declared fieldsOf bitsOf methods = do
     absent <- readIORef (tl_absent l)
     cline "F-absent" (sum (M.elems absent))
     forM_ (M.toList absent) $ \ (tag, n) -> cline ("F-absent." ++ word tag) n
-  hClose (tl_h l) `catch` \ (_ :: SomeException) -> return ()
+  B.closeOut (tl_out l) `catch` \ (_ :: SomeException) -> return ()
 
 -- The field records: for every type of class data, struct or dcon (a
 -- constructor's payload struct) one line a constructor payload or field,
