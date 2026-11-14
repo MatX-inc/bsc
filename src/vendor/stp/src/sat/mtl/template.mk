@@ -44,9 +44,10 @@ libr:	lib$(LIB)_release.a
 %.o:			CFLAGS +=$(COPTIMIZE) -g -D DEBUG
 %.op:			CFLAGS +=$(COPTIMIZE) -pg -g -D NDEBUG
 %.od:			CFLAGS +=-O0 -g -D DEBUG
-# Omit -g from release objects: debug info records the build directory
-# (DW_AT_comp_dir on ELF, plus object timestamps in Mach-O stabs) and
-# changes the ELF build-id.
+# The release objects carry no debug information: it records the build
+# directory (DW_AT_comp_dir, and the object timestamps of Mach-O stabs) in
+# libstp and in its build id, so the library would depend on where and
+# when it was built.
 %.or:			CFLAGS +=$(COPTIMIZE) -D NDEBUG
 
 ## Link options
