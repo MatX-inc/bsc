@@ -4751,6 +4751,9 @@ conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
         -- XXX if all of the arms are IntLit, at least for single argument ops
         -- XXX (in the absence of this, we do a special case for PrimBNot, see below)
         if all isIntLit as' && not (null as') then
+            -- the literal's position comes from an operand, and left lazy
+            -- it would keep the operands (and their own positions) alive
+            bestPosition `seq`
             case doPrimOp bestPosition op
                      [ t | T t@(ITNum _) <- as' ]
                      [ e | E e@(ICon _ (ICInt {})) <- as' ] of

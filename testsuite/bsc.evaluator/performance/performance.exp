@@ -15,3 +15,10 @@ compile_verilog_pass BNotShared.bsv
 # with no actions, so bsc removes it with warning G0023.
 compile_verilog_pass_warning ActionValueLoop.bsv G0023 1 {} \
     "+RTS -H16m -M32m -K1m -RTS"
+
+# Loops that add no actions, with an Integer accumulator that only primSeq
+# forces, or a Bit accumulator compared on every iteration.  A value folded
+# on each iteration must not keep its operands alive, or reading the final
+# value needs stack in proportion to the iteration count.
+compile_verilog_pass PrimSeqLoop.bsv "" "+RTS -H16m -M32m -K1m -RTS"
+compile_verilog_pass BitAccumLoop.bsv "" "+RTS -H16m -M32m -K1m -RTS"
