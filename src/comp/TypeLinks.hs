@@ -27,7 +27,7 @@ module TypeLinks(
         -- cells
         tlCell, tlCellNoType, tlCellWHNF,
         -- links
-        tlCopy, tlCoerce, tlValue, tlStoredValue, tlFixValue,
+        tlCopy, tlCoerce, tlStoredValue, tlFixValue,
         tlArgsReset, tlArgPush, tlStored, tlRedex,
         -- the end of elaboration
         End, tlCellEnd,
@@ -820,14 +820,6 @@ tlCoerce l dir how ta tn (bp, be) (vp, ve) = safely l $ do
   bits <- ptrOrEnd l bp be
   val <- ptrOrEnd l vp ve
   emit l (RK dir how tid w bits val)
-
--- The cell p was evaluated to a value that is not an application: a
--- constant or leaf (V), or a held coercion (the value of its applied
--- cell).
-tlValue :: TLog -> Int -> IExpr a -> IO ()
-tlValue l p e = safely l $ do
-  skip <- skippedCell l p
-  unless skip $ storedValue l p e
 
 -- The value held by the cell p: an application (A S), a constant or leaf
 -- (V), or a held coercion (C hold).

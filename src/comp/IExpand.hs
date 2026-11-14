@@ -93,7 +93,7 @@ import CaptureEvents(CapLogF, MoveSpec(..), moveSpec,
                      evPackMerge, evUnpackMerge, lkMat, lkCopy)
 import CaptureRebuild(typeObservations)
 import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
-                 tlValue, tlFixValue, tlArgsReset, tlStored, tlRedex,
+                 tlStoredValue, tlFixValue, tlArgsReset, tlStored, tlRedex,
                  tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr, tlNamed,
                  tlFinalEnd)
 import ISyntaxXRef(mapIExprPosition)
@@ -3457,7 +3457,10 @@ uhFuseArray e e0@(ICon i (ICLazyArray t arr u)) p0 = do
             -- traceM ("specialArr: " ++ ppReadable (e, e0, e'))
             let pe = P (pConj p' p0) e'
             case e of
-              IRefT _ p _ r -> updHeap "evalUH-array" (p, r) (HWHNF pe Nothing)
+              IRefT _ p _ r -> do
+                  updHeap "evalUH-array" (p, r) (HWHNF pe Nothing)
+                  -- the array's cell now holds the fused bits (type links)
+                  tlIO (\ l -> tlStoredValue l p e')
               _ -> return ()
             return pe
 uhFuseArray _ e0 _ = internalError ("uhFuseArray: " ++ ppReadable e0)
@@ -4160,7 +4163,7 @@ evalHeap (ptr, ref) = do
                 -- a constant, a leaf or a held coercion (type links)
                 when (not copied) $
                     case pe' of
-                      P _ e_val -> tlIO (\ l -> tlValue l ptr e_val)
+                      P _ e_val -> tlIO (\ l -> tlStoredValue l ptr e_val)
                 return pe'
 
 -- Heap a moved argument (evalHeap), logging the move for the capture
