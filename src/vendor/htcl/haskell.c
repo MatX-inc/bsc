@@ -13,7 +13,12 @@ htcl_initHaskellRTS(int *argc, char **argv[])
   RtsConfig conf = defaultRtsConfig;
 
   conf.rts_opts_enabled = RtsOptsAll;
+  // Keep these in step with RTSFLAGS in src/comp/Makefile
+#ifdef BSC_PROF
+  conf.rts_opts = "-H256m -K256m -i1";
+#else
   conf.rts_opts = "-H256m -K10m -i1";
+#endif
   hs_init_ghc(argc, argv, conf);
 
   // register haskell exit function, finish
