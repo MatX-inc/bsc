@@ -1036,8 +1036,11 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
                case ief_value ief of
                  Just (e, t) -> do
                      let name = getIdString (ief_name ief)
-                         decl = case ief_fieldinfo ief of
-                                  Method { vf_outputs = [(vn, _)] } -> M.lookup vn own_types
+                         outs = case ief_fieldinfo ief of
+                                  Method { vf_outputs = os } -> map fst os
+                                  _ -> []
+                         decl = case outs of
+                                  [vn] -> M.lookup vn own_types
                                   _ -> Nothing
                          bitw ty = case ty of
                                      ITAp c (ITNum n) | c == itBit -> fromInteger n
@@ -1047,26 +1050,48 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
                          alias part x = case (M.lookup (name, part) aliases, x) of
                                           (Just q, IRefT _ p _ _) | p == q -> Nothing
                                           (mq, _) -> mq
+                         -- A value of the type vt over several output
+                         -- ports is a nest of pairs with one leaf a port,
+                         -- in port order: each port is a named end
+                         -- "<method>.<k>" with its saved type and its
+                         -- leaf's width (no record links it: the k-th
+                         -- leaf of the method's value is its value).
+                         leaves vt =
+                             case outs of
+                               (_ : _ : _) ->
+                                   let ws = map bitw (itTupleElems vt)
+                                       widths | length ws == length outs = ws
+                                              | otherwise = map (const (-1)) outs
+                                   in  mapM_ (\ (k, vn, w) ->
+                                                  tlNamed l "out" (M.lookup vn own_types) w
+                                                          (name ++ "." ++ show (k :: Int)))
+                                             (zip3 [0 ..] outs widths)
+                               _ -> return ()
                      case e of
                        -- an action method with a value: the value is a
                        -- named end of its own, with the output port's type
-                       IAps (ICon _ (ICTuple {})) _ [v, _] | not (tlUnitExpr v) -> do
-                           let vwidth = case t of
-                                          ITAp _ vt -> bitw vt
-                                          _ -> -1
+                       IAps (ICon _ (ICTuple {})) _ [v, _]
+                         | isActionType t, not (tlUnitExpr v) -> do
+                           let vt = case t of
+                                      ITAp _ x -> x
+                                      _ -> t
                            n <- tlNamed l "out" Nothing (-1) name
-                           nv <- tlNamed l "out" decl vwidth (name ++ ".value")
+                           nv <- tlNamed l "out" decl (bitw vt) (name ++ ".value")
                            tlFinalExpr l nv v
                            tlAlias l (alias 1 v) nv
                            tlFinalTuple l n nv e
+                           leaves vt
                        -- an action method with no value
-                       IAps (ICon _ (ICTuple {})) _ [_, _] -> do
+                       IAps (ICon _ (ICTuple {})) _ [_, _] | isActionType t -> do
                            n <- tlNamed l "out" decl (bitw t) name
                            tlFinalExpr l n e
+                       -- a value method (its value is a pair when it is
+                       -- over several ports)
                        _ -> do
                            n <- tlNamed l "out" decl (bitw t) name
                            tlFinalExpr l n e
                            tlAlias l (alias 0 e) n
+                           leaves t
                  Nothing -> return ())
           ifc
     -- instances: the Verilog module
@@ -1095,9 +1120,16 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
                                     mapM_ (\ (k, (vn, _)) ->
                                                port "instin" vn (mname ++ "." ++ show (k :: Int)))
                                           (zip [0 ..] (concat ins))
+                                    -- one output port: named as the
+                                    -- call; several: "<call>.<k>" in
+                                    -- port order, as the inputs are
                                     case outs of
                                       [(vn, _)] -> port "instout" vn mname >> return ()
-                                      _ -> return ()
+                                      (_ : _ : _) ->
+                                          mapM_ (\ (k, (vn, _)) ->
+                                                     port "instout" vn (mname ++ "." ++ show (k :: Int)))
+                                                (zip [0 ..] outs)
+                                      [] -> return ()
                                 _ -> return ())
                          (vFields (isv_vmi sv)))
           insts
