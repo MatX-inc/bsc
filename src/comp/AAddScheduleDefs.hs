@@ -198,10 +198,11 @@ mustBeTrue warn pkgpos m e =
 handleAlwaysReady :: Bool -> Position -> [PProp] -> ExprMap ->
                      [(ProofObligation AExpr, MsgFn)]
 handleAlwaysReady warn pkgpos pps rdy_map =
-  [ mustBeTrue warn pkgpos n e
-  | (n,e) <- M.toList rdy_map
-  , isAlwaysRdy pps (mkRdyId n)
-  ]
+  let isAR = isAlwaysRdy pps
+  in [ mustBeTrue warn pkgpos n e
+     | (n,e) <- M.toList rdy_map
+     , isAR (mkRdyId n)
+     ]
 
 handleEnableWhenReady :: [PProp] -> ExprMap -> ExprMap ->
                          (ExprMap,[(ProofObligation AExpr, MsgFn)])
