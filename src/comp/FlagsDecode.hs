@@ -523,6 +523,7 @@ traceflags = [
           "check-bin-roundtrip",
           "debug-eval-free-vars",
           "hack-no-let-batch",
+          "hack-no-typed-let-batch",
           "no-use-layout",
           "trace-aopt",
           "trace-apaths",
