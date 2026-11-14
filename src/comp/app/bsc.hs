@@ -1657,8 +1657,10 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Generate muxes etc.
        start flags DFastate
        asmod0 <- aState errh flags pprops scheduleInfo atsPackage
-       let asmod = anchorASPackage (propagateConditionalTypes
-                                    (propagateArgumentMuxTypes asmod0))
+       let asmod = if genABin flags
+                   then anchorASPackage (propagateConditionalTypes
+                                         (propagateArgumentMuxTypes asmod0))
+                   else asmod0
        -- after aState, method calls should no longer exist
        asMethCheck flags asmod "astate"
        t <- dump errh flags t DFastate dumpnames asmod
@@ -1689,8 +1691,10 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        start flags DFrenameio
        -- Inlining exposes selections; renaming can join duplicate outputs.
        -- Close their candidate sets before unused definitions disappear.
-       let armod = anchorASPackage (propagateConditionalTypes
-                                       (aRenameIO flags asmodNoCReg))
+       let armod0 = aRenameIO flags asmodNoCReg
+           armod = if genABin flags
+                   then anchorASPackage (propagateConditionalTypes armod0)
+                   else armod0
        asCheck flags armod "renameio"
        t <- dump errh flags t DFrenameio dumpnames armod
        stats flags DFrenameio armod
@@ -1714,7 +1718,9 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Derive primitive interpretations before lowering erases signedness.
        -- The same closure also joins aliases and selections exposed by AOpt.
        let asynmod = aSynthesize flags
-                         (anchorASPackage (propagatePrimitiveTypes aomod))
+                         (if genABin flags
+                          then anchorASPackage (propagatePrimitiveTypes aomod)
+                          else aomod)
        asCheck flags asynmod "asynthesize"
        -- Check that referenced signal names exist
        asSignalCheck flags asynmod "synthesize"
@@ -1723,7 +1729,8 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Transform to adapt to Verilog quirks
        start flags DFveriquirks
-       let aqmod = aVeriQuirks flags (anchorASPackage asynmod)
+       let aqmod = aVeriQuirks flags
+                       (if genABin flags then anchorASPackage asynmod else asynmod)
        -- this check is too strict on plus operator output size
        -- XXX fix the check, don't disable it
        when (not (keepAddSize flags))
@@ -1733,7 +1740,8 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Transform to adapt to Verilog quirks
        start flags DFfinalcleanup
-       let aumod =  finalCleanup flags (anchorASPackage aqmod)
+       let aumod = finalCleanup flags
+                       (if genABin flags then anchorASPackage aqmod else aqmod)
        -- this check is too strict on plus operator output size
        -- XXX fix the check, don't disable it
        when (not (keepAddSize flags))

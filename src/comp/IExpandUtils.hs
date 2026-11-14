@@ -654,10 +654,18 @@ sourceTypeRoot ref = do
       HeapSourceTypes rank ts -> return (ref, rank, ts)
       HeapSourceAlias parent -> sourceTypeRoot parent
 
+-- Shared sentinel for heap cells when -elab is off (collectSourceTypes = False),
+-- avoiding per-cell IORef allocation while never being mutated.
+{-# NOINLINE emptyHeapSourceTypes #-}
+emptyHeapSourceTypes :: IORef HeapSourceTypes
+emptyHeapSourceTypes = unsafePerformIO (newIORef (HeapSourceTypes 0 S.empty))
+
 -- Union by rank bounds even long alias chains logarithmically. This is
 -- deliberately independent of heap evaluation and implicit conditions.
 shareHeapSourceTypes :: HeapData -> HExpr -> G ()
-shareHeapSourceTypes (HeapData _ left) (IRefT _ _ _ (HeapData _ right)) = liftIO $ do
+shareHeapSourceTypes (HeapData _ left) (IRefT _ _ _ (HeapData _ right)) = do
+  collect <- gets (collectSourceTypes . ro)
+  when collect $ liftIO $ do
     (l, lr, lts) <- sourceTypeRoot left
     (r, rr, rts) <- sourceTypeRoot right
     when (l /= r) $ do
@@ -677,19 +685,23 @@ shareHeapSourceTypes _ _ = return ()
 saveSourceType :: IType -> HExpr -> G ()
 saveSourceType t _ | isBitType t = return ()
 saveSourceType t (IRefT _ _ _ hd@(HeapData _ ref)) = do
-    norm <- getTypeNormalizer
-    let t' = norm t
-    liftIO $ do
-      (root, rank, ts) <- sourceTypeRoot ref
-      let ts' = S.insert t' ts
-      ts' `seq` writeIORef root (HeapSourceTypes rank ts')
-    cell <- getHeap hd
-    case cell of
-      HWHNF { hc_pexpr = P _ e } -> saveLeafSourceType t' e
-      HNF { hc_pexpr = P _ e } -> saveLeafSourceType t' e
-      _ -> return ()
+    collect <- gets (collectSourceTypes . ro)
+    when collect $ do
+      norm <- getTypeNormalizer
+      let t' = norm t
+      liftIO $ do
+        (root, rank, ts) <- sourceTypeRoot ref
+        let ts' = S.insert t' ts
+        ts' `seq` writeIORef root (HeapSourceTypes rank ts')
+      cell <- getHeap hd
+      case cell of
+        HWHNF { hc_pexpr = P _ e } -> saveLeafSourceType t' e
+        HNF { hc_pexpr = P _ e } -> saveLeafSourceType t' e
+        _ -> return ()
 saveSourceType t (ICon _ (ICLazyPack { lzApplied = e })) = saveSourceType t e
-saveSourceType t e = saveLeafSourceType t e
+saveSourceType t e = do
+    collect <- gets (collectSourceTypes . ro)
+    when collect $ saveLeafSourceType t e
 
 saveLeafSourceType :: IType -> HExpr -> G ()
 saveLeafSourceType t e@(ICon _ ci) | isWire ci = do
@@ -710,10 +722,12 @@ saveEvaluatedSourceTypes :: HExpr -> HExpr -> G ()
 saveEvaluatedSourceTypes source (IRefT _ _ _ ref) =
     shareHeapSourceTypes ref source
 saveEvaluatedSourceTypes source value = do
-    ts <- sourceTypes source
-    when (not (S.null ts)) $
-      modify' (\s -> s { sourceLeafTypes =
-                            MS.insertWith S.union value ts (sourceLeafTypes s) })
+    collect <- gets (collectSourceTypes . ro)
+    when collect $ do
+      ts <- sourceTypes source
+      when (not (S.null ts)) $
+        modify' (\s -> s { sourceLeafTypes =
+                              MS.insertWith S.union value ts (sourceLeafTypes s) })
   where sourceTypes (IRefT _ _ _ (HeapData _ ref)) = do
           (_, _, ts) <- liftIO (sourceTypeRoot ref)
           return ts
@@ -737,7 +751,9 @@ data GStateRO = GStateRO {
         stepWarnInterval :: !Integer,
         flags :: !Flags,
         -- is the evaluation a no-lined function
-        noinlined_func :: Bool
+        noinlined_func :: Bool,
+        -- record source-type observations only when writing a .ba (-elab)
+        collectSourceTypes :: !Bool
         }
 
 -- full evaluator state
@@ -842,7 +858,8 @@ initGState errh flags symt alldefs atf_rules defId is_noinlined_func pps =
                           flags = flags,
                           defenv = alldefs,
                           bitsSelInfo = findBitsSelInfo symt,
-                          noinlined_func = is_noinlined_func
+                          noinlined_func = is_noinlined_func,
+                          collectSourceTypes = genABin flags
                         }
         gs = GState { stateNameMap = M.empty,
                       stateLocMap = M.empty,
@@ -2717,9 +2734,12 @@ addHeapCell :: String -> HeapCell -> G (HeapPointer, HeapData)
 addHeapCell tag cell = do
   p <- takeCounter hp (+1)
   ref <- deepseq (hc_name cell) $ liftIO (newIORef (cell))
-  types <- liftIO (newIORef (HeapSourceTypes 0 S.empty))
+  collect <- gets (collectSourceTypes . ro)
+  types <- if collect
+           then liftIO (newIORef (HeapSourceTypes 0 S.empty))
+           else return emptyHeapSourceTypes
   let hd = HeapData ref types
-  case cell of
+  when collect $ case cell of
     HUnev { hc_hexpr = e } -> shareHeapSourceTypes hd e
     HWHNF { hc_pexpr = P _ e } -> shareHeapSourceTypes hd e
     HNF { hc_pexpr = P _ e } -> shareHeapSourceTypes hd e
