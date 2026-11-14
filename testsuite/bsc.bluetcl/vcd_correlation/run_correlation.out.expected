@@ -201,7 +201,7 @@
     bram_serverAdapter_outData_ff.RST : Reset
     bram_serverAdapter_s1 : Maybe#(Bool)
     bram_serverAdapter_s1_1 : Maybe#(Bool)
-    bram_serverAdapter_s1__h3338 : Maybe#(Bool)
+    bram_serverAdapter_s1__h2458 : Maybe#(Bool)
     bram_serverAdapter_writeWithResp : Tuple2#(Bool, Bool)
     cellWire : WireTypes::Cell
     cells.CLR : Bool
@@ -242,7 +242,7 @@
     loopCnt.q_state : Bit#(12)
     mpx : Maybe#(WireTypes::Pixel)
     pal : Vector::Vector#(4, WireTypes::Color)
-    pal__h4006 : Vector::Vector#(4, WireTypes::Color)
+    pal__h2947 : Vector::Vector#(4, WireTypes::Color)
     pixelBypass : Maybe#(WireTypes::Pixel)
     pulse : Bool
     pulseCount : UInt#(8)
@@ -707,7 +707,7 @@ RESULT: PASS
     bram_serverAdapter_outData_ff.RST : Reset
     bram_serverAdapter_s1 : Maybe#(Bool)
     bram_serverAdapter_s1_1 : Maybe#(Bool)
-    bram_serverAdapter_s1__h3338 : Maybe#(Bool)
+    bram_serverAdapter_s1__h2458 : Maybe#(Bool)
     bram_serverAdapter_writeWithResp : Tuple2#(Bool, Bool)
     cellWire : WireTypes::Cell
     cells.CLR : Bool
@@ -748,7 +748,7 @@ RESULT: PASS
     loopCnt.q_state : Bit#(12)
     mpx : Maybe#(WireTypes::Pixel)
     pal : Vector::Vector#(4, WireTypes::Color)
-    pal__h4006 : Vector::Vector#(4, WireTypes::Color)
+    pal__h2947 : Vector::Vector#(4, WireTypes::Color)
     pixelBypass : Maybe#(WireTypes::Pixel)
     pulse : Bool
     pulseCount : UInt#(8)
