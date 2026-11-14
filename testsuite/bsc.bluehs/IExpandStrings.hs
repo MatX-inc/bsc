@@ -91,8 +91,9 @@ compileStrings errh flags source = do
   internalSymt <- mkSymTab errh (replaceImportedSignatures mctx [s | (_, _, s, _, _) <- found])
   let redirects = mkDictRedirects (mkDictBuckets binmods) imod binmods
       (imodf, alldefsList) = fixupDefs redirects imod binmods
-      IPackage _ _ _ defs = iSimplify (iSimpDicts imodf)
       alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
+      (imodsd, dictBodies) = iSimpDicts imodf
+      IPackage _ _ _ defs = iSimplify alldefs dictBodies imodsd
   pure (internalSymt, alldefs, defs)
 
 evaluate :: Flags -> SymTab -> M.Map Id HExpr -> [HDef] -> String -> IO ()
