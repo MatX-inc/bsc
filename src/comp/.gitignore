@@ -10,6 +10,7 @@ dumpba
 bsc2bsv
 bsv2bsc
 showrules
+tconcheck
 vcdcheck
 tconcheck
 

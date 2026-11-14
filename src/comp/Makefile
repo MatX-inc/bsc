@@ -163,6 +163,10 @@ install-utils: $(PKGINFO)
 install-showrules: $(addprefix $(BINDIR)/,$(SHOWRULESEXES))
 install-showrules: $(PKGINFO)
 
+.PHONY: install-checkers
+install-checkers: $(addprefix $(BINDIR)/,$(CHECKEXES))
+install-checkers: $(PKGINFO)
+
 # The bluehs runtime builds the library again, with this build's settings.
 .PHONY: install-bluehs
 install-bluehs:
