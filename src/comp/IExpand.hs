@@ -395,10 +395,12 @@ iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
       -- Union every source interpretation in a CSE class, including the
       -- noncanonical cells. The expression can be a port or another simple
       -- leaf that pDef inlines rather than assigning an IDef.
-      expr_types = M.toList $ M.fromListWith S.union $
-          [ (mget (ptran p), ts)
-            | (p, (_, ts)) <- IM.toList heap_info, not (S.null ts) ] ++
-          [ (hToDef m e, ts) | (e, ts) <- M.toList root_types ]
+      expr_types = if genABin flags
+                   then M.toList $ M.fromListWith S.union $
+                        [ (mget (ptran p), ts)
+                          | (p, (_, ts)) <- IM.toList heap_info, not (S.null ts) ] ++
+                        [ (hToDef m e, ts) | (e, ts) <- M.toList root_types ]
+                   else []
 
       -- replaces pointers in the insts, rules, and ifcs
       insts' = hToDef m insts
