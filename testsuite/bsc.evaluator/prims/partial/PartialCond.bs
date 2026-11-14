@@ -1,0 +1,30 @@
+package PartialCond where
+
+import FIFO
+import List
+
+-- primSeqCond, impCondOf and primDeepSeqCond of partially applied
+-- primitives that are never applied.  The argument f.first is ready only
+-- when f is not empty, so each value's implicit condition is that.
+
+{-# verilog sysPartialCond #-}
+sysPartialCond :: Module Empty
+sysPartialCond =
+  module
+    f :: FIFO (Bit 4) <- mkFIFO
+    r :: Reg (Bit 4) <- mkReg 0
+    n :: Reg (Bit 4) <- mkReg 0
+    m :: Reg (Bit 4) <- mkReg 0
+    let hb :: Bit 4 -> Bit 8
+        hb = bitconcat f.first
+        hs :: List (Bit 4 -> Bit 8)
+        hs = map bitconcat (cons f.first (cons r nil))
+    rules
+      "fill": when r < 2 ==> action
+        f.enq r
+        r := r + 1
+      "seq": when True ==> n := primSeqCond hb (n + 1)
+      "deep": when True ==> m := primDeepSeqCond hs (m + 1)
+      "show": when True ==> action
+        $display "%d %d %b %b" n m (impCondOf hb) (impCondOf hs)
+        if n == 3 then $finish 0 else noAction

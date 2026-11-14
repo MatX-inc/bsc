@@ -37,8 +37,18 @@ if { $vtest == 1 } {
 }
 
 # ---------------
-# Higher-order use of pack (partially applied coercion primitive).
+# Higher-order use of pack (passed to map).
 compile_verilog_pass HigherOrder.bs mkHigherOrder
+
+# The coercion primitives without their payload, passed to map: held
+# when map applies them, so the round trip cancels without elaborating
+# the instance methods.
+compile_verilog_pass PartialCoerce.bs sysPartialCoerce
+compare_file PartialCoerce.bs.bsc-vcomp-out
+if { $vtest == 1 } {
+    find_n_strings sysPartialCoerce.v {assign dst$D_IN = src ;} 1
+    find_n_strings sysPartialCoerce.v {assign dstLib$D_IN = src ;} 1
+}
 
 # ---------------
 # A value both decoded and written back cancels in either elaboration

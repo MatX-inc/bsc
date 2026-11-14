@@ -1,0 +1,48 @@
+# A primitive applied to fewer arguments than it takes is a function
+# value; applying it to the rest behaves as the saturated application.
+
+# atan2, which Real defines as its primitive, applied to one argument
+test_c_veri PartialReal
+
+# clockOf, resetOf, clocksOf and resetsOf, which the Prelude defines
+# without their argument, passed to map
+test_c_veri PartialClock
+
+# primJoinActions applied to one action
+test_c_veri PartialAction
+
+# Strict primitives applied to one argument, bound by let and passed to map
+test_c_veri PartialHeld
+
+# Integer and Real primitives of two arguments, applied to one
+test_c_veri PartialArith
+
+# String concatenation applied to one argument
+test_c_veri PartialString
+
+# primIf applied to its condition only
+test_c_veri PartialIf
+
+# _when_ (primWhen) applied to its condition only
+test_c_veri PartialWhen
+
+# primSplit given its dictionary but not its value
+test_c_veri PartialSplit
+
+# A held argument whose value is a helper's parameter: the parameter
+# names the value in the generated Verilog and Bluesim
+test_c_veri PartialName
+if { $vtest == 1 } {
+    find_regexp sysPartialName.v {assign x__h[0-9]+ = r \+ 4'd1 ;}
+}
+if { $ctest == 1 } {
+    find_regexp sysPartialName.cxx {DEF_x__h[0-9]+ = .* \+ \(tUInt8\)1u\);}
+}
+
+# primSeqCond, impCondOf and primDeepSeqCond of partial applications that
+# are never applied: the condition is their argument's
+test_c_veri PartialCond
+
+# clockOf a partial application that is never applied: the clock is that
+# of its argument's value
+test_c_veri PartialClockOf

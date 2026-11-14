@@ -1,0 +1,18 @@
+package PartialReal where
+
+import List
+import Real
+
+-- atan2 applied to one argument and passed to map: Real defines atan2 as
+-- the primitive without its parameters, so map applies a function value
+-- to each element.
+
+{-# verilog sysPartialReal #-}
+sysPartialReal :: Module Empty
+sysPartialReal =
+  module
+    let angles = map (atan2 1.0) (cons 1.0 (cons 2.0 nil))
+    rules
+      "show": when True ==> action
+        $display (realToString (foldr (+) 0 angles))
+        $finish 0

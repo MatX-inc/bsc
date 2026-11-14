@@ -1,8 +1,7 @@
 package HigherOrder(IfcHO(..), mkHigherOrder) where
 
--- Higher-order use of pack: passed unapplied to map.  The coercion
--- primitive is left partially applied (no payload), which must evaluate
--- to the method closure, not crash or hold.
+-- Higher-order use of pack: passed unapplied to map, which applies it
+-- to each element.
 import Vector
 
 data P = MkP (Bit 4)

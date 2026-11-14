@@ -1,0 +1,21 @@
+package PartialString where
+
+import List
+
+-- String concatenation applied to one argument and passed to map: a
+-- function value until map applies it to the second string.  viaFn does
+-- the same with (+++).
+
+{-# verilog sysPartialString #-}
+sysPartialString :: Module Empty
+sysPartialString =
+  module
+    let strs :: List String
+        strs = map integerToString (upto 1 3)
+        viaPrim = map (primStringConcat "p") strs
+        viaFn = map ((+++) "f") strs
+    rules
+      "show": when True ==> action
+        $display (foldr (+++) "" viaPrim)
+        $display (foldr (+++) "" viaFn)
+        $finish 0

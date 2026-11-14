@@ -1,0 +1,31 @@
+package PartialArith where
+
+import List
+
+-- Integer and Real primitives of two arguments, applied to one and
+-- passed to map: each is a function value until map applies it to the
+-- second argument, which computes the result.  viaClass does the same
+-- with the Arith Integer method.
+
+primitive primIntegerAdd :: Integer -> Integer -> Integer
+primitive primIntegerDiv :: Integer -> Integer -> Integer
+primitive primRealMul :: Real -> Real -> Real
+
+{-# verilog sysPartialArith #-}
+sysPartialArith :: Module Empty
+sysPartialArith =
+  module
+    let ints :: List Integer
+        ints = upto 1 4
+        sums = map (primIntegerAdd 10) ints
+        quots = map (primIntegerDiv 100) ints
+        scaled = map (primRealMul 2.5) (map fromInteger ints)
+        viaClass = map ((+) 10) ints
+        total = foldr (+) 0
+    rules
+      "show": when True ==> action
+        $display (integerToString (total sums))
+        $display (integerToString (total quots))
+        $display (realToString (foldr (+) 0 scaled))
+        $display (integerToString (total viaClass))
+        $finish 0

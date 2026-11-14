@@ -47,7 +47,7 @@ module IExpandUtils(
         findBoundaryClock, isClockAncestor,
         isPrimType, isParamOnlyType,
         HeapPointer, unheap, unheapU, shallowUnheap, unheapAll,
-        toHeap, toHeapCon, toHeapWHNFCon,
+        toHeap, toHeapCon, toHeapWHNFCon, toHeapHeld, inferName,
         toHeapWHNF,
         realPrimOp,
         integerPrim, realPrim, stringPrim, charPrim, handleBoolPrim,
@@ -415,7 +415,9 @@ type HeapPointer = Int
 -- type Heap s = STArray s HeapPointer (Maybe HeapCell)
 -- immutable heap used at the end of evaluation
 -- type IHeap = Array HeapPointer (Maybe HeapCell)
-data HeapCell = HUnev { hc_hexpr :: HExpr, hc_name :: NameInfo }
+data HeapCell = HUnev { hc_hexpr :: HExpr, hc_name :: NameInfo,
+                        -- held by a partially applied primitive
+                        hc_held :: Bool }
               | HWHNF { hc_pexpr :: PExpr, hc_name :: NameInfo }
               | HNF { hc_pexpr :: PExpr, hc_wire_set :: HWireSet,
                       hc_name :: NameInfo }
@@ -2499,7 +2501,8 @@ mkIRefT t p poss r =
 addHeapUnev :: String -> IType -> HExpr -> Maybe Id -> G HExpr
 addHeapUnev tag t e cell_name_orig = do
  cell_name <- improveCellName e cell_name_orig
- let newcell = (HUnev { hc_hexpr = e, hc_name = cell_name })
+ let newcell = (HUnev { hc_hexpr = e, hc_name = cell_name,
+                         hc_held = False })
  (p, r) <- addHeapCell tag newcell
  -- trace_hcell p e
  let poss = S.singleton $ getIExprPosition e
@@ -2851,6 +2854,15 @@ toHeap tag t e cell_name = do
         when (doDebugFreeVars && not (S.null (ftVars e))) $
              internalError ("toHeap: ftv " ++ ppReadable (ftVars e) ++ ppReadable e)
         addHeapUnev tag t e cell_name
+
+-- Hold an argument of a partially applied primitive (see IExpand.conAp')
+toHeapHeld :: String -> IType -> HExpr -> G HExpr
+toHeapHeld tag t e@(ICon _ _) = toHeap tag t e Nothing
+toHeapHeld _   _ e@(IRefT _ _ _ _) = return e
+toHeapHeld tag t e = do
+  let newcell = HUnev { hc_hexpr = e, hc_name = Nothing, hc_held = True }
+  (p, r) <- addHeapCell tag newcell
+  return (mkIRefT t p (S.singleton (getIExprPosition e)) r)
 
 -- Used when you absolutely need to get an IRefT back
 -- for arrays
@@ -3369,15 +3381,19 @@ getMethodsWithWires e =
                          else Nothing
         ?upd = \ e_orig e -> return e
                  -- return $ mapIExprPosition (crossInfo flgs) (e_orig, e)
+        -- NF expressions hold no partial application, and the clockOf
+        -- family evaluates held arguments first (extractWireSet)
+        ?held = return
     in
         evalStateT (extractWires e) S.empty
 
 -- -----
 
 -- extract the dynamic wires (e.g. clocks, reset, etc.) from an elaboration-time object
+-- ("held" evaluates an argument of a partially applied strict primitive)
 
-extractWireSet :: (Wireable a) => a -> G HWireSet
-extractWireSet x =
+extractWireSet :: (Wireable a) => (HExpr -> G HExpr) -> a -> G HWireSet
+extractWireSet held x =
     let
         ?mkvar = \ _ methId v ->
             let clk = getMethodClock methId v
@@ -3393,6 +3409,7 @@ extractWireSet x =
                 cache <- lift $ getWireSetCache
                 return $ M.lookup p cache
         ?upd = \ e_orig e -> return e
+        ?held = lift . held
     in
         evalStateT (extractWires x) S.empty
 
@@ -3409,7 +3426,8 @@ class Wireable a where
                    ?jn :: [b] -> b,
                    ?st :: Int -> Position -> b -> W (),
                    ?lk :: Int -> Position -> W (Maybe b),
-                   ?upd :: HExpr -> HExpr -> W HExpr)
+                   ?upd :: HExpr -> HExpr -> W HExpr,
+                   ?held :: HExpr -> W HExpr)
                  => a -> W b
 
 instance Wireable HExpr where
@@ -3452,6 +3470,13 @@ instance Wireable HExpr where
             -- (except no need to follow "f")
             do wss <- mapM extractWires (a:as)
                return (?jn wss)
+
+  -- a strict partial application: the wires of its held arguments' values
+  extractWires (IAps (ICon _ (ICPrim t op)) _ es)
+    | length es < primArity t && strictPrim op = do
+    es' <- mapM ?held es
+    wss <- mapM extractWires es'
+    return (?jn wss)
 
   extractWires (IAps f _ es) = do
     ws <- mapM extractWires (f:es)

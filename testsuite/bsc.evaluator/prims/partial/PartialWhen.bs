@@ -1,0 +1,32 @@
+package PartialWhen where
+
+import List
+
+-- _when_ applied to its condition only (the Prelude defines it without
+-- its second parameter) and passed to map: a function value until map
+-- applies it to each action, which then carries the condition.
+
+{-# verilog sysPartialWhen #-}
+sysPartialWhen :: Module Empty
+sysPartialWhen =
+  module
+    c :: Reg Bool <- mkReg False
+    a :: Reg (Bit 8) <- mkReg 0
+    b :: Reg (Bit 8) <- mkReg 0
+    n :: Reg (Bit 3) <- mkReg 0
+    let incA = action
+          a := a + 1
+          $display "a %d" a
+        incB = action
+          b := b + 2
+          $display "b %d" b
+        acts :: List Action
+        acts = map (_when_ c) (cons incA (cons incB nil))
+    rules
+      "doA": when True ==> head acts
+      "doB": when True ==> head (tail acts)
+      "step": when True ==> action
+        $display "n %d" n
+        c := n == 1 || n == 2
+        n := n + 1
+        if n == 4 then $finish 0 else noAction
