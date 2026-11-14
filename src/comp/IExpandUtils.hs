@@ -9,7 +9,7 @@ module IExpandUtils(
         HExpr, HeapData(..), HClock, HReset, HInout, HStateVar, HRules, HWireSet, HDef, HRule, HEFace,
         runG, G, GOutput(..),
         capNextPtr, capEvent, capRepack, capLink, capMove,
-        tlIO, tlHeaped,
+        tlIO, tlHeaped, tlTakeCond,
         errG, errsG, deferErrors, eWarning, eWarnings, getElabProgressContext,
         eNoNF, addRules,
         pushTopModuleSchedNameScope, pushTopValueSchedNameScope, pushModuleSchedNameScope,
@@ -120,7 +120,7 @@ import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
                  stateLocToPrefix, createSuffixedId,  hasHide, hasHideAll, stateLocToHierName)
 import CaptureEvents(CapLog, newCapLog, CapLogF, freezeCapLog, MoveSpec(..),
                      logEvent, logRepack, logLink, logMove)
-import TypeLinks(TLog, tlOn, tlCell, tlCellWHNF, tlCopy, tlArgPush)
+import TypeLinks(TLog, tlOn, tlCell, tlCellWHNF, tlCopy, tlArgPush, tlCondTake)
 
 {- DEBUGGING AIDS
 import Util(getEnvDef,traces)
@@ -666,6 +666,15 @@ tlIO act = G $ \ st@(GS r _) -> do
   let l = tlLog r
   when (tlOn l) $ act l
   return ((), st)
+
+-- The cell whose own conditional the evaluator is entering (-1: none, or
+-- the log is off); see TypeLinks, decided conditionals.
+{-# INLINE tlTakeCond #-}
+tlTakeCond :: G HeapPointer
+tlTakeCond = G $ \ st@(GS r _) -> do
+  let l = tlLog r
+  p <- if tlOn l then tlCondTake l else return (-1)
+  return (p, st)
 
 -- Run a heaping action for one argument and log the end it gave: the one
 -- cell it made (the counter moved by one), or else the value it returned,

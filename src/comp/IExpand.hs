@@ -94,6 +94,7 @@ import CaptureEvents(CapLogF, MoveSpec(..), moveSpec,
 import CaptureRebuild(typeObservations)
 import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlStoredValue, tlFixValue, tlArgsReset, tlStored, tlRedex,
+                 tlCondBegin, tlCondEnd, tlCondDecided,
                  tlRoot, tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr,
                  tlFinalTuple, tlNamed, tlRootAliases, tlAlias, tlClosedExpr,
                  tlClosed, tlUnitExpr, tlInstance, tlFinalEnd)
@@ -4025,8 +4026,8 @@ evalApAccum tag fz exprCtx pend typeCtx Nothing e@(IAps f ts es) args
                         addPredG p $ arm sb b
                     ICon _ (ICInt { iVal = IntLit { ilValue = 1 } }) ->
                         addPredG p $ arm sa a
-                    _ -> doIfCond f t c' r (eSubstClosed exprCtx a)
-                                           (eSubstClosed exprCtx b)
+                    _ -> doIfCond (-1) f t c' r (eSubstClosed exprCtx a)
+                                                (eSubstClosed exprCtx b)
                 _ -> flush
             [] -> flush
         [] -> flush
@@ -4155,7 +4156,11 @@ evalHeap (ptr, ref) = do
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, e))
         -- we don't use evalUH here because we don't want to trigger
         -- lazy bit-array fusing
+        -- (type links: note the cell when e is a conditional as written,
+        -- for the clause that eval1 reaches first)
+        tlIO (\ l -> tlCondBegin l ptr e)
         pe0 <- eval1 e
+        tlIO tlCondEnd
         pe' <- unheap pe0
         -- the cell gets a copy of a referenced cell's value (a capture
         -- link, CaptureEvents; unheap matched pe0)
@@ -5392,13 +5397,18 @@ conAp' i (ICPrim _ PrimArrayUpdate) f as = do
 
 conAp' sel_i sel_c@(ICPrim _ PrimArrayDynSelect) _
            as@(T elem_ty: T sz_t@(ITNum idx_sz): E arr_e: E idx_e: as') = do
+  -- the cell whose own expression this selection is, if it is one's (type
+  -- links; taken before anything is evaluated)
+  tl_own <- tlTakeCond
   (idx_e', _) <- evalUH idx_e
   let handleDynSel (ICon arr_i (ICLazyArray arr_ty arr Nothing)) = do
         -- check for constant index
         case idx_e' of
-          ICon _ (ICInt { iVal = IntLit { ilValue = n } }) ->
+          ICon _ (ICInt { iVal = IntLit { ilValue = n } }) -> do
+              -- a literal index decides the selection (type links)
+              tlIO (\ l -> tlCondDecided l tl_own (fromInteger idx_sz) n)
               let (_, idx_max) = Array.bounds arr
-              in  if (n > idx_max)
+              if (n > idx_max)
                   then let pos =  getPosition sel_i
                            u = undefKindToInteger UDontCare
                        in  doBuildUndefined elem_ty pos u as'
@@ -5821,25 +5831,40 @@ doArrayUpdate f as = internalError("IExpand.doArrayUpdate : " ++ ppReadable f ++
 -- if without extra arguments
 doIf :: HExpr -> [Arg] -> G PExpr
 doIf f@(ICon _ (ICPrim _ PrimIf)) [T t, E cnd, E thn, E els] = do
-    r <- evalUH cnd
-    doIfCond f t cnd r thn els
+    -- the cell whose own expression this conditional is, if it is one's
+    -- (type links; taken before anything is evaluated)
+    own <- tlTakeCond
+    doIfOwn own f t cnd thn els
 doIf f as = internalError("IExpand.doIf : " ++ ppReadable f ++ ppReadable as)
 
+-- doIf, for the conditional that is the own expression of the cell own
+-- (-1: of no cell)
+doIfOwn :: HeapPointer -> HExpr -> IType -> HExpr -> HExpr -> HExpr -> G PExpr
+doIfOwn own f t cnd thn els = do
+    r <- evalUH cnd
+    doIfCond own f t cnd r thn els
+
 -- doIf once the condition is evaluated
-doIfCond :: HExpr -> IType -> HExpr -> (HExpr, PExpr) -> HExpr -> HExpr -> G PExpr
-doIfCond f t cnd (ecnd, P p cnd') thn els = do
+doIfCond :: HeapPointer -> HExpr -> IType -> HExpr -> (HExpr, PExpr) -> HExpr -> HExpr -> G PExpr
+doIfCond own f t cnd (ecnd, P p cnd') thn els = do
     when doDebug $ traceM ("if " ++ ppReadable (cnd, cnd'))
     --when doDebug $ traceM ("if2 " ++ show cnd')
     case cnd' of
-      ICon _ (ICInt { iVal = IntLit { ilValue = 0 } }) -> addPredG p $ eval1 els
-      ICon _ (ICInt { iVal = IntLit { ilValue = 1 } }) -> addPredG p $ eval1 thn
+      -- a literal selector decides the conditional: only the chosen arm
+      -- is evaluated (type links: the cell's redex record says which)
+      ICon _ (ICInt { iVal = IntLit { ilValue = 0 } }) -> do
+          tlIO (\ l -> tlCondDecided l own 1 0)
+          addPredG p $ eval1 els
+      ICon _ (ICInt { iVal = IntLit { ilValue = 1 } }) -> do
+          tlIO (\ l -> tlCondDecided l own 1 1)
+          addPredG p $ eval1 thn
       -- a held coercion as the condition: squeeze it, so that constant
       -- conditions still fold statically (rule pruning, always-ready
       -- proofs) exactly as without holding
       ICon _ (ICLazyPack { lzApplied = a }) ->
-          addPredG p $ doIf f [T t, E a, E thn, E els]
+          addPredG p $ doIfOwn own f t a thn els
       ICon _ (ICLazyUnpack { lzApplied = a }) ->
-          addPredG p $ doIf f [T t, E a, E thn, E els]
+          addPredG p $ doIfOwn own f t a thn els
       _ ->
       -- The condition did not evaluate, but there is still a chance to proceed.
       -- If the then and else branch are "equal" the condition can be ignored.

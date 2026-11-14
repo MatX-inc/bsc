@@ -31,6 +31,8 @@ module TypeLinks(
         -- links
         tlCopy, tlCoerce, tlStoredValue, tlFixValue,
         tlArgsReset, tlArgPush, tlStored, tlRedex,
+        -- decided conditionals
+        tlCondBegin, tlCondTake, tlCondEnd, tlCondDecided,
         -- roots
         tlRoot,
         -- the end of elaboration
@@ -705,19 +707,32 @@ exprTag e0 =
 -- caller has them (evalHeap's moves; the arguments are then only read for
 -- an array's elements).
 describe :: TLog -> Char -> Int -> End -> Maybe IType -> Maybe [End] -> IExpr a -> IO Bool
-describe l vw depth node mft mends e0 = do
+describe l vw depth node mft mends e0 = describeSel l vw depth node mft mends Nothing e0
+
+-- describe; msel is the literal that decided the node's own conditional
+-- (if, dynamic array selection), written as its selector end in place of
+-- the selector as written
+describeSel :: TLog -> Char -> Int -> End -> Maybe IType -> Maybe [End] -> Maybe End ->
+               IExpr a -> IO Bool
+describeSel l vw depth node mft mends msel e0 = do
   let (h0, ts, es) = flatAp e0
       n = length es
       -- every argument's end; the conditional kinds stop at their arms
       ends stop = case mends of
                     Just xs -> return xs
                     Nothing -> argEnds l vw depth stop es
-      -- the first k arguments described, the rest as arms
-      endsArms k = case mends of
-                     Just xs -> return xs
-                     Nothing -> do a <- argEnds l vw depth False (take k es)
-                                   b <- argEnds l vw depth (vw /= 'F') (drop k es)
-                                   return (a ++ b)
+      -- the selector described (or the literal that decided it), the
+      -- rest as arms
+      endsArms = case (mends, msel) of
+                   (Just xs, _) -> return xs
+                   (Nothing, Just s) -> do
+                       b <- argEnds l vw depth (vw /= 'F') (drop 1 es)
+                       bump l ctDecided
+                       return (s : b)
+                   (Nothing, Nothing) -> do
+                       a <- argEnds l vw depth False (take 1 es)
+                       b <- argEnds l vw depth (vw /= 'F') (drop 1 es)
+                       return (a ++ b)
       -- In the live views a record none of whose ends is a cell, a node
       -- or a leaf links nothing and is not written (a constant structure,
       -- a computation on constants); a call always is.
@@ -805,16 +820,18 @@ describe l vw depth node mft mends e0 = do
                   xs <- ends False
                   out "ord" (NmStr "-") (tidOf l (tyArg 0)) [] xs
               PrimIf | n == 3 -> do
-                  xs <- endsArms 1
+                  xs <- endsArms
                   out "if" (NmStr "-") (tidOf l (tyArg 0)) [] xs
               PrimCase -> do
                   nts <- mapM (numArg l) (take 1 ts)
-                  xs <- endsArms 1
+                  xs <- endsArms
                   out "case" (NmStr "-") (tidOf l (tyArg 1)) nts xs
               PrimArrayDynSelect | [arr, idx] <- es -> do
                   nts <- mapM (numArg l) (take 1 (drop 1 ts))
-                  ix <- case mends of
-                          Just [_, x] -> return x
+                  ix <- case (mends, msel) of
+                          (Just [_, x], _) -> return x
+                          (_, Just s) -> do bump l ctDecided
+                                            return s
                           _ -> argEnd l vw depth False idx
                   els <- arrayEnds arr
                   out "asel" (NmStr "-") (tidOf l (tyArg 0)) nts (ix : els)
@@ -983,15 +1000,63 @@ tlStored l p f ts ft as = safely l $ do
 -- of a literal): the record would describe a computation on constants.
 tlRedex :: TLog -> Int -> IExpr a -> IExpr a -> IO ()
 tlRedex l p e0 r = safely l $ do
+  -- the literal that decided the cell's own conditional, if one did
+  dm <- readIORef (tl_decided l)
+  msel <- if IM.null dm then return Nothing
+          else do writeIORef (tl_decided l) $! IM.delete p dm
+                  return (IM.lookup p dm)
   skip <- skippedCell l p
   if skip then bump l ctSkipLink else do
     constant <- reading l False (constValue r)
     if constant then bump l ctSkipConst else do
       e <- evaluate e0
       case e of
-        IAps _ _ _ -> do done <- describe l 'R' liveDepth (ECell p) Nothing Nothing e
+        IAps _ _ _ -> do done <- describeSel l 'R' liveDepth (ECell p) Nothing Nothing msel e
                          unless done (bump l ctSkipPlain)
         _ -> return ()
+
+-- -----
+-- Hooks: conditionals decided by the evaluator
+--
+-- A cell whose own expression is a conditional as written (if c t e, or
+-- a dynamic array selection) can have its selector evaluate to a literal:
+-- the evaluator then takes one arm and never looks at the others.  The
+-- cell's redex record must say so.  evalHeap notes the cell before eval1
+-- (tlCondBegin); eval1 on such an expression goes straight to the
+-- evaluator's clause for that conditional, which takes the note before it
+-- evaluates anything (tlCondTake), so a conditional nested in the
+-- selector or in an arm never sees it; that clause reports a literal
+-- selector for the cell (tlCondDecided), and tlRedex writes it.
+
+-- The cell p's own expression e is about to be evaluated.  The match is
+-- the one eval1 makes next on the same expression.
+tlCondBegin :: TLog -> Int -> IExpr a -> IO ()
+tlCondBegin l p e = do
+  own <- reading l False (evaluate (ownCond e))
+  writeIORef (tl_pending l) (if own then p else -1)
+  where
+    ownCond x = case flatAp x of
+      (ICon _ (ICPrim { primOp = PrimIf }), [_], [_, _, _]) -> True
+      (ICon _ (ICPrim { primOp = PrimArrayDynSelect }), [_, ITNum _], [_, _]) -> True
+      _ -> False
+
+-- the cell whose own conditional this is (-1: none); the note is cleared
+tlCondTake :: TLog -> IO Int
+tlCondTake l = do
+  p <- readIORef (tl_pending l)
+  when (p >= 0) $ writeIORef (tl_pending l) (-1)
+  return p
+
+-- eval1 of a cell's own expression has returned
+tlCondEnd :: TLog -> IO ()
+tlCondEnd l = writeIORef (tl_pending l) (-1)
+
+-- the own conditional of the cell p (when p is one) was decided by the
+-- literal v of width w
+tlCondDecided :: TLog -> Int -> Int -> Integer -> IO ()
+tlCondDecided l p w v
+  | p < 0 = return ()
+  | otherwise = modifyIORef' (tl_decided l) (IM.insert p (ELit w v))
 
 -- whether an evaluated value is a constant
 constValue :: IExpr a -> IO Bool
