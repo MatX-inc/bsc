@@ -17,6 +17,7 @@ import PreIds
 import ISyntax
 import IType(iTypeTFunFree, iTypeGroundKind, sameITypeNode)
 import ISyntaxSubst(tSubst, tSubstBatch)
+import ATFRules(ATFRules, buildATFRules)
 import ISyntaxUtil
 import Changed(changedOrId)
 import IExpandUtils
@@ -159,18 +160,18 @@ assertFailed s e t = internalError ("assert failed: " ++ s ++ "\n" ++ ppReadable
 
 type EqTy = Env -> IType -> IType -> Bool
 
-tCheck :: Flags -> SymTab -> IATFCache -> Env -> EqTy -> IExpr a -> IType
-tCheck flags symt cache r eqTy ec@(ILam i t e) =
+tCheck :: Flags -> SymTab -> ATFRules -> Env -> EqTy -> IExpr a -> IType
+tCheck flags symt rules r eqTy ec@(ILam i t e) =
     -- assert (kCheckErr r t == IKStar) "ILam" (ec, kCheckErr r t) $
         trace_icheck ("tCheck ILam: " ++ ppReadable i ++ " :: " ++ ppReadable t) $
-        itFun t (tCheck flags symt cache (addT symt i t r) eqTy e)
-tCheck flags symt cache r eqTy ec@(IAps f0 ts [a]) =
+        itFun t (tCheck flags symt rules (addT symt i t r) eqTy e)
+tCheck flags symt rules r eqTy ec@(IAps f0 ts [a]) =
         let f = iAps f0 ts []
             norm t | iTypeTFunFree t = t
-                   | otherwise = changedOrId (fullTypeNormalizer flags symt cache) t
-            at = norm $ tCheck flags symt cache r eqTy a
+                   | otherwise = changedOrId (fullTypeNormalizer rules) t
+            at = norm $ tCheck flags symt rules r eqTy a
             (rt, at') =
-                case norm $ tCheck flags symt cache r eqTy f of
+                case norm $ tCheck flags symt rules r eqTy f of
                     ITAp (ITAp arr at') rt | arr == itArrow -> (rt, at')
                     tt -> internalError ("tCheck IAp: " ++ ppReadable(ec, f, tt))
             eq_result = eqTy r at at'
@@ -179,13 +180,13 @@ tCheck flags symt cache r eqTy ec@(IAps f0 ts [a]) =
                           ++ " eq=" ++ show eq_result) $
             assert eq_result "IAp"
                (r, ec, a, (at, at') {-, (f,ft),(a,at)-}) (at, at') rt
-tCheck flags symt cache r eqTy (IAps f ts (e:es)) =
-    tCheck flags symt cache r eqTy (IAps (IAps f ts [e]) [] es)
+tCheck flags symt rules r eqTy (IAps f ts (e:es)) =
+    tCheck flags symt rules r eqTy (IAps (IAps f ts [e]) [] es)
 tCheck _ _ _ r _ (IVar i) = findT i r
-tCheck flags symt cache r eqTy (ILAM i k e) =
-    ITForAll i k (tCheck flags symt cache (addK i k r) eqTy e)
-tCheck flags symt cache r eqTy ec@(IAps e [t] []) =
-        case tCheck flags symt cache r eqTy e of
+tCheck flags symt rules r eqTy (ILAM i k e) =
+    ITForAll i k (tCheck flags symt rules (addK i k r) eqTy e)
+tCheck flags symt rules r eqTy ec@(IAps e [t] []) =
+        case tCheck flags symt rules r eqTy e of
         ITForAll i k rt ->
             let kt = kCheckErr r t
                 rt'= tSubst i t rt
@@ -196,12 +197,12 @@ tCheck flags symt cache r eqTy ec@(IAps e [t] []) =
 -- Several type arguments: instantiate all binders with one substitution, or
 -- one at a time when a binder repeats or could capture an argument's free
 -- variable.
-tCheck flags symt cache r eqTy ec@(IAps f ts@(_:_:_) []) =
-    instTypes r ec (tCheck flags symt cache r eqTy f) ts
+tCheck flags symt rules r eqTy ec@(IAps f ts@(_:_:_) []) =
+    instTypes r ec (tCheck flags symt rules r eqTy f) ts
 tCheck _ _ _ _ _ (ICon c ic) = iConType ic
-tCheck flags symt cache r eqTy (IAps f [] []) =
+tCheck flags symt rules r eqTy (IAps f [] []) =
     trace_icheck ("tCheck IAps []: " ++ show f) $
-    tCheck flags symt cache r eqTy f
+    tCheck flags symt rules r eqTy f
 tCheck _ _ _ _ _ (IRefT t _ _ _) = t
 --tCheck _ _ _ _ e = internalError ("no match in tCheck: " ++ ppReadable e)
 
@@ -290,11 +291,12 @@ groundKind r t =
       Nothing -> kCheckErrNode r t
 
 tCheckIPackage :: Flags -> SymTab -> IPackage a -> Bool
-tCheckIPackage flags symt (IPackage pi _ _ ds atf_cache) =
+tCheckIPackage flags symt (IPackage pi _ _ ds) =
     let r  = emptyEnv
+        rules = buildATFRules symt
         defOK (IDef i t e _) =
             trace_icheck ("=== tCheckIPackage defOK: " ++ ppReadable i ++ " :: " ++ ppReadable t) $
-            let t' = tCheck flags symt atf_cache r (eqType flags symt) e
+            let t' = tCheck flags symt rules r (eqType flags symt) e
             in  assert (eqType flags symt r t' t) "defOK1"
                     (i,e,(t,t')) (t, t') True
     in  all defOK ds
@@ -305,9 +307,10 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
                                     imod_rules      = rs,
                                     imod_interface  = ifc }) =
         let eqTy _ = (==) -- Just direct equality, no other manipulations.
+            rules = buildATFRules symt
             r = foldr (\ (i, k) r -> addK i k r) emptyEnv iks
             defOK (IDef i t e _) =
-                let t' = tCheck flags symt M.empty r eqTy e
+                let t' = tCheck flags symt rules r eqTy e
                 in  assert (t == t') "defOK2"
                         (i,e,(t,t')) (t, t') True
             ifcOK (IEFace i _ maybe_e maybe_r _ _) =
@@ -321,8 +324,8 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
 
             rulesOK (IRules sps rs) = all ruleOK rs
             ruleOK (IRule { irule_pred = p , irule_body = a }) =
-                let tp = tCheck flags symt M.empty r eqTy p
-                    ta = tCheck flags symt M.empty r eqTy a
+                let tp = tCheck flags symt rules r eqTy p
+                    ta = tCheck flags symt rules r eqTy a
                 in
                     assert (tp == itBit1) "ruleOK p"
                         (p, tp) (p, tp) True &&

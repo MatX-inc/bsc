@@ -72,6 +72,7 @@ import ISyntax
 import ISyntaxSubst(eSubst, eSubstBatch, tSubstBatch)
 import IConv(iConvT, iConvExpr)
 import ISyntaxUtil
+import ATFRules(buildATFRules)
 import IExpandUtils
 import Wires
 import IWireSet
@@ -253,17 +254,18 @@ iExpandPref = "__h"
 --   The actual elaboration work is done by iExpandModuleDef
 iExpand :: ErrorHandle -> Flags ->
            SymTab -> M.Map Id HExpr ->
-           IATFCache ->
            Bool -> [PProp] -> HDef ->
            IO (IModule HeapData)
-iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
+iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
+  -- the type-function rewrite rules are a pure view of the symbol table
+  let atf_rules = buildATFRules symt
   -- unbuffer output if we're tracing
   when (doAnyTrace || showElabProgress flags) $
       do hSetBuffering stdout LineBuffering
          hSetBuffering stderr LineBuffering
   -- execute the static elaboration
   -- go is of type GOutput X, where X is the large tuple output of iExpandModuleDef
-  go <- runG errh flags symt alldefs atf_cache mi is_noinlined_func pps $
+  go <- runG errh flags symt alldefs atf_rules mi is_noinlined_func pps $
             iExpandModuleDef def
   -- trace the steps and heap size
   when doTraceSteps $ putStrLn ("expansion steps: " ++ (show (go_steps go)))
@@ -277,7 +279,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
 
   chkIfcPortNames errh args ifc vclockinfo vresetinfo
 
-  let norm = fullTypeNormalizer flags symt $ go_atfCache go
+  let norm = fullTypeNormalizer atf_rules
 
   -- turn heap into IDef definitions
   let
@@ -420,14 +422,15 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
 --   would for a module, so a message or $display prints to stdout.
 iExpandStrings :: ErrorHandle -> Flags ->
                   SymTab -> M.Map Id HExpr ->
-                  IATFCache -> HDef -> IO [String]
-iExpandStrings errh flags symt alldefs atf_cache (IDef i t e _) = do
+                  HDef -> IO [String]
+iExpandStrings errh flags symt alldefs (IDef i t e _) = do
+  let atf_rules = buildATFRules symt
   when (t /= itList itString) $
       bsError errh [(getPosition i,
                      EGeneric ("Cannot evaluate " ++ quote (getIdString i) ++
                                " to strings: its type is " ++ ppString t ++
                                ", not List String"))]
-  go <- runG errh flags symt alldefs atf_cache i False [] $
+  go <- runG errh flags symt alldefs atf_rules i False [] $
             pushTopValueSchedNameScope i >> evalStringList e
   return (fst (goutput go))
 
@@ -5888,10 +5891,6 @@ cExprToIExpr tag ce it = do
   case TM.tiResult ti_res of
     Left errs -> internalError (err_tag ++ " errors: " ++ ppReadable errs)
     Right (ps, ce') -> do
-      let convT = iConvT flags r
-          newATFs = M.mapKeys (\(i, ts) -> (i, map convT ts))
-                              (M.map convT (TM.tiATFCache ti_res))
-      mergeATFCache newATFs
       when (not (null ps)) $ internalError (err_tag ++ " unreduced: " ++ ppReadable ps)
       env <- getDefEnv
       errh <- getErrHandle

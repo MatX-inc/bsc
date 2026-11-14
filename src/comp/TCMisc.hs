@@ -409,14 +409,6 @@ sat dvs ps solved pool p =
     satTrace ("sat: trying " ++ ppReadable p ++ " in " ++ ppReadable ps) $ do
     whole_stack <- getSatStack
     bound_tyvars <- getBoundTVs
-    let IsIn p_cl p_tys = toPred p
-        recordATFs s_final =
-          let resolvedTys = apSub s_final p_tys
-          in sequence_
-               [ recordATFResult (tcon_name atfTC)
-                                 [resolvedTys !! i | i <- paramIdxs]
-                                 (resolvedTys !! targetIdx)
-               | (atfTC, paramIdxs, targetIdx) <- assocTypes p_cl ]
     let lookfor_result :: Maybe (Bind, (Subst, [(Type,Type)]))
         -- I'm a little worried that matching against the whole_stack
         -- will have lexical scoping issues where p will match against
@@ -497,7 +489,6 @@ sat dvs ps solved pool p =
                   case result of
                     SolveResult [] sbs s_final solved' -> do
                       recordPackageUse mpkg
-                      recordATFs s_final
                       return (SatResult [] sbs s_final Provisional solved')
                     SolveResult needed sbs s_final solved' -> do
                       commitment <-

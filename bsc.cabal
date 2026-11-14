@@ -145,6 +145,7 @@ library
     AState
     ASyntax
     ASyntaxUtil
+    ATFRules
     ATaskSplice
     ATypePropagation
     AUses
