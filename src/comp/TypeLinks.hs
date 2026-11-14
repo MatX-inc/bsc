@@ -31,7 +31,7 @@ module TypeLinks(
         -- links
         tlCopy, tlCoerce, tlStoredValue, tlFixValue,
         tlArgsReset, tlArgPush, tlStored, tlRedex,
-        tlOutPayload,
+        tlOutPayload, tlFallUnpack,
         -- decided conditionals
         tlCondBegin, tlCondTake, tlCondEnd, tlCondDecided,
         -- roots
@@ -1061,6 +1061,25 @@ tlOutPayload l out tys res mscrut = safely l $ do
         _ -> return ()
     _ -> return ()
 
+-- A one-bit unpack at the type ta of the operand x took the fall-through
+-- path (one-bit coercions are never held) and is not a cell's own
+-- expression, so the redex record does not see it: K u fall with the
+-- operand as the bits end and no typed end.  The operand is a cell or a
+-- leaf, or an inline application described as written (as the redex
+-- record describes a cell's own); otherwise nothing is written.  Called
+-- after the unpack was evaluated.
+tlFallUnpack :: TLog -> IType -> IType -> IExpr a -> IO ()
+tlFallUnpack l ta tn x = safely l $ do
+  isBit <- reading l True (do ta' <- evaluate ta
+                              return (bitWidth ta' >= 0))
+  unless isBit $ do
+    bits <- argEnd l 'R' liveDepth False x
+    when (linkable bits) $ do
+      (tid, _) <- tlType l ta
+      w <- numOf l tn
+      emit l (RK 'u' "fall" tid w bits ENone)
+      bump l ctFallInline
+
 -- -----
 -- Hooks: conditionals decided by the evaluator
 --
@@ -1072,7 +1091,9 @@ tlOutPayload l out tys res mscrut = safely l $ do
 -- evaluator's clause for that conditional, which takes the note before it
 -- evaluates anything (tlCondTake), so a conditional nested in the
 -- selector or in an arm never sees it; that clause reports a literal
--- selector for the cell (tlCondDecided), and tlRedex writes it.
+-- selector for the cell (tlCondDecided), and tlRedex writes it.  The
+-- same note tells the fall-through clause of a one-bit unpack that the
+-- unpack is a cell's own expression (tlFallUnpack is for the others).
 
 -- The cell p's own expression e is about to be evaluated.  The match is
 -- the one eval1 makes next on the same expression.
@@ -1084,6 +1105,10 @@ tlCondBegin l p e = do
     ownCond x = case flatAp x of
       (ICon _ (ICPrim { primOp = PrimIf }), [_], [_, _, _]) -> True
       (ICon _ (ICPrim { primOp = PrimArrayDynSelect }), [_, ITNum _], [_, _]) -> True
+      -- a one-bit unpack at a type that is not Bit 1 goes straight to the
+      -- fall-through clause, which takes the note so as not to write a
+      -- second K record for a cell's own unpack
+      (ICon _ (ICPrim { primOp = PrimUnpack }), [ta, ITNum 1], [_, _]) -> bitWidth ta < 0
       _ -> False
 
 -- the cell whose own conditional this is (-1: none); the note is cleared

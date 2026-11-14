@@ -95,6 +95,7 @@ import CaptureRebuild(typeObservations)
 import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlStoredValue, tlFixValue, tlArgsReset, tlStored, tlRedex,
                  tlCondBegin, tlCondEnd, tlCondDecided, tlOutPayload,
+                 tlFallUnpack,
                  tlRoot, tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr,
                  tlFinalTuple, tlNamed, tlRootAliases, tlAlias, tlClosedExpr,
                  tlClosed, tlUnitExpr, tlInstance, tlFinalEnd)
@@ -4879,8 +4880,17 @@ conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
 
 conAp' _ (ICPrim _ PrimPack) _ (T _ : T _ : E d : rest) =
         unfoldBitsCoercion "PrimPack" idPack d rest
-conAp' _ (ICPrim _ PrimUnpack) _ (T _ : T _ : E d : rest) =
-        unfoldBitsCoercion "PrimUnpack" idUnpack d rest
+conAp' _ (ICPrim _ PrimUnpack) _ (T ta : T tn : E d : rest) =
+    case rest of
+      -- a one-bit unpack: never held, so no hold arm logs it; unless it is
+      -- a cell's own expression (whose redex record has it), log the
+      -- operand as bits read at ta once the unpack has run (type links)
+      [E x] | tn == ITNum 1 -> do
+          tl_own <- tlTakeCond
+          r <- unfoldBitsCoercion "PrimUnpack" idUnpack d rest
+          when (tl_own < 0) $ tlIO (\ l -> tlFallUnpack l ta tn x)
+          return r
+      _ -> unfoldBitsCoercion "PrimUnpack" idUnpack d rest
 
 -- Special case of doPrimOp that checks bounds and keeps the base.
 conAp' tfs (ICPrim _ PrimIntegerToBit) fe [T ty@(ITNum k), E e] = evalStaticOp e (itBitN k) handleInt
