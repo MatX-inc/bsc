@@ -1,0 +1,69 @@
+diff --git a/src/comp/IExpandUtils.hs b/src/comp/IExpandUtils.hs
+index 30e14a2d3..9760a5526 100644
+--- a/src/comp/IExpandUtils.hs
++++ b/src/comp/IExpandUtils.hs
+@@ -2472,6 +2472,12 @@ extendHeap = do s <- get
+ improveCellName :: HExpr -> Maybe Id -> G (Maybe Id)
+ improveCellName _ mi@(Just i)
+   | not $ isPreludePosition $ getPosition i = return mi
++-- EXPERIMENT: a cell that a moved library binder would have named stays a
++-- kept definition, unnamed, when no name can be inferred
++improveCellName e (Just i)
++  | isJust (getIdInlinedPositions i) = do
++      mn <- inferName e
++      return (Just (fromMaybe (mkId noPosition (mkFString "")) mn))
+ improveCellName e _ = inferName e
+ 
+ -- Cells enter the heap only here and in updHeap, so forcing the name at
+diff --git a/src/comp/ISyntaxXRef.hs b/src/comp/ISyntaxXRef.hs
+index 180817ed6..775cb72b6 100644
+--- a/src/comp/ISyntaxXRef.hs
++++ b/src/comp/ISyntaxXRef.hs
+@@ -6,17 +6,19 @@ module ISyntaxXRef(
+                   ) where
+ 
+ import qualified Data.Set as S
++import Data.Maybe(isJust)
+ 
+ import ISyntax
+ import Id
+-import Position(Position, noPosition, isUsefulPosition)
++import Position(Position, noPosition, isUsefulPosition,
++                isPreludePosition, updatePosStdlib)
+ 
+ -- #############################################################################
+ -- #
+ -- #############################################################################
+ 
+ updateIExprPosition :: Position -> IExpr a -> IExpr a
+-updateIExprPosition pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition pos e))
++updateIExprPosition pos (ILam i t e) = (ILam (moveBinder pos i) t (updateIExprPosition pos e))
+ updateIExprPosition pos (IAps e ts [e0]) = (IAps (updateIExprPosition pos e) ts [(updateIExprPosition pos e0)])
+ updateIExprPosition pos (IAps e ts es) = (IAps (updateIExprPosition pos e) ts es)
+ updateIExprPosition pos (IVar i) = (IVar (setIdPosition pos i))
+@@ -31,9 +33,24 @@ updateIExprPosition pos (ICon i info) = (ICon (setIdPosition pos i) info)
+ updateIExprPosition pos (IRefT t p poss r) = (IRefT t p poss' r)
+   where poss' = S.insert pos poss
+ 
++-- A library lambda inlined into user code has its binder moved to the
++-- use site, like the rest of its body.  The binder keeps the library
++-- flag of its original position, so that IExpandUtils.improveCellName
++-- still sees that a heap cell would be named after a library binder and
++-- infers a name from the cell's expression instead.  The flag does not
++-- change how the position prints.
++moveBinder :: Position -> Id -> Id
++moveBinder pos i
++  | isPreludePosition (getIdPosition i) =
++      let i' = setIdPosition (updatePosStdlib pos True) i
++      in  -- EXPERIMENT: mark a library binder moved to a user position
++          if isPreludePosition pos || isJust (getIdInlinedPositions i)
++          then i' else addIdInlinedPositions i' [getIdPosition i]
++  | otherwise = setIdPosition pos i
++
+ 
+ updateIExprPosition2 :: Position -> IExpr a -> IExpr a
+-updateIExprPosition2 pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition pos e))
++updateIExprPosition2 pos (ILam i t e) = (ILam (moveBinder pos i) t (updateIExprPosition pos e))
+ updateIExprPosition2 pos iexpr@(IAps e@(ICon i (ICCon _ _)) ts [e0]) =
+     if (not (isUsefulPosition (getIdPosition i)))
+     then updateIExprPosition pos iexpr

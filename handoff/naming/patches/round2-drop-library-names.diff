@@ -1,0 +1,44 @@
+diff --git a/src/comp/ISyntaxXRef.hs b/src/comp/ISyntaxXRef.hs
+index 180817ed6..b0d646815 100644
+--- a/src/comp/ISyntaxXRef.hs
++++ b/src/comp/ISyntaxXRef.hs
+@@ -9,14 +9,15 @@ import qualified Data.Set as S
+ 
+ import ISyntax
+ import Id
+-import Position(Position, noPosition, isUsefulPosition)
++import Position(Position, noPosition, isUsefulPosition,
++                isPreludePosition, updatePosStdlib)
+ 
+ -- #############################################################################
+ -- #
+ -- #############################################################################
+ 
+ updateIExprPosition :: Position -> IExpr a -> IExpr a
+-updateIExprPosition pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition pos e))
++updateIExprPosition pos (ILam i t e) = (ILam (moveBinder pos i) t (updateIExprPosition pos e))
+ updateIExprPosition pos (IAps e ts [e0]) = (IAps (updateIExprPosition pos e) ts [(updateIExprPosition pos e0)])
+ updateIExprPosition pos (IAps e ts es) = (IAps (updateIExprPosition pos e) ts es)
+ updateIExprPosition pos (IVar i) = (IVar (setIdPosition pos i))
+@@ -31,9 +32,20 @@ updateIExprPosition pos (ICon i info) = (ICon (setIdPosition pos i) info)
+ updateIExprPosition pos (IRefT t p poss r) = (IRefT t p poss' r)
+   where poss' = S.insert pos poss
+ 
++-- A library lambda inlined into user code has its binder moved to the
++-- use site, like the rest of its body.  The binder keeps the library
++-- flag of its original position, so that IExpandUtils.improveCellName
++-- still sees that a heap cell would be named after a library binder and
++-- infers a name from the cell's expression instead.  The flag does not
++-- change how the position prints.
++moveBinder :: Position -> Id -> Id
++moveBinder pos i
++  | isPreludePosition (getIdPosition i) = setIdPosition (updatePosStdlib pos True) i
++  | otherwise = setIdPosition pos i
++
+ 
+ updateIExprPosition2 :: Position -> IExpr a -> IExpr a
+-updateIExprPosition2 pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition pos e))
++updateIExprPosition2 pos (ILam i t e) = (ILam (moveBinder pos i) t (updateIExprPosition pos e))
+ updateIExprPosition2 pos iexpr@(IAps e@(ICon i (ICCon _ _)) ts [e0]) =
+     if (not (isUsefulPosition (getIdPosition i)))
+     then updateIExprPosition pos iexpr

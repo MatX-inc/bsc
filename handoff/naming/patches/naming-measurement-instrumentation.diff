@@ -1,0 +1,112 @@
+diff --git a/src/comp/IExpand.hs b/src/comp/IExpand.hs
+index b36f60232..ee57c93c5 100644
+--- a/src/comp/IExpand.hs
++++ b/src/comp/IExpand.hs
+@@ -31,6 +31,11 @@ import Data.Graph
+ import System.IO(Handle, BufferMode(..), IOMode(..), stdout, stderr,
+                  hSetBuffering, hIsOpen, hIsClosed)
+ import System.FilePath(isRelative)
++import System.Environment(lookupEnv)
++import System.Directory(getCurrentDirectory)
++import System.Posix.Process(getProcessID)
++import Data.IORef(readIORef)
++import ISyntaxXRef(binderOrigTable)
+ import qualified Data.Array as Array
+ import qualified Data.IntMap as IM
+ import qualified Data.IntSet as IS
+@@ -390,6 +395,34 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
+       -- if preserving method conditions, then remove the book-keeping info
+       imod = removeInlinedPositions flags imod0
+ 
++  -- MEASUREMENT ONLY: record every heap def's name and binder position
++  heappos <- lookupEnv "BSC_HEAPPOS_DIR"
++  case heappos of
++    Just dir | not (null dir) -> do
++        cwd <- getCurrentDirectory
++        pid <- getProcessID
++        tab <- readIORef binderOrigTable
++        let base i = let s = getIdBaseString i
++                         r = reverse s
++                         r' = dropWhile (`elem` "0123456789") r
++                     in  if take 3 r' == "h__" then reverse (drop 3 r') else s
++            orig b q seen = case M.lookup (b, q) tab of
++                              Just os | not (S.null os) && not (S.member q seen) ->
++                                  let o = S.findMin os
++                                      (o', n') = orig b o (S.insert q seen)
++                                  in  (o', max (S.size os) n')
++                              _ -> (q, 0 :: Int)
++            ln (IDef i _ _ _) =
++              let p = getIdPosition i
++                  (o, n) = orig (base i) p S.empty
++              in  intercalate "\t" [cwd, getIdBaseString mi, getIdBaseString i,
++                                    getPositionFile p, show (getPositionLine p),
++                                    show (getPositionColumn p), show (pos_is_stdlib p),
++                                    getPositionFile o, show (getPositionLine o),
++                                    show (getPositionColumn o), show (pos_is_stdlib o), show n]
++        appendFile (dir ++ "/" ++ show pid ++ ".tsv") (unlines (map ln defs1))
++    _ -> return ()
++
+   --let traceMethodPred (IDef i _ p props) =
+   --        traceM ("Def: " ++ ppReadable (i, getPosition i, getIdProps i, p, props))
+   --mapM_ traceMethodPred mpdefs
+diff --git a/src/comp/ISyntaxXRef.hs b/src/comp/ISyntaxXRef.hs
+index 180817ed6..167ca75f5 100644
+--- a/src/comp/ISyntaxXRef.hs
++++ b/src/comp/ISyntaxXRef.hs
+@@ -2,9 +2,14 @@ module ISyntaxXRef(
+                    updateIExprPosition,
+                    mapIExprPosition,
+                    mapIExprPosition2,
+-                   mapIExprPositionConservative
++                   mapIExprPositionConservative,
++                   binderOrigTable
+                   ) where
+ 
++import System.IO.Unsafe(unsafePerformIO)
++import System.Environment(lookupEnv)
++import Data.IORef
++import qualified Data.Map as M
+ import qualified Data.Set as S
+ 
+ import ISyntax
+@@ -16,7 +21,7 @@ import Position(Position, noPosition, isUsefulPosition)
+ -- #############################################################################
+ 
+ updateIExprPosition :: Position -> IExpr a -> IExpr a
+-updateIExprPosition pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition pos e))
++updateIExprPosition pos (ILam i t e) = (ILam (binderPos pos i) t (updateIExprPosition pos e))
+ updateIExprPosition pos (IAps e ts [e0]) = (IAps (updateIExprPosition pos e) ts [(updateIExprPosition pos e0)])
+ updateIExprPosition pos (IAps e ts es) = (IAps (updateIExprPosition pos e) ts es)
+ updateIExprPosition pos (IVar i) = (IVar (setIdPosition pos i))
+@@ -33,7 +38,7 @@ updateIExprPosition pos (IRefT t p poss r) = (IRefT t p poss' r)
+ 
+ 
+ updateIExprPosition2 :: Position -> IExpr a -> IExpr a
+-updateIExprPosition2 pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition pos e))
++updateIExprPosition2 pos (ILam i t e) = (ILam (binderPos pos i) t (updateIExprPosition pos e))
+ updateIExprPosition2 pos iexpr@(IAps e@(ICon i (ICCon _ _)) ts [e0]) =
+     if (not (isUsefulPosition (getIdPosition i)))
+     then updateIExprPosition pos iexpr
+@@ -162,3 +167,22 @@ equivId id0 id1 = (id0 == id1) && (getIdProps id0 == getIdProps id1)
+ -- #############################################################################
+ -- #
+ -- #############################################################################
++
++-- MEASUREMENT ONLY
++keepBinderPos :: Bool
++keepBinderPos = unsafePerformIO (fmap (maybe False (not . null)) (lookupEnv "BSC_HEAPPOS_DIR"))
++{-# NOINLINE keepBinderPos #-}
++
++binderOrigTable :: IORef (M.Map (String, Position) (S.Set Position))
++binderOrigTable = unsafePerformIO (newIORef M.empty)
++{-# NOINLINE binderOrigTable #-}
++
++binderPos :: Position -> Id -> Id
++binderPos pos i
++  | keepBinderPos =
++      unsafePerformIO $ do
++        let old = getIdPosition i
++        modifyIORef' binderOrigTable (M.insertWith S.union (getIdBaseString i, pos) (S.singleton old))
++        return (setIdPosition pos i)
++  | otherwise = setIdPosition pos i
++{-# NOINLINE binderPos #-}

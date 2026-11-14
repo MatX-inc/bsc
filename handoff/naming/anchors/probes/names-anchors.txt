@@ -1,0 +1,275 @@
+== verilog base: 97 names
+    CLK
+    EN_go
+    EN_pop
+    MUX_in1_r$write_1__SEL_1
+    MUX_in1_r$write_1__VAL_1
+    MUX_in1_r$write_1__VAL_2
+    MUX_in2_r$write_1__SEL_1
+    MUX_in2_r$write_1__VAL_1
+    MUX_in2_r$write_1__VAL_2
+    MUX_rc$write_1__VAL_1
+    MUX_rc$write_1__VAL_2
+    MUX_rc$write_1__VAL_3
+    RDY_go
+    RDY_pop
+    RDY_res
+    RDY_res2
+    RST_N
+    WILL_FIRE_RL_r_step
+    acc
+    acc$D_IN
+    acc$EN
+    acc_9_PLUS_0_CONCAT_IF_ra_ULE_rb_0_THEN_rb_ELS_ETC___d23
+    d__h1588
+    d__h1594
+    go_a
+    go_b
+    in1_on
+    in1_on$D_IN
+    in1_on$EN
+    in1_r
+    in1_r$D_IN
+    in1_r$EN
+    in2_on
+    in2_on$D_IN
+    in2_on$EN
+    in2_r
+    in2_r$D_IN
+    in2_r$EN
+    pop
+    q$CLR
+    q$DEQ
+    q$D_IN
+    q$D_OUT
+    q$EMPTY_N
+    q$ENQ
+    q$FULL_N
+    q2$CLR
+    q2$DEQ
+    q2$D_IN
+    q2$D_OUT
+    q2$EMPTY_N
+    q2$ENQ
+    q2$FULL_N
+    ra
+    ra$D_IN
+    ra$EN
+    ra_AND_rb___d24
+    rb
+    rb$D_IN
+    rb$EN
+    rc
+    rc$D_IN
+    rc$EN
+    rd
+    rd$D_IN
+    rd$EN
+    re
+    re$D_IN
+    re$EN
+    res
+    res2
+    rf
+    rf$D_IN
+    rf$EN
+    rg
+    rg$D_IN
+    rg$EN
+    s3__h1646
+    sub$EN_put
+    sub$EN_take
+    sub$peek
+    sub$put_v
+    sub$take
+    sum__h1104
+    t__h1236
+    vr_0
+    vr_0$D_IN
+    vr_0$EN
+    vr_1
+    vr_1$D_IN
+    vr_1$EN
+    vr_2
+    vr_2$D_IN
+    vr_2$EN
+    vr_3
+    vr_3$D_IN
+    vr_3$EN
+== verilog kmc vs base: 5 renumbered, 1 gone, 11 new
+    renum d__h1588 -> d__h1682
+    renum d__h1594 -> d__h1689
+    renum s3__h1646 -> s2__h1767
+    renum sum__h1104 -> sum__h1121
+    renum t__h1236 -> t__h1258
+    gone  ra_AND_rb___d24
+    new   COND_RL_r_alias_in1_on_write_2
+    new   COND_RL_r_alias_in1_r_write_1
+    new   COND_RL_r_alias_in2_on_write_4
+    new   COND_RL_r_alias_in2_r_write_3
+    new   COND_RL_r_drain_vr_0_write_1
+    new   COND_RL_r_drain_vr_1_write_2
+    new   COND_RL_r_drain_vr_2_write_3
+    new   COND_RL_r_drain_vr_3_write_4
+    new   COND_RL_r_step_q_enq_1
+    new   COND_RL_r_step_sub_put_2
+    new   s3__h1768
+== verilog kf vs base: 0 renumbered, 0 gone, 19 new
+    new   CAN_FIRE_RL_in1_tick
+    new   CAN_FIRE_RL_in2_tick
+    new   CAN_FIRE_RL_r_alias
+    new   CAN_FIRE_RL_r_drain
+    new   CAN_FIRE_RL_r_fill
+    new   CAN_FIRE_RL_r_step
+    new   CAN_FIRE_RL_r_twin
+    new   CAN_FIRE_RL_r_unnamed
+    new   CAN_FIRE_go
+    new   CAN_FIRE_pop
+    new   WILL_FIRE_RL_in1_tick
+    new   WILL_FIRE_RL_in2_tick
+    new   WILL_FIRE_RL_r_alias
+    new   WILL_FIRE_RL_r_drain
+    new   WILL_FIRE_RL_r_fill
+    new   WILL_FIRE_RL_r_twin
+    new   WILL_FIRE_RL_r_unnamed
+    new   WILL_FIRE_go
+    new   WILL_FIRE_pop
+== verilog e1 vs base: 5 renumbered, 2 gone, 5 new
+    renum d__h1588 -> d__h1634
+    renum d__h1594 -> d__h1640
+    renum s3__h1646 -> s3__h1692
+    renum sum__h1104 -> sum__h1150
+    renum t__h1236 -> t__h1282
+    gone  acc_9_PLUS_0_CONCAT_IF_ra_ULE_rb_0_THEN_rb_ELS_ETC___d23
+    gone  ra_AND_rb___d24
+    new   acc_1_PLUS_0_CONCAT_IF_ra_ULE_rb_0_2_THEN_rb_0_ETC___d25
+    new   ra_AND_rb_0___d26
+    new   ux
+    new   ux$D_IN
+    new   ux$EN
+== verilog e2 vs base: 5 renumbered, 0 gone, 2 new
+    renum d__h1588 -> d__h1604
+    renum d__h1594 -> d__h1610
+    renum s3__h1646 -> s3__h1662
+    renum sum__h1104 -> sum__h1120
+    renum t__h1236 -> t__h1252
+    new   RDY_extra
+    new   extra
+== verilog e3 vs base: 0 renumbered, 0 gone, 3 new
+    new   uy
+    new   uy$D_IN
+    new   uy$EN
+== verilog e4 vs base: 0 renumbered, 0 gone, 1 new
+    new   MUX_rc$write_1__VAL_4
+== verilog e1kmc vs base: 5 renumbered, 2 gone, 15 new
+    renum d__h1588 -> d__h1733
+    renum d__h1594 -> d__h1740
+    renum s3__h1646 -> s2__h1818
+    renum sum__h1104 -> sum__h1172
+    renum t__h1236 -> t__h1309
+    gone  acc_9_PLUS_0_CONCAT_IF_ra_ULE_rb_0_THEN_rb_ELS_ETC___d23
+    gone  ra_AND_rb___d24
+    new   COND_RL_r_alias_in1_on_write_2
+    new   COND_RL_r_alias_in1_r_write_1
+    new   COND_RL_r_alias_in2_on_write_4
+    new   COND_RL_r_alias_in2_r_write_3
+    new   COND_RL_r_drain_vr_0_write_1
+    new   COND_RL_r_drain_vr_1_write_2
+    new   COND_RL_r_drain_vr_2_write_3
+    new   COND_RL_r_drain_vr_3_write_4
+    new   COND_RL_r_step_q_enq_1
+    new   COND_RL_r_step_sub_put_2
+    new   acc_1_PLUS_0_CONCAT_IF_ra_ULE_rb_0_2_THEN_rb_0_ETC___d25
+    new   s3__h1819
+    new   ux
+    new   ux$D_IN
+    new   ux$EN
+== bluesim base: 35 names
+    DEF_NOT_ra_PLUS_rb_BIT_0_0___d11
+    DEF_WILL_FIRE_go
+    DEF_WILL_FIRE_pop
+    DEF_ra_AND_rb___d24
+    DEF_ra_PLUS_rb_BIT_0___d10
+    DEF_s3__h1646
+    DEF_sum__h1104
+    DEF_val__h782
+    DEF_val__h861
+    DEF_y__h1260
+    DEF_z__h1574
+    INST_acc
+    INST_in1_on
+    INST_in1_r
+    INST_in2_on
+    INST_in2_r
+    INST_q
+    INST_q2
+    INST_ra
+    INST_rb
+    INST_rc
+    INST_rd
+    INST_re
+    INST_rf
+    INST_rg
+    INST_sub
+    INST_vr_0
+    INST_vr_1
+    INST_vr_2
+    INST_vr_3
+    PORT_EN_go
+    PORT_EN_pop
+    PORT_RST_N
+    PORT_go_a
+    PORT_go_b
+== bluesim kmc vs base: 4 renumbered, 3 gone, 3 new
+    renum DEF_s3__h1646 -> DEF_s2__h1767
+    renum DEF_sum__h1104 -> DEF_sum__h1121
+    renum DEF_val__h782 -> DEF_val__h1892
+    renum DEF_val__h861 -> DEF_val__h1895
+    gone  DEF_ra_AND_rb___d24
+    gone  DEF_y__h1260
+    gone  DEF_z__h1574
+    new   DEF_ra__h2134
+    new   DEF_rb__h2135
+    new   DEF_s3__h1768
+== bluesim kf vs base: 0 renumbered, 0 gone, 0 new
+== bluesim e1 vs base: 6 renumbered, 3 gone, 4 new
+    renum DEF_s3__h1646 -> DEF_s3__h1692
+    renum DEF_sum__h1104 -> DEF_sum__h1150
+    renum DEF_val__h782 -> DEF_val__h828
+    renum DEF_val__h861 -> DEF_val__h907
+    renum DEF_y__h1260 -> DEF_y__h1306
+    renum DEF_z__h1574 -> DEF_z__h1620
+    gone  DEF_NOT_ra_PLUS_rb_BIT_0_0___d11
+    gone  DEF_ra_AND_rb___d24
+    gone  DEF_ra_PLUS_rb_BIT_0___d10
+    new   DEF_NOT_ra_PLUS_rb_0_1_BIT_0_2___d13
+    new   DEF_ra_AND_rb_0___d26
+    new   DEF_ra_PLUS_rb_0_1_BIT_0___d12
+    new   INST_ux
+== bluesim e2 vs base: 6 renumbered, 0 gone, 0 new
+    renum DEF_s3__h1646 -> DEF_s3__h1662
+    renum DEF_sum__h1104 -> DEF_sum__h1120
+    renum DEF_val__h782 -> DEF_val__h798
+    renum DEF_val__h861 -> DEF_val__h877
+    renum DEF_y__h1260 -> DEF_y__h1276
+    renum DEF_z__h1574 -> DEF_z__h1590
+== bluesim e3 vs base: 0 renumbered, 0 gone, 1 new
+    new   INST_uy
+== bluesim e4 vs base: 0 renumbered, 0 gone, 1 new
+    new   DEF_rd___d61
+== bluesim e1kmc vs base: 4 renumbered, 5 gone, 6 new
+    renum DEF_s3__h1646 -> DEF_s2__h1818
+    renum DEF_sum__h1104 -> DEF_sum__h1172
+    renum DEF_val__h782 -> DEF_val__h1943
+    renum DEF_val__h861 -> DEF_val__h1946
+    gone  DEF_NOT_ra_PLUS_rb_BIT_0_0___d11
+    gone  DEF_ra_AND_rb___d24
+    gone  DEF_ra_PLUS_rb_BIT_0___d10
+    gone  DEF_y__h1260
+    gone  DEF_z__h1574
+    new   DEF_NOT_ra_PLUS_rb_0_1_BIT_0_2___d13
+    new   DEF_ra_PLUS_rb_0_1_BIT_0___d12
+    new   DEF_ra__h2185
+    new   DEF_rb__h2186
+    new   DEF_s3__h1819
+    new   INST_ux
