@@ -31,6 +31,7 @@ module TypeLinks(
         -- links
         tlCopy, tlCoerce, tlStoredValue, tlFixValue,
         tlArgsReset, tlArgPush, tlStored, tlRedex,
+        tlOutPayload,
         -- decided conditionals
         tlCondBegin, tlCondTake, tlCondEnd, tlCondDecided,
         -- roots
@@ -224,7 +225,7 @@ instLead t _ = t
 ctN, ctC, ctK, ctAS, ctAR, ctAF, ctV, ctD, ctM, ctP, ctT, ctErr, ctDeferred,
   ctSkipCell, ctSkipLink, ctSkipDictSel, ctSkipPlain, ctSelfLink, ctNoHead,
   ctInline, ctSkipConst, ctF, ctI, ctQ, ctFMissing, ctFCut, ctRootAlias,
-  ctDecided, ctClass0, nCounters :: Int
+  ctDecided, ctOutPayload, ctFallInline, ctPreRewrite, ctClass0, nCounters :: Int
 ctN = 0
 ctC = 1
 ctK = 2
@@ -253,7 +254,10 @@ ctFMissing = 24     -- data and struct types whose declaration was not found
 ctFCut = 25         -- data and struct types past the limit on nested field types
 ctRootAlias = 26    -- roots linked to the cell that held their value
 ctDecided = 27      -- conditionals written with the literal that decided them
-ctClass0 = 28       -- cells by class: ctClass0 + class
+ctOutPayload = 28   -- payloads tied to their constructor at a match-out
+ctFallInline = 29   -- one-bit unpacks that are not a cell's own expression
+ctPreRewrite = 30   -- concats written as evaluated, before a don't-care was absorbed
+ctClass0 = 31       -- cells by class: ctClass0 + class
 nCounters = ctClass0 + nClasses
 
 counterNames :: [(Int, String)]
@@ -267,7 +271,8 @@ counterNames =
       (ctInline, "inline-absent"), (ctSkipConst, "skip-no-link"),
       (ctF, "F"), (ctI, "I"), (ctQ, "Q"), (ctFMissing, "F-no-declaration"),
       (ctFCut, "F-cut"), (ctRootAlias, "root-alias"),
-      (ctDecided, "decided") ] ++
+      (ctDecided, "decided"), (ctOutPayload, "out-payload"),
+      (ctFallInline, "fall-inline"), (ctPreRewrite, "pre-rewrite") ] ++
     [ (ctClass0 + c, "cells-" ++ clsName c) | c <- [0 .. nClasses - 1] ]
 
 -- -----
@@ -1014,6 +1019,47 @@ tlRedex l p e0 r = safely l $ do
         IAps _ _ _ -> do done <- describeSel l 'R' liveDepth (ECell p) Nothing Nothing msel e
                          unless done (bump l ctSkipPlain)
         _ -> return ()
+
+-- The evaluator took the payload out of a value built by the same
+-- constructor (out is the match-out's head, tys its type arguments); the
+-- payload was an inline expression, which this reader evaluated to res.
+-- When the type has several constructors and res is a cell, or a held
+-- coercion (whose applied cell is then the typed end of that coercion's K
+-- record), that cell is the payload of constructor k of n of the
+-- scrutinee: an A R out record on it, with the scrutinee's cell when it
+-- has one.  This is how the reader of a union's payload (the derived
+-- unpack's "unpack (trunc body)" under each constructor) is tied to its
+-- constructor; the record is a true equation but not the cell's own
+-- expression.
+tlOutPayload :: TLog -> IExpr a -> [IType] -> IExpr a -> Maybe (IExpr a) -> IO ()
+tlOutPayload l out tys res mscrut = safely l $ do
+  h <- evaluate out
+  case h of
+    ICon _ ic0 -> do
+      ic <- evaluate ic0
+      case ic of
+        ICOut { iConType = ot, conTagInfo = cti } -> do
+          n <- reading l 0 (evaluate (numCon cti))
+          when (n > 1) $ do
+            node <- endOf l res
+            case node of
+              ECell p -> do
+                skip <- skippedCell l p
+                unless skip $ do
+                  nm <- reading l "-" (evaluate (let s = show (conNo cti) ++ "." ++ show n
+                                                 in  length s `seq` s))
+                  tid <- reading l (-1) (tidOf l (fmap fst (arrowParts (instLead ot tys))))
+                  scrut <- case mscrut of
+                             Just x -> do en <- endOf l x
+                                          return (case en of
+                                                    ECell _ -> en
+                                                    _ -> ENone)
+                             Nothing -> return ENone
+                  emit l (RA 'R' node "out" (NmStr nm) tid [] [scrut])
+                  bump l ctOutPayload
+              _ -> return ()
+        _ -> return ()
+    _ -> return ()
 
 -- -----
 -- Hooks: conditionals decided by the evaluator

@@ -94,7 +94,7 @@ import CaptureEvents(CapLogF, MoveSpec(..), moveSpec,
 import CaptureRebuild(typeObservations)
 import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlStoredValue, tlFixValue, tlArgsReset, tlStored, tlRedex,
-                 tlCondBegin, tlCondEnd, tlCondDecided,
+                 tlCondBegin, tlCondEnd, tlCondDecided, tlOutPayload,
                  tlRoot, tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr,
                  tlFinalTuple, tlNamed, tlRootAliases, tlAlias, tlClosedExpr,
                  tlClosed, tlUnitExpr, tlInstance, tlFinalEnd)
@@ -6482,7 +6482,20 @@ doOut out c tys ty cti as ee (p, e) =
         -- outC (C e)  -->  e / _   (not error, because it's "convenient" -- L)
         IAps (ICon _ (ICCon { conTagInfo = cti' })) _ [e'] ->
             if conNo cti == conNo cti'
-            then addPredG p $ evalAp "outC C" e' as
+            then do
+                r <- addPredG p $ evalAp "outC C" e' as
+                -- The payload read is this constructor's (type links).
+                -- Only when the payload was an inline expression that
+                -- this reader evaluated: a payload that is a cell is
+                -- tied to its constructor by the constructor's record.
+                when (null as) $
+                    tlIO (\ l -> case (e', r) of
+                                   (IRefT _ _ _ _, _) -> return ()
+                                   (_, P _ r_e) -> tlOutPayload l out tys r_e
+                                                       (case ee of
+                                                          UHExpr x -> Just x
+                                                          UHLater _ _ _ -> Nothing))
+                return r
             else addPredG p $
                  evalAp "out-1" (icUndet ty UNotUsed) as
 
