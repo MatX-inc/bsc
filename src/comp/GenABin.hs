@@ -29,26 +29,28 @@ import qualified Data.Map as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 
 -- import Debug.Trace
 
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261113-22"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261114-1"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
 
 genABinFile :: ErrorHandle -> String -> ABin -> IO ()
-genABinFile errh fn abin =
-    writeBinaryFileCatch errh fn (header ++ encode abin)
+genABinFile errh fn abin = do
+    bytes <- encodeIO abin
+    writeBinaryFileCatch errh fn (BL.append (BL.fromStrict headerBS) bytes)
 
 readABinFile :: ErrorHandle -> String -> B.ByteString -> (ABin, String)
 readABinFile errh nm s =
     let hlen = B.length headerBS
     in if B.take hlen s == headerBS
-       then (decode (B.drop hlen s), "")
+       then (decodeStrict (B.drop hlen s), "")
        --then (decodeWithHash (B.drop hlen s))
        else bsErrorUnsafe errh [(noPosition, EBinFileVerMismatch nm)]
 
@@ -58,7 +60,7 @@ readABinFileMaybe :: B.ByteString -> Maybe ABin
 readABinFileMaybe s =
     let hlen = B.length headerBS
     in if B.take hlen s == headerBS
-       then Just (decode (B.drop hlen s))
+       then Just (decodeStrict (B.drop hlen s))
        else Nothing
 
 -- ----------
