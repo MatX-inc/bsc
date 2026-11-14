@@ -15,6 +15,7 @@ import Position
 import Id
 import PreIds
 import ISyntax
+import IType(iTypeTFunFree, iTypeGroundKind, sameITypeNode)
 import ISyntaxSubst(tSubst, tSubstBatch)
 import ISyntaxUtil
 import Changed(changedOrId)
@@ -38,6 +39,7 @@ trace_icheck = tracep doTraceICheck
 -----
 
 eqType :: Flags -> SymTab -> Env -> IType -> IType -> Bool
+eqType _ _ _ t t' | sameITypeNode t t' = True
 eqType flags symt r (ITForAll i k t) (ITForAll i' k' t') =
     k == k' &&
     eqType flags symt (addK i k r) t (tSubst i' (ITVar i) t')
@@ -146,9 +148,13 @@ eqTypeNum _ _ _ _ _ = False
 
 -------
 
+{-# INLINE assert #-}
 assert :: (PPrint e, Show t) => Bool -> String -> e -> t -> a -> a
-assert True  s e t x = x
-assert False s e t x = internalError ("assert failed: " ++ s ++ "\n" ++ ppReadable e ++ "\n" ++ (show t))
+assert ok s e t x = if ok then x else assertFailed s e t
+
+{-# NOINLINE assertFailed #-}
+assertFailed :: (PPrint e, Show t) => String -> e -> t -> a
+assertFailed s e t = internalError ("assert failed: " ++ s ++ "\n" ++ ppReadable e ++ "\n" ++ (show t))
 --assert False s e x = internalError ("assert failed: " ++ s ++ "\n" ++ ppDebug e)
 
 type EqTy = Env -> IType -> IType -> Bool
@@ -160,7 +166,8 @@ tCheck flags symt cache r eqTy ec@(ILam i t e) =
         itFun t (tCheck flags symt cache (addT symt i t r) eqTy e)
 tCheck flags symt cache r eqTy ec@(IAps f0 ts [a]) =
         let f = iAps f0 ts []
-            norm = changedOrId $ fullTypeNormalizer flags symt cache
+            norm t | iTypeTFunFree t = t
+                   | otherwise = changedOrId (fullTypeNormalizer flags symt cache) t
             at = norm $ tCheck flags symt cache r eqTy a
             (rt, at') =
                 case norm $ tCheck flags symt cache r eqTy f of
@@ -250,18 +257,37 @@ iGetKind = kCheck emptyEnv
 
 -- a kind error is an internal error
 kCheckErr :: Env -> IType -> IKind
-kCheckErr r (ITForAll i k t) = let kr = kCheckErr (addK i k r) t
-                               in  kr `seq` IKFun k kr
-kCheckErr r tc@(ITAp f a) =
+kCheckErr r t
+    | groundINode t = groundKind r t
+    | otherwise     = kCheckErrNode r t
+
+kCheckErrNode :: Env -> IType -> IKind
+kCheckErrNode r (ITForAll i k t) = let kr = kCheckErr (addK i k r) t
+                                   in  kr `seq` IKFun k kr
+kCheckErrNode r tc@(ITAp f a) =
   case kCheckErr r f of
     kf@(IKFun ka kr) ->
         let ka' = kCheckErr r a
         in  assert (ka' == ka) "ITAp" (tc, (f, kf), (ka', ka)) (ka', ka) kr
     k -> internalError ("kCheck " ++ ppReadable (tc, k))
-kCheckErr r t@(ITVar i) = fromJustOrErr ("findK: " ++ ppReadable (r, t)) (findK i r)
-kCheckErr _ (ITCon _ k _) = k
-kCheckErr _ (ITNum _) = IKNum
-kCheckErr _ (ITStr _) = IKStr
+kCheckErrNode r t@(ITVar i) =
+    case findK i r of
+      Just k -> k
+      Nothing -> internalError ("findK: " ++ ppReadable (r, t))
+kCheckErrNode _ (ITCon _ k _) = k
+kCheckErrNode _ (ITNum _) = IKNum
+kCheckErrNode _ (ITStr _) = IKStr
+
+groundINode :: IType -> Bool
+groundINode t@(ITAp _ _) = ftvCacheEnabled && vsNull (fTVarSet t)
+groundINode t@(ITForAll _ _ _) = ftvCacheEnabled && vsNull (fTVarSet t)
+groundINode _ = False
+
+groundKind :: Env -> IType -> IKind
+groundKind r t =
+    case iTypeGroundKind t of
+      Just k  -> k
+      Nothing -> kCheckErrNode r t
 
 tCheckIPackage :: Flags -> SymTab -> IPackage a -> Bool
 tCheckIPackage flags symt (IPackage pi _ _ ds atf_cache) =
