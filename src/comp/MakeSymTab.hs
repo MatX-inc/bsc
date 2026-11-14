@@ -22,7 +22,7 @@ import Data.Either(partitionEithers)
 import PredTrie
 import FStringCompat(concatFString)
 import PFPrint
-import PreStrings(fsTilde)
+import PreStrings(fsMangleSep)
 import PreIds
 import Id
 -- for PPrint and PVPrint Id instances
