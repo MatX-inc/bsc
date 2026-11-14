@@ -5,6 +5,7 @@ Warmup.hs
 # Symlinks created by per-executable targets in Makefile
 bsc
 bluetcl
+bo2bloogle
 dumpbo
 dumpba
 fstcheck
