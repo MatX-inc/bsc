@@ -128,6 +128,7 @@ library
     AExpr2STP
     AExpr2Util
     AExpr2Yices
+    AMuxSourceTypes
     ANoInline
     AOpt
     APaths
@@ -143,6 +144,7 @@ library
     ASyntax
     ASyntaxUtil
     ATaskSplice
+    ATypePropagation
     AUses
     AVeriQuirks
     AVerilog
