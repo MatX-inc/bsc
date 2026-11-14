@@ -619,11 +619,14 @@ describe l vw depth node mft mends e0 = do
       -- In the live views a record none of whose ends is a cell, a node
       -- or a leaf links nothing and is not written (a constant structure,
       -- a computation on constants); a call always is.
-      out kind name tid nts xs
+      -- The record's type is an action, run only for a record that is
+      -- written (it can instantiate the head's type).
+      out kind name tidAct nts xs
         | vw /= 'F' && kind /= "call" && not (any linkable xs) = do
             bump l ctSkipConst
             return False
-        | otherwise = do emit l (RA vw node kind name tid nts xs)
+        | otherwise = do tid <- tidAct
+                         emit l (RA vw node kind name tid nts xs)
                          return True
       tyArg k = case drop k ts of
                   (t : _) -> Just t
@@ -644,95 +647,91 @@ describe l vw depth node mft mends e0 = do
       case ic of
         ICCon { conTagInfo = cti } -> do
             nm <- ctiName cti
-            tid <- resTid ic
             xs <- ends False
-            out "con" (NmStr nm) tid [] xs
+            out "con" (NmStr nm) (resTid ic) [] xs
         ICTuple {} -> do
-            tid <- resTid ic
             xs <- ends False
-            out "tup" (NmStr (show n)) tid [] xs
+            out "tup" (NmStr (show n)) (resTid ic) [] xs
         ICSel { selNo = k, numSel = m } -> do
             -- A selection from a dictionary (a class method) is not
-            -- logged: told by the selected value's type, or by its cell.
-            (stid, scls) <- reading l (-1, clsOther) $
-                              case funType ic >>= arrowParts of
-                                Just (t, _) -> tlType l t
-                                Nothing -> return (-1, clsOther)
-            first <- if scls == clsClass then return Nothing
-                     else case mends of
-                            Just (x : _) -> return (Just x)
-                            Just [] -> return Nothing
-                            Nothing -> case es of
-                                         (x : _) -> Just <$> argEnd l vw depth False x
-                                         [] -> return Nothing
-            dictCell <- case first of
-                          Just (ECell p) -> (== clsClass) <$> cellClass l p
+            -- logged: told by the selected value's cell, or else by its
+            -- type.  The selected value is looked at first, and described
+            -- only when the record is kept.
+            peek <- case (mends, es) of
+                      (Just (x : _), _) -> return (Just (Right x))
+                      (Just [], _) -> return Nothing
+                      (Nothing, x : _) -> Just <$> endOrInline l x
+                      (Nothing, []) -> return Nothing
+            dictCell <- case peek of
+                          Just (Right (ECell p)) -> (== clsClass) <$> cellClass l p
                           _ -> return False
-            if scls == clsClass || dictCell
+            (stid, scls) <- if dictCell then return (-1, clsClass)
+                            else reading l (-1, clsOther) $
+                                   case funType ic >>= arrowParts of
+                                     Just (t, _) -> tlType l t
+                                     Nothing -> return (-1, clsOther)
+            if scls == clsClass
               then do bump l ctSkipDictSel
                       return False
               else do
+                first <- case (peek, es) of
+                           (Just (Right x), _) -> return (Just x)
+                           (Just (Left _), x : _) -> Just <$> argEnd l vw depth False x
+                           _ -> return Nothing
                 rest <- case mends of
                           Just xs -> return (drop 1 xs)
                           Nothing -> argEnds l vw depth False (drop 1 es)
                 case first of
                   Just (ELeaf lk inst _) | lk == lkState ->
-                      out "call" (NmCall inst hi) (-1) [] rest
+                      out "call" (NmCall inst hi) (return (-1)) [] rest
                   Just x -> sel k m stid (x : rest)
                   Nothing -> sel k m stid []
         ICOut { conTagInfo = cti } -> do
             nm <- ctiName cti
-            tid <- scrutTid ic
             xs <- ends False
-            out "out" (NmStr nm) tid [] xs
+            out "out" (NmStr nm) (scrutTid ic) [] xs
         ICIs { conTagInfo = cti } -> do
             nm <- ctiName cti
-            tid <- scrutTid ic
             xs <- ends False
-            out "is" (NmStr nm) tid [] xs
+            out "is" (NmStr nm) (scrutTid ic) [] xs
         ICPrim { primOp = op } ->
             case op of
               PrimChr -> do
-                  tid <- tidOf l (tyArg 1)
                   xs <- ends False
-                  out "chr" (NmStr "-") tid [] xs
+                  out "chr" (NmStr "-") (tidOf l (tyArg 1)) [] xs
               PrimOrd -> do
-                  tid <- tidOf l (tyArg 0)
                   xs <- ends False
-                  out "ord" (NmStr "-") tid [] xs
+                  out "ord" (NmStr "-") (tidOf l (tyArg 0)) [] xs
               PrimIf | n == 3 -> do
-                  tid <- tidOf l (tyArg 0)
                   xs <- endsArms 1
-                  out "if" (NmStr "-") tid [] xs
+                  out "if" (NmStr "-") (tidOf l (tyArg 0)) [] xs
               PrimCase -> do
-                  tid <- tidOf l (tyArg 1)
                   nts <- mapM (numArg l) (take 1 ts)
                   xs <- endsArms 1
-                  out "case" (NmStr "-") tid nts xs
+                  out "case" (NmStr "-") (tidOf l (tyArg 1)) nts xs
               PrimArrayDynSelect | [arr, idx] <- es -> do
-                  tid <- tidOf l (tyArg 0)
                   nts <- mapM (numArg l) (take 1 (drop 1 ts))
                   ix <- case mends of
                           Just [_, x] -> return x
                           _ -> argEnd l vw depth False idx
                   els <- arrayEnds arr
-                  out "asel" (NmStr "-") tid nts (ix : els)
+                  out "asel" (NmStr "-") (tidOf l (tyArg 0)) nts (ix : els)
               PrimPack | n >= 2 -> coercion "pack" 'p'
               PrimUnpack | n >= 2 -> coercion "unpack" 'u'
               _ -> do
                   nts <- mapM (numArg l) ts
                   xs <- ends False
-                  out "prim" (NmStr (show op)) (-1) nts xs
+                  out "prim" (NmStr (show op)) (return (-1)) nts xs
         ICForeign { fName = f } -> do
             nm <- reading l "?" (evaluate (let s = "foreign." ++ f in length s `seq` s))
             xs <- ends False
-            out "other" (NmStr nm) (-1) [] xs
+            out "other" (NmStr nm) (return (-1)) [] xs
         _ -> do bump l ctNoHead
                 return False
      where
       sel k m tid xs = do
           nm <- reading l "-" (evaluate (let s = show k ++ "." ++ show m in length s `seq` s))
-          out "sel" (NmStr nm) tid [] xs
+          out "sel" (NmStr nm) (return tid) [] xs
       -- pack or unpack at the type argument, of the argument after the
       -- dictionary; a one-bit (or narrower) coercion that is a cell's own
       -- expression is also a K record, since no hold arm sees it
@@ -753,7 +752,7 @@ describe l vw depth node mft mends e0 = do
                     emit l (if dir == 'p' then RK 'p' "fall" tid w node x
                             else RK 'u' "fall" tid w x node)
                 _ -> return ()
-          out kind (NmStr "-") tid [] operand
+          out kind (NmStr "-") (return tid) [] operand
       -- the element cells of an array argument
       arrayEnds arr = reading l [] $ do
           a <- evaluate arr
