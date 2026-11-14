@@ -499,17 +499,12 @@ sat dvs ps p =
                         stack_eps <- getExplPreds
                         let p_pred = apSub s_final (toPred p)
                             givens = concatMap bySuperE (ps ++ stack_eps)
-                            -- Modal check, so unify unguarded ([]): a
-                            -- given from an enclosing frame quantifies
-                            -- over its own rigid variables, which are
-                            -- distinct TyVars from (but instantiable
-                            -- to) this definition's; the bound-variable
-                            -- guards would hide such a given and let
-                            -- the commit freeze an instance reduction
-                            -- the outer given was meant to discharge
-                            -- whole.
+                            -- Rigid variables of an in-scope given are fixed
+                            -- until generalization, so unify against
+                            -- bound_tyvars; metavariable-headed goals can
+                            -- still bind to rigid givens.
                             unifiable (EPred _ gp) =
-                                predUnify [] p_pred gp
+                                predUnify bound_tyvars p_pred gp
                         return (if any unifiable givens
                                 then Provisional else Committable)
                     when (commitment == Committable) $ recordPackageUse mpkg

@@ -95,14 +95,10 @@ compile_fail_error ContextReductionRemoveImpliedCloseFD.bsv T0032
 compare_file ContextReductionRemoveImpliedCloseFD.bsv.bsc-out
 
 # --------------------
-# Test that deferred contexts are used when reporting TooWeak errors
-# (bug 1716)
-
-# (There is also a T0020 error, which is due to a missing "pack" that is
-# necessary to trigger the T0030 error.)
-compile_fail_error ContextTooWeakDeferred.bsv T0030
-# XXX The error could report the deferred contexts which mention variables
-# XXX in the message (showing how they are further constrained)
+# Test deferred contexts in ContextTooWeakDeferred (bug 1716).
+# Both Bits goals commit and leave two unrelated Mul residuals on a__,
+# surfacing the size mismatch as an ambiguity (T0033) alongside T0020.
+compile_fail_error ContextTooWeakDeferred.bsv T0033
 compare_file ContextTooWeakDeferred.bsv.bsc-out
 
 # --------------------

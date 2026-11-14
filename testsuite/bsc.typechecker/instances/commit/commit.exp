@@ -80,3 +80,24 @@ compile_pass DeferCommittedResidualTwoInstances.bs
 # true obligation (and the uncovered catch-all's T0160 is pinned too)
 compile_fail ModalCapture.bs
 compare_file ModalCapture.bs.bsc-out
+
+# --------------------
+# Guarded given-check in the commitment gate: rigid variables of an
+# in-scope given are fixed until generalization.
+
+# An unreachable rigid same-class given must not block a coherent commit
+# whose numeric residual requires the end-of-definition SAT batch.
+erase RigidGivenCommit.bo
+compile_pass RigidGivenCommit.bs
+
+# Verify the numeric residual is discharged only by proviso SAT.
+erase RigidGivenCommit.bo
+compile_fail_error RigidGivenCommit.bs T0030 1 {-no-use-proviso-sat}
+
+# A metavariable-headed goal still defers to an enclosing rigid given.
+erase MetaGivenDefers.bo
+compile_pass MetaGivenDefers.bs
+
+# An unreachable contradictory concrete given must not block a diagonal instance.
+erase DualDirection.bo
+compile_pass DualDirection.bsv
