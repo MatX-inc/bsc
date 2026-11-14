@@ -1,4 +1,5 @@
-module CtxRed(cCtxReduceDef, cCtxReduceIO, CtxRed(..)) where
+module CtxRed(cCtxReduceDef, cCtxReduceIO, CtxRed(..),
+              SignProvisos(..)) where
 
 import Data.List(partition, (\\))
 import qualified Data.Set as S
@@ -18,7 +19,6 @@ import TCMisc
 import SymTab
 import MakeSymTab(convCQTypeWithAssumps)
 import VModInfo(VArgInfo(..))
-import Util(concatMapM)
 
 import Debug.Trace(traceM)
 import IOUtil(progArgs)
@@ -26,22 +26,44 @@ import IOUtil(progArgs)
 doTraceCtxReduce :: Bool
 doTraceCtxReduce = "-trace-ctxreduce" `elem` progArgs
 
+-- The provisos of a top-level definition's signature: as written, each
+-- with the predicates it expands to (see ctxRedCQTypeProvisos), and as
+-- context reduction leaves them (one per dictionary parameter, in order,
+-- with their reduction ancestry).
+data SignProvisos = SignProvisos {
+        sp_id      :: Id,
+        sp_written :: [(CPred, [Pred])],
+        sp_reduced :: [PredWithPositions],
+        sp_type    :: CType   -- the reduced type, without the provisos
+    }
+
 -- Perform context reduction on the definitions in a package.
--- Returns a pair:
---  * the context-reduced package
---  * the set of Ids of packages whose symbols were used during reduction
---    (folded into the unused-import warning check in bsc.hs)
-cCtxReduceIO :: ErrorHandle -> Flags -> SymTab -> CPackage ->
-               IO (CPackage, S.Set Id)
-cCtxReduceIO errh flags s (CPackage mi exps imps impsigs fixs ds includes) = do
+cCtxReduceIO :: ErrorHandle -> Flags -> SymTab -> Bool -> CPackage ->
+               IO (CPackage, S.Set Id, [SignProvisos])
+cCtxReduceIO errh flags s keep_provisos
+             (CPackage mi exps imps impsigs fixs ds includes) = do
     -- The False argument to 'runTI' indicates that incoherent instances should not be matched at this time
     -- We want to preserve those contexts to be handled in typecheck (XXX why?)
-    let ti_res = runTI flags False s (mapM ctxRed ds)
+    let ti_res = runTI flags False s
+                   (if keep_provisos then mapM ctxRedTop ds
+                    else mapM (fmap (\ d -> (d, Nothing)) . ctxRed) ds)
     when (not (null (tiWarnings ti_res))) $ bsWarning errh (tiWarnings ti_res)
     case tiResult ti_res of
       Left emsgs -> bsError errh emsgs
-      Right ds' -> return (CPackage mi exps imps impsigs fixs ds' includes,
-                           tiUsedPackages ti_res)
+      Right dps -> return (CPackage mi exps imps impsigs fixs (map fst dps) includes,
+                           tiUsedPackages ti_res,
+                           [ sp | (_, Just sp) <- dps ])
+
+ctxRedTop :: CDefn -> TI (CDefn, Maybe SignProvisos)
+ctxRedTop (CValueSign d@(CDef i _ _)) = do
+    (d', (ws, rs)) <- ctxRedDef d
+    let t = case d' of
+              CDef _ (CQType _ t') _ -> t'
+              _ -> internalError "CtxRed.ctxRedTop"
+    return (CValueSign d', Just (SignProvisos i ws rs t))
+ctxRedTop d = do
+    d' <- ctxRed d
+    return (d', Nothing)
 
 cCtxReduceDef :: Flags -> SymTab -> CDefn -> Either [EMsg] CDefn
 cCtxReduceDef flags s def =
@@ -139,13 +161,16 @@ instance CtxRed CDefl where
         return (CLMatch p' e')
 
 instance CtxRed CDef where
-    ctxRed (CDef i cqt cs) = do
-        (s, cqt') <- ctxRedCQType cqt
+    ctxRed d = fmap fst (ctxRedDef d)
+
+ctxRedDef :: CDef -> TI (CDef, ([(CPred, [Pred])], [PredWithPositions]))
+ctxRedDef (CDef i cqt cs) = do
+        (s, cqt', provisos) <- ctxRedCQTypeProvisos False cqt
         cs' <- ctxRed (apSub s cs)
         popBoundTVs  -- necessary after call to ctxRedCQType
                      -- but only after we've recursed into the defs
-        return (CDef i cqt' cs')
-    ctxRed _ = internalError "TypeCheck instance CtxRed CDef"
+        return (CDef i cqt' cs', provisos)
+ctxRedDef _ = internalError "TypeCheck instance CtxRed CDef"
 
 instance CtxRed CClause where
     ctxRed (CClause ps qs e) = do
@@ -374,6 +399,12 @@ ctxRedCQType = ctxRedCQType' False
 
 ctxRedCQType' :: Bool -> CQType -> TI (Subst, CQType)
 ctxRedCQType' isInstHead cqt = do
+    (s, cqt', _) <- ctxRedCQTypeProvisos isInstHead cqt
+    return (s, cqt')
+
+ctxRedCQTypeProvisos :: Bool -> CQType ->
+                        TI (Subst, CQType, ([(CPred, [Pred])], [PredWithPositions]))
+ctxRedCQTypeProvisos isInstHead cqt = do
 
     -- find out what variables were bound prior to here
     prev_bound_tvs <- getBoundTVs
@@ -405,7 +436,8 @@ ctxRedCQType' isInstHead cqt = do
                else return (qs0, t0)
 
     -- construct the predicates and try to reduce them
-    vqs <- concatMapM (mkVPred (getPosition cqt)) qs
+    vqss <- mapM (mkVPred (getPosition cqt)) qs
+    let vqs = concat vqss
 
     -- create a type variable for trimming later
     (trim_point, _) <- newTVarId "ctxRedCQType" KStar cqt
@@ -448,11 +480,17 @@ ctxRedCQType' isInstHead cqt = do
        traceM ("s_final: " ++ ppReadable s_final)
        traceM ("cqt': " ++ ppReadable cqt')
 
+    let CQType cps _ = cqt
+        writtenPreds vqs' = let ws = map toPred vqs'
+                            in  ws ++ map (apSub s' . apSub s) ws
+        written = zip cps (map writtenPreds vqss)
+        reduced = map toPredWithPositions ps'
+
     -- It is up to the callers of this function to pop the bound tvs
     -- at the appropriate point: either immediately, if vars are not bound
     -- or after recursing into subexpressions, if vars are bound.
     --popBoundTVs
-    return (s_final, cqt')
+    return (s_final, cqt', (written, reduced))
 
 
 getVarKinds :: IdK -> [Id] -> [TyVar]

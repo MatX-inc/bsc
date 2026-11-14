@@ -1,0 +1,24 @@
+checking package dependencies
+compiling SuperPair.bs
+Warning: "SuperPair.bs", line 7, column 16: (T0167)
+  The proviso `Arith a' on `onlyLiteral' is redundant: the definition does not
+  use it.
+Warning: "SuperPair.bs", line 10, column 28: (T0167)
+  The proviso `Arith a' on `onlyLiteral2' is redundant: the definition does
+  not use it.
+Warning: "SuperPair.bs", line 13, column 18: (T0167)
+  The proviso `Literal a' on `both' is redundant: `Arith a' supplies all that
+  the definition uses of it.
+Warning: "SuperPair.bs", line 16, column 10: (T0167)
+  The proviso `Literal a' on `both2' is redundant: `Arith a' supplies all that
+  the definition uses of it.
+Warning: "SuperPair.bs", line 19, column 23: (T0167)
+  The proviso `Literal a' on `onlyArith' is redundant: the definition does not
+  use it.
+Warning: "SuperPair.bs", line 22, column 12: (T0167)
+  The proviso `Arith a' on `neither' is redundant: the definition does not use
+  it.
+Warning: "SuperPair.bs", line 22, column 21: (T0167)
+  The proviso `Literal a' on `neither' is redundant: the definition does not
+  use it.
+All packages are up to date.

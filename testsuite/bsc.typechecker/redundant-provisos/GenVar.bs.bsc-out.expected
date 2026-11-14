@@ -1,0 +1,12 @@
+checking package dependencies
+compiling GenVar.bs
+Warning: "GenVar.bs", line 24, column 26: (T0167)
+  The proviso `Bits (f n Bool) sz' on `mkRelay' is redundant: the definition
+  does not use it.
+Warning: "GenVar.bs", line 24, column 46: (T0167)
+  The proviso `Render (f n Bool)' on `mkRelay' is redundant: the definition
+  does not use it.
+Warning: "GenVar.bs", line 29, column 11: (T0167)
+  The proviso `Render a' on `relay2' is redundant: the definition does not use
+  it.
+All packages are up to date.

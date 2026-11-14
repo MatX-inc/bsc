@@ -1,0 +1,7 @@
+package NumericKeeps where
+
+-- The Bits proviso's dictionary is unused, but the numeric proviso, which
+-- is not reported, mentions its size, so deleting the Bits proviso alone
+-- would leave n ambiguous.
+pad :: (Bits a n, Add n 1 m) => a -> Bool
+pad _ = True

@@ -1,0 +1,8 @@
+package NumericProviso where
+
+-- Numeric provisos relate sizes; none has a dictionary to use.
+sizeOnly :: (Add n 1 m, Mul n 2 k, Max n m p) => Bit n -> Bit m -> Bit n
+sizeOnly x _ = x
+
+padOne :: (Add n 1 m) => Bit n -> Bit m
+padOne x = zeroExtend x
