@@ -441,6 +441,9 @@ instance Ord VMItem where
          compare (VMFunction _) (VMFunction _)      = EQ
          compare (VMFunction _) _                   = GT
 
+         compare (VMIfdef _ _) (VMIfdef _ _)        = EQ
+         compare (VMIfdef _ _) _                    = GT
+
          compare (VMGroup _ _) (VMGroup _ _)        = EQ
          compare (VMGroup _ _) _                    = GT
 
@@ -504,6 +507,7 @@ groupVMItems vmis =
         needsSpace (VMStmt _ _)         = True
         needsSpace (VMFunction _)       = True
         needsSpace (VMGroup _ _)        = True
+        needsSpace (VMIfdef _ _)        = True
         needsSpace (VMComment _ vmi)    = needsSpace vmi
         needsSpace (VMRegGroup _ _ _ vmi) = needsSpace vmi
         needsSpace _                    = False
@@ -579,6 +583,8 @@ data VStmt
         | Vdumpvars Int [VId]           -- appears unused
         | VTask VId [VExpr] -- calling a verilog system task as a Bluespec foreign function of type Action
         | VAssert VEventExpr [VExpr]
+        -- concurrent assertion, clocked by the enclosing always block
+        | VAssertProperty VExpr
         | VZeroDelay -- injecting an explicit (0-tick) delay for synchronization purposes
         deriving (Eq, Show, Generic.Data, Generic.Typeable)
 
@@ -631,6 +637,8 @@ instance PPrint VStmt where
         pPrint d p (VTask task es) = pPrint d 0 task <> text "(" <> commaList d es <> text ");"
 
         pPrint d p (VAssert ev es) = ppAssert d p ev es
+        pPrint d p (VAssertProperty e) =
+            text "assert property (" <> pPrint d 0 e <> text ");"
 
 
         pPrint d p  VZeroDelay     = text "#0;"
@@ -649,6 +657,7 @@ instance NFData VStmt where
     rnf (Vdumpvars lvl vars) = rnf2 lvl vars
     rnf (VTask tid exprs) = rnf2 tid exprs
     rnf (VAssert ev exprs) = rnf2 ev exprs
+    rnf (VAssertProperty expr) = rnf expr
     rnf VZeroDelay = ()
 
 ppAssert :: PDetail -> Int -> VEventExpr -> [VExpr] -> Doc
@@ -1264,6 +1273,7 @@ getVeriInsts (VProgram ms _ _ _) = nub (concatMap getInstsFromVModule ms)
       getInstsFromVMItem (VMRegGroup _ _ _ i) = getInstsFromVMItem i
       getInstsFromVMItem (VMGroup _ iss) =
           concatMap (concatMap getInstsFromVMItem) iss
+      getInstsFromVMItem (VMIfdef _ is) = concatMap getInstsFromVMItem is
       getInstsFromVMItem _ = []
 
 -- true if the declarions have the same type
