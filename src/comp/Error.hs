@@ -11,6 +11,9 @@ module Error(
              -- initialize the error handler
              ErrorHandle, initErrorHandle, resetErrorHandle, setErrorHandleFlags,
 
+             -- the diagnostics reported, as records (for -check-only)
+             Diagnostic(..), takeDiagnostics,
+
              -- update the error handler state when files are opened/closed
              recordHandleOpen, recordHandleClose, closeOpenHandles,
 
@@ -70,6 +73,7 @@ import qualified Flags as F
 
 -- error handling
 import Data.List(genericLength)
+import Data.Maybe(fromMaybe)
 import qualified Data.Set as S
 import System.IO(Handle, hClose, hPutStr, stderr)
 import System.Exit(exitWith, ExitCode(..))
@@ -154,9 +158,22 @@ data ErrorState = ErrorState
           -- we also store state that needs handling on exit:
 
           -- set of open handles, that need to be flushed/closed on exit
-          openHandles :: [Handle]
+          openHandles :: [Handle],
+
+          -- when recording (-check-only), every diagnostic reported since
+          -- the last takeDiagnostics, most recent first
+          diagnostics :: Maybe [Diagnostic]
 
         }
+
+-- A reported message as a record: its tag (e.g. T0020), severity
+-- ("error", "warning" or "message"), position, and the text printed
+data Diagnostic = Diagnostic { diag_tag :: String
+                             , diag_severity :: String
+                             , diag_position :: Position
+                             , diag_text :: String
+                             }
+    deriving (Eq, Show)
 
 -- -----
 
@@ -187,7 +204,8 @@ initErrorState = ErrorState {
                    suppressionSet = SomeMsgs S.empty,
                    suppressedCount = 0,
                    bloogleDbPath = Nothing,
-                   openHandles = []
+                   openHandles = [],
+                   diagnostics = Nothing
                  }
 
 -- Reset a reusable session's diagnostics after its open handles are closed.
@@ -201,9 +219,35 @@ setErrorHandleFlags ref flags = do
                     promotionSet = toMsgSet (F.promoteWarnings flags),
                     demotionSet = toMsgSet (F.demoteErrors flags),
                     suppressionSet = toMsgSet (F.suppressWarnings flags),
-                    bloogleDbPath = F.bloogleDb flags
+                    bloogleDbPath = F.bloogleDb flags,
+                    diagnostics =
+                        if F.frontEndMode flags == F.CheckOnly
+                        then Just (fromMaybe [] (diagnostics state))
+                        else Nothing
                   }
   writeErrorState ref new_state
+
+-- The diagnostics recorded since the last call, in the order reported
+takeDiagnostics :: ErrorHandle -> IO [Diagnostic]
+takeDiagnostics ref = do
+  state <- readErrorState ref
+  case diagnostics state of
+    Nothing -> return []
+    Just ds -> do writeErrorState ref (state { diagnostics = Just [] })
+                  return (reverse ds)
+
+-- Record messages as they are printed (sorted by position, see prEMsgList)
+recordDiagnostics :: ErrorHandle -> String -> MsgContext -> [EMsg] -> IO ()
+recordDiagnostics _ _ _ [] = return ()
+recordDiagnostics ref ekind ctx ms = do
+  state <- readErrorState ref
+  case diagnostics state of
+    Nothing -> return ()
+    Just ds ->
+      let new = [ Diagnostic (getErrMsgTag m) ekind p
+                             (pretty 78 78 (prEMsg ekind ctx (p, m)))
+                | (p, m) <- sortBy cmpEMsgPos ms ]
+      in  writeErrorState ref (state { diagnostics = Just (reverse new ++ ds) })
 
 readErrorState :: ErrorHandle -> IO ErrorState
 readErrorState (ErrorHandle ref) = readIORef ref
@@ -261,6 +305,8 @@ bsWarningsAndErrorsWithContext ref ctx ws0 ds0 es0 = do
   writeErrorState ref state2
   let final_warns = warn_ws ++ warn_ds
       final_errs = err_ws ++ err_ds ++ es
+  recordDiagnostics ref swarning ctx final_warns
+  recordDiagnostics ref serror ctx final_errs
   -- issue warnings
   when (not (null final_warns)) $ do
       -- the show*List function will sort the messages
@@ -337,6 +383,7 @@ bsMessage ref ms = do
   -- allow the user to suppress messages
   let (new_state, ms') = suppressWarnings state ms
   writeErrorState ref new_state
+  recordDiagnostics ref smessage emptyContext ms'
   when (not (null ms')) $
       hPutStr stderr (showMessageList ms')
 
@@ -378,7 +425,8 @@ reportSuppressionWarning ref = do
   state <- readErrorState ref
   case (getSuppressionWarning state) of
     [] -> return ()
-    ws -> do hPutStr stderr (showWarningList ws)
+    ws -> do recordDiagnostics ref swarning emptyContext ws
+             hPutStr stderr (showWarningList ws)
              -- clear the list of warnings
              -- so that a later caller won't re-report them
              let new_state = state { suppressedCount = 0 }
@@ -421,7 +469,7 @@ bsErrorNoExit ref es = bsErrorWithContextNoExit ref emptyContext es
 
 bsErrorWithContextNoExit :: ErrorHandle -> MsgContext -> [EMsg] -> IO ()
 bsErrorWithContextNoExit ref ctx es = do
-  -- nothing needs to be updated in the state
+  recordDiagnostics ref serror ctx es
   hPutStr stderr (showErrorListWithContext ctx es)
 
 exitFail :: ErrorHandle -> IO a
@@ -1163,6 +1211,7 @@ data ErrMsg =
         | EOpenOutputDirFailure String String String -- flag, dir, msg
 
         | ENoBackendCodeGen [String]
+        | EFrontEndOnlyBackend
         | ENoBackendLinking
         | ETooManyBackends
         | EDollarNoVerilog
@@ -1325,8 +1374,10 @@ showWarningListWithContext = showEMsgList swarning
 
 -- note that this sorts the messages by position
 prEMsgList :: String -> MsgContext -> [EMsg] -> Doc
-prEMsgList ekind ctx ms = vcat (map (prEMsg ekind ctx) (sortBy cmpEMsg ms))
-  where cmpEMsg (pos1, _) (pos2, _) = compare pos1 pos2
+prEMsgList ekind ctx ms = vcat (map (prEMsg ekind ctx) (sortBy cmpEMsgPos ms))
+
+cmpEMsgPos :: EMsg -> EMsg -> Ordering
+cmpEMsgPos (pos1, _) (pos2, _) = compare pos1 pos2
 
 prEMsg :: String -> MsgContext -> EMsg -> Doc
 prEMsg ekind@(l:ls) ctx (p,m) =
@@ -4322,6 +4373,10 @@ getErrorText (ETwoArgFlag flag) =
 
 getErrorText (ENoBackendCodeGen mods) =
     (System 14, empty, s2par ("You must specify -sim or -verilog to generate code for " ++ unwordsAnd (map ishow mods)))
+getErrorText (EFrontEndOnlyBackend) =
+    (System 100, empty, s2par ("The flags -signature-only and -check-only stop before " ++
+                               "code generation, so they cannot be combined with " ++
+                               "-verilog, -sim or -systemc."))
 
 -- This should be obsoleted
 getErrorText (EGeneric s) =

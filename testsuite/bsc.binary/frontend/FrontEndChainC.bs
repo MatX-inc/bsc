@@ -1,0 +1,8 @@
+package FrontEndChainC where
+
+-- The top of the chain (see frontend.exp)
+
+import FrontEndChainB
+
+heavier :: Setting -> Setting -> Bool
+heavier a b = weight a > weight b

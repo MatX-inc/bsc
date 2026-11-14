@@ -1,0 +1,9 @@
+package FrontEndChainBodyErr where
+
+-- A package over FrontEndUsesBodyErr, whose import FrontEndBodyErr has a
+-- type error in a body (see frontend.exp)
+
+import FrontEndUsesBodyErr
+
+four :: Integer
+four = twice + twice

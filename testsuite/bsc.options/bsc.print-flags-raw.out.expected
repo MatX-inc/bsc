@@ -31,6 +31,7 @@ Flags {
 	extraVerbose = False,
 	fdir = Nothing,
 	finalcleanup = 1,
+	frontEndMode = FullCompile,
 	genABin = False,
 	genName = [],
 	genSysC = False,

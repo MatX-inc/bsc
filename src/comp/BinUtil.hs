@@ -2,12 +2,14 @@ module BinUtil (
                 BinMap, BinFile,
                 HashMap,
                 readImports,
+                readImportsBi,
                 readBin, sortImportedSignatures,
                 replaceImportedSignatures
                ) where
 
 import Control.Monad(when, foldM)
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Flags(Flags,
              ifcPath,
              enablePoisonPills,
@@ -21,9 +23,11 @@ import ISyntax
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError, bsWarning)
 import PFPrint
 import SCC
-import FileNameUtil(binSuffix)
+import FileNameUtil(binSuffix, biSuffix, btpSuffix, dropSuf)
 import FileIOUtil(readBinFilePath)
 import GenBin(readBinPackage)
+import GenBi(BiFile(..), readBiFile)
+import GenBtp(readBtpStatus)
 import Util(fromJustOrErr, fromMaybeM,
             map_insertManyWith, map_insertManyWithKeyM)
 
@@ -190,17 +194,18 @@ doImport errh flags hashmap i = do
                                        (pfpString i) (pfpString pi))]
     when poisoned $
         pillMsg [(getIdPosition pi, WPoisonedDefFile binname)]
-    hashmap' <- mergeHashes errh hashmap pi hash impHashes
+    hashmap' <- mergeHashes errh binSuffix hashmap pi hash impHashes
     let impNames = map fst impHashes
     return (name, bi_sig, bo_sig, ipkg, hash, hashmap', impNames)
 
-mergeHashes :: ErrorHandle -> HashMap -> Id -> String -> [(Id, String)] ->
+-- suffix: the kind of file the hashes are of (for messages)
+mergeHashes :: ErrorHandle -> String -> HashMap -> Id -> String -> [(Id, String)] ->
                IO HashMap
-mergeHashes errh hashmap binId binhash impHashes =
+mergeHashes errh suffix hashmap binId binhash impHashes =
   let
       -- a package and its importer disagree about the hash
       mismatchErr1 pkg importer =
-          let pkgfile = (pfpString pkg) ++ "." ++ binSuffix
+          let pkgfile = (pfpString pkg) ++ "." ++ suffix
           in  bsError errh
                   [(getIdPosition binId,
                     EBinFileSignatureMismatch pkgfile (pfpString importer))]
@@ -208,7 +213,7 @@ mergeHashes errh hashmap binId binhash impHashes =
       -- two packages disagree about an imported file
       -- XXX we could determine which is wrong by loading the file itself
       mismatchErr2 pkg importer1 importer2 =
-          let pkgfile = (pfpString pkg) ++ "." ++ binSuffix
+          let pkgfile = (pfpString pkg) ++ "." ++ suffix
           in  bsError errh
                   [(getIdPosition binId,
                     EBinFileSignatureMismatch2 pkgfile
@@ -241,6 +246,96 @@ mergeHashes errh hashmap binId binhash impHashes =
   in
       map_insertManyWithKeyM mergeFn new_pairs hashmap
 
+
+-- =========================
+
+-- The .bi files loaded, indexed by package name: file name, the .bi
+-- contents, and its hash
+type BiMap = M.Map String (String, BiFile, String)
+
+-- Read the imported packages from .bi files only (-signature-only,
+-- -check-only), as readImports reads them from .bo files: the import
+-- closure is loaded, imports of imports come in qualified only, and the
+-- hashes recorded by each importer must agree.  Also returns the
+-- closure with each package's .bi hash, in imported-signature order.
+-- A .bi records no poison-pill status (it is written before typecheck).
+-- Under -u -check-only, whose dependency check has made each .btp current
+-- with its .bi, a .btp beside the .bi that records a failed check is
+-- reported as readImports reports a .bo with poisoned definitions, the
+-- first time a signature pass of the run reads the package.  seen0 is
+-- Just the packages read by its earlier signature passes, returned
+-- updated (Nothing outside -u -check-only).
+readImportsBi :: ErrorHandle -> Flags -> HashMap -> Maybe (S.Set String) ->
+                 CPackage ->
+                 IO (CPackage, HashMap, Maybe (S.Set String), [(Id, String)])
+readImportsBi errh flags hashmap0 seen0
+              (CPackage pkgId exps imps old_impsigs fixs ds includes) = do
+  when (not (null old_impsigs)) $
+      internalError "readImportsBi: unexpected non-empty impsigs"
+  let
+      pkgName = getIdString pkgId
+      qualMergeFn newQual oldQual = if (oldQual) then newQual else oldQual
+
+      fn (bimap, hashmap, seen, qualmap) (CImpId q i) =
+          do (bimap', hashmap', seen') <- readBi errh flags pkgName bimap hashmap seen i
+             let deps = case M.lookup (getIdString i) bimap' of
+                          Just (_, bi, _) -> map (getIdString . fst) (bi_imports bi)
+                          Nothing -> internalError "readImportsBi: not loaded"
+                 dep_quals = map (\x -> (x,True)) deps
+                 qualmap' = map_insertManyWith qualMergeFn dep_quals qualmap
+                 qualmap'' = M.insertWith qualMergeFn (getIdString i) q qualmap'
+             return (bimap', hashmap', seen', qualmap'')
+
+  (bimap, hashmap, seen, qualmap)
+      <- foldM fn (M.empty, hashmap0, seen0, M.empty) (addPrelude flags imps)
+
+  let lookupBi s = case (M.lookup s bimap) of
+                     Just b -> b
+                     Nothing -> internalError ("readImportsBi: " ++ ppReadable s)
+      mkCImp (s, q) = let (fname, bi, _) = lookupBi s
+                      in  CImpSign fname q (bi_sig bi)
+      sortedImpsigs = sortImportedSignatures (map mkCImp (M.toList qualmap))
+      closure = [ (n, hash) | CImpSign _ _ (CSignature n _ _ _) <- sortedImpsigs
+                            , let (_, _, hash) = lookupBi (getIdString n) ]
+      cpkg' = CPackage pkgId exps imps sortedImpsigs fixs ds includes
+
+  return (cpkg', hashmap, seen, closure)
+
+-- Load a .bi file and, transitively, the .bi files of its import closure
+readBi :: ErrorHandle -> Flags -> String -> BiMap -> HashMap ->
+          Maybe (S.Set String) -> Id -> IO (BiMap, HashMap, Maybe (S.Set String))
+readBi errh flags pkgName bimap0 hashmap0 seen0 p0 = go bimap0 hashmap0 seen0 [p0]
+  where
+    firstRead p = maybe False (not . S.member (getIdString p))
+    pillMsg = if (enablePoisonPills flags)
+              then bsWarning errh
+              else bsError errh
+    go bimap hashmap seen [] = return (bimap, hashmap, seen)
+    go bimap hashmap seen (p:ps) =
+      case M.lookup (getIdString p) bimap of
+        Just _ -> go bimap hashmap seen ps
+        Nothing -> do
+          when (getIdString p == pkgName) $
+              bsError errh [(getPosition p0,
+                             ECircularImportsViaBinFile pkgName (getIdString p0))]
+          let biname = getIdString p ++ "." ++ biSuffix
+          (file, name) <- fromMaybeM (bsError errh [(getIdPosition p,
+                                                     EMissingIfcFile biname (pfpString p))]) $
+                            readBinFilePath errh (getIdPosition p)
+                                (verbose flags) biname (ifcPath flags)
+          (bi, hash) <- readBiFile errh name file
+          when (bi_name bi /= p) $
+              bsError errh [(noPosition, EBinFilePkgNameMismatch name
+                                             (pfpString p) (pfpString (bi_name bi)))]
+          when (firstRead p seen) $ do
+              status <- readBtpStatus (dropSuf name ++ "." ++ btpSuffix)
+              when (status == Just False) $
+                  pillMsg [(getIdPosition (bi_name bi),
+                            WPoisonedDefFile (getIdString p ++ "." ++ btpSuffix))]
+          hashmap' <- mergeHashes errh biSuffix hashmap (bi_name bi) hash (bi_imports bi)
+          let bimap' = M.insert (getIdBaseString p) (name, bi, hash) bimap
+          go bimap' hashmap' (S.insert (getIdString p) <$> seen)
+             (map fst (bi_imports bi) ++ ps)
 
 -- =========================
 

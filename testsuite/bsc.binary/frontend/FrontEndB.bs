@@ -1,0 +1,13 @@
+package FrontEndB where
+
+import FrontEndA
+import Vector
+
+origin :: Point
+origin = Point { x = 0; y = 0 }
+
+firstRed :: Vector 3 Color -> Bool
+firstRed v = isRed (head v)
+
+label :: Color -> String
+label c = name c +++ "!"
