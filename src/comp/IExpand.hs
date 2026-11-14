@@ -5028,8 +5028,11 @@ doIf f@(ICon _ (ICPrim _ PrimIf)) [T t, E cnd, E thn, E els] = do
             eval1 thn
            else do -- evaluate to WHNF and try again
              (ethn, P pthn thn') <- evalUH thn
-             if thn' == els then
-              return (P pthn thn')
+             if thn' == els then do
+              -- PROTOTYPE: equal arms, but the else arm's condition may differ
+              (_, P pels _) <- evalUH els
+              p_if <- pIf ecnd pthn pels
+              return (P p_if thn')
                else do
                 (eels, P pels els') <- evalUH els
                 -- additional equality tests have moved to improveIf
