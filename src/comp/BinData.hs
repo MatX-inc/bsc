@@ -56,19 +56,25 @@ import IntLit
 import Undefined
 import Prim hiding(PrimArg(..))
 
-import Util(Hash, hashInit, nextHashByte, showHash)
+import Util(Hash(..), hashInit, nextHashByte, showHash)
 
 import Data.List(sort, intercalate)
-import Control.Monad(replicateM, liftM, ap)
+import Control.Monad(liftM, ap, when)
+import Foreign.ForeignPtr(mallocForeignPtrBytes, withForeignPtr)
+import Foreign.Ptr(Ptr)
+import Foreign.Storable(peekByteOff, pokeByteOff)
 import Data.Array.IArray()
 import Data.Array.Unboxed
 import Data.Bits
 import Data.Word
 import GHC.Exts(IsList(..))
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Unsafe as BSU
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Encoding as TE
+import qualified Data.Text as TS
+import qualified Data.Text.Encoding as TSE
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Numeric(showHex)
@@ -356,20 +362,50 @@ newtype In a = In (IS -> (a,IS))
 
 instance Monad In where
   return = pure
-  (In v) >>= f = In $ \is -> let !(x,is') = v is
-                                 (In fn) = f x
-                             in fn is'
+  (In v) >>= f = In $ \env -> do x <- v env
+                                 let (In fn) = f x
+                                 fn env
 
 instance Functor In where
   fmap = liftM
 
 instance Applicative In where
-  pure x = In $ \is -> (x,is)
+  pure x = In $ \_ -> return x
   (<*>) = ap
 
 getN :: Int -> In [Byte]
-getN n = replicateM n getB
+getN n = readN n getB
 
+-- Read n values in order. In runs in IO, where replicateM and a recursive
+-- (x:) <$> ... hold one stack frame per element until the list ends; a long
+-- list overflows the stack. Accumulating and reversing runs in constant stack.
+{-# INLINE readN #-}
+readN :: Int -> In a -> In [a]
+readN n0 r = go n0 []
+  where go n acc | n <= 0    = return (reverse acc)
+                 | otherwise = do { x <- r; go (n - 1) (x:acc) }
+
+-- Advance the read offset past n bytes and return where they start.
+{-# INLINE advance #-}
+advance :: String -> Env -> Int -> IO Int
+advance who env n = do
+  let st = envState env
+  off <- peekByteOff st stateOffset :: IO Int
+  if n < 0 || off + n > BS.length (envBytes env)
+    then internalError ("BinData." ++ who ++ ": unexpected end of byte stream")
+    else do pokeByteOff st stateOffset (off + n)
+            return off
+
+-- Fold the bytes just read into the running hash, if this read is hashed.
+{-# INLINE hashWith #-}
+hashWith :: Env -> (Hash -> Hash) -> IO ()
+hashWith env f = when (envHashed env) $ do
+  let st = envState env
+  h <- peekHash st
+  let !h' = f h
+  pokeHash st h'
+
+{-# INLINE getB #-}
 getB :: In Byte
 getB = In $ \is ->
   case is of
@@ -619,13 +655,14 @@ instance Bin Word32 where
 instance {-# OVERLAPPABLE #-} (Bin a) => Bin [a] where
   writeBytes []     = putI 0
   writeBytes (x:xs) = do { putI 1; toBin x; toBin xs }
-  readBytes = do i <- getI
-                 case i of
-                   0 -> return []
-                   1 -> do x <- fromBin
-                           rest <- fromBin
-                           return (x:rest)
-                   n -> internalError $ "BinData.Bin([a]).readBytes: " ++ show n
+  -- Accumulated and reversed so a long list does not grow the stack (see readN).
+  readBytes = go []
+    where go acc = do i <- getI
+                      case i of
+                        0 -> return (reverse acc)
+                        1 -> do x <- fromBin
+                                go (x:acc)
+                        n -> internalError $ "BinData.Bin([a]).readBytes: " ++ show n
 
 -- For array types, we use a length + values representation
 instance {-# OVERLAPPABLE #-} (IArray arr a, Ix i, Num i, Integral i, Bin a) => Bin (arr i a) where
@@ -635,7 +672,7 @@ instance {-# OVERLAPPABLE #-} (IArray arr a, Ix i, Num i, Integral i, Bin a) => 
                     else do toBin (toInteger (hi+1))
                             mapM_ toBin (elems x)
   readBytes = do len <- fromBin
-                 xs <- replicateM (fromInteger len) fromBin
+                 xs <- readN (fromInteger len) fromBin
                  return $ listArray (0,fromInteger (len-1)) xs
 
 instance {-# OVERLAPPING #-} (Bin a, Bin b) => Bin (a,b) where
@@ -703,8 +740,9 @@ instance {-# OVERLAPPABLE #-} Bin String where
                        toBin $ toInteger $ B.length bs
                        putBs $ B.unpack bs
     readBytes     = do len <- fromBin
-                       bs <- getN len
-                       return (T.unpack $ TE.decodeUtf8 $ B.pack bs)
+                       bs <- getBS len
+                       let !t = TSE.decodeUtf8 bs
+                       return (TS.unpack t)
 
 instance Bin Position where
     writeBytes (Position fs l c is_stdlib) = section "Position" $ do
