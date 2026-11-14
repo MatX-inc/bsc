@@ -15,10 +15,8 @@ import Control.Monad(when, foldM, zipWithM)
 import Control.Monad.State.Strict(State, StateT, evalState, evalStateT, liftIO,
                                   gets, get, put)
 import Data.List(sortBy, genericLength, sort, transpose, partition, groupBy, nub)
-import Data.Ord(Down(..), comparing)
 import Util(mapFst)
 import qualified Data.Map as M
-import qualified Data.Map.Strict as MS
 import qualified Data.Set as S
 import Util(allSame, flattenPairs, makePairs, remOrdDup, integerToBits,
             itos, eqSnd, cmpSnd, nubByFst, map_insertManyWith,
@@ -41,8 +39,7 @@ import Flags(Flags,
              optBitConst,
              keepFires,
              optSched,
-             optJoinDefs,
-             stableVerilog)
+             optJoinDefs)
 import VModInfo(VArgInfo(..), vArgs)
 import Position(noPosition)
 import FStringCompat(mkFString)
@@ -90,7 +87,6 @@ aOpt errh flags pkg0 | not (optATS flags) =
         pkg1 = aExpandDynSelASPkg pkg0
 
         pkg2 = aExpand errh
-                   (stableVerilog flags)
                    keepF
                    False    -- expnond
                    inlineB  -- expcheap
@@ -103,7 +99,6 @@ aOpt errh flags pkg0 = do
         bflags = flagsToBFlags flags
 
         keepF = keepFires flags -- F
-        stable = stableVerilog flags
         optsch = optSched flags -- T
         optjoin = optJoinDefs flags -- F  see comments on b1072
         inlineB = inlineBool flags -- T
@@ -142,7 +137,6 @@ aOpt errh flags pkg0 = do
         -- aExpand is needed here after scheduling tsort defs
         --
         pkg2 = aExpand errh
-                   stable
                    keepF
                    False    -- expnond
                    inlineB  -- expcheap
@@ -164,11 +158,10 @@ aOpt errh flags pkg0 = do
                       aspkg_foreign_calls = fb1,
                       aspkg_state_instances = ss1 }
         -- XXX EWC Not sure why optSched is used here ???
-        pkg4 = xaSRemoveUnused stable keepF pkg3
+        pkg4 = xaSRemoveUnused keepF pkg3
     when debug $
       traceM ("trace defs, post xaSRemoveUnused (ds2): " ++ ppReadable (aspkg_values pkg4))
     let pkg5 = xaXExpand errh
-                   stable
                    keepF
                    optsch  -- expnond
                    False   -- expcheap
@@ -185,7 +178,7 @@ aOpt errh flags pkg0 = do
 
     -- CSE defs
     --
-    let ds3 = joinDefs stable optjoin ds2
+    let ds3 = joinDefs optjoin ds2
     when debug $
       traceM ("trace defs, post joinDefs (ds3): " ++ ppReadable ds3)
     let pkg6 = pkg5 { aspkg_values = ds3 }
@@ -195,7 +188,6 @@ aOpt errh flags pkg0 = do
     -- for the simple cases
     let
         pkg7 = xaXExpand errh
-                   stable
                    keepF
                    optsch  -- expnond
                    False   -- expcheap
@@ -214,8 +206,7 @@ data BFlags = BFlags  { ao_ifmux        :: Bool,
                         ao_keepfires    :: Bool,
                         ao_keepMethIO   :: Bool,
                         ao_aggInline    :: Bool,
-                        ao_ifsToPrimPri :: Bool,
-                        ao_stable       :: Bool
+                        ao_ifsToPrimPri :: Bool
                         }
 
 flagsToBFlags :: Flags -> BFlags
@@ -232,8 +223,7 @@ flagsToBFlags flags = BFlags {
                               ao_aggInline    = optAggInline flags, -- T
                               ao_keepfires    = keepFires flags, -- False
                               ao_keepMethIO   = keepFires flags,
-                              ao_ifsToPrimPri = True,
-                              ao_stable       = stableVerilog flags
+                              ao_ifsToPrimPri = True
                              }
 
 optFlagsOff :: BFlags -> BFlags
@@ -258,7 +248,6 @@ optExprBFlag = BFlags {
   ,ao_keepfires    = False
   ,ao_keepMethIO   = False
   ,ao_ifsToPrimPri = False
-  ,ao_stable       = False
                              }
 -----
 
@@ -441,9 +430,9 @@ aOptInstArg bflgs _ = aExp bflgs
 -- If any local id has the same definition (expr) as a previously
 -- encountered id, then change the def of the second occurrence to be
 -- just a reference to the first.
-joinDefs :: Bool -> Bool -> [ADef] -> [ADef]
-joinDefs _ False ds = ds
-joinDefs False True dsx = reverse (snd (foldl add (M.empty, []) dsx))
+joinDefs :: Bool -> [ADef] -> [ADef]
+joinDefs False ds = ds
+joinDefs True dsx = reverse (snd (foldl add (M.empty, []) dsx))
   where add :: (M.Map AExpr ADef, [ADef]) -> ADef -> (M.Map AExpr ADef,[ADef])
         add (m, ds) d@(ADef _ _ (ASInt _ _ _) _) = (m, d:ds)
         add (m, ds) d@(ADef _ _ (ASDef _ _) _)   = (m, d:ds)
@@ -468,41 +457,6 @@ joinDefs False True dsx = reverse (snd (foldl add (M.empty, []) dsx))
                     | defPropsHasNoCSE props -> (m, d:ds)
                     | otherwise -> -- traces ("adding simple assignment: " ++ ppReadable (ie,i)) $
                                    (m, (ADef ie t (ASDef t i) p) : ds)
--- Under -stable-verilog the surviving name of each expression class is
--- chosen by name QUALITY (keep > user-visible > generated ids, via
--- idQuality) with the lexicographically least name breaking ties -- a
--- pure function of the class, independent of traversal order -- instead
--- of first-come-wins over the (interning-order-sensitive) def list.
-joinDefs True True dsx = map rewrite dsx
-  where -- the RHS shapes joinDefs never touches (same as the fold above)
-        shapeOK (ASInt _ _ _)  = False
-        shapeOK (ASDef _ _)    = False
-        shapeOK (ASStr _ _ _)  = False
-        shapeOK (ASPort _ _)   = False
-        shapeOK (ASParam _ _)  = False
-        shapeOK (ASAny _ _)    = False
-        shapeOK _              = True
-        -- enable defs cannot BE the surviving name but -- exactly like
-        -- the first-come fold -- are still rewritten as aliases of it;
-        -- NoCSE defs are never merged in either direction
-        repCandidate (ADef ie _ e props) =
-            shapeOK e && not (hasIdProp ie IdP_enable)
-                      && not (defPropsHasNoCSE props)
-        rank d = (idQuality (Just (adef_objid d)),
-                  Down (getIdString (adef_objid d)))
-        better d1 d2 = if rank d1 >= rank d2 then d1 else d2
-        -- strict: with the lazy map every duplicate chains a `better'
-        -- thunk on the class's entry, and the first lookup would force
-        -- the whole chain at once
-        reps = MS.fromListWith better
-                   [ (adef_expr d, d) | d <- dsx, repCandidate d ]
-        rewrite d@(ADef ie _ e props)
-            | shapeOK e,
-              not (defPropsHasNoCSE props),  -- never merged, like the fold
-              Just (ADef i t _ p) <- M.lookup e reps,
-              i /= ie
-            = ADef ie t (ASDef t i) p
-            | otherwise = d
 
 -- if the expression is a primitive with 1-bit type, optimize it as
 -- a boolean expression
@@ -1207,13 +1161,13 @@ optMuxPairs bflgs aid dty op eps = eps3
       eps1 = filter (not . isFalse . fst) eps
       -- drop terms after the first true term
       eps2 = takeWhilePlus1 (not . isTrue . fst) eps1
-      eps3 = mergeIdenExpr (ao_stable bflgs) op eps2
+      eps3 = mergeIdenExpr op eps2
 
 -- merge Identical Expressions
 -- The sort function here can cause reordering in case expression, which can
 -- later turn to if expressions, and look totally wrong when comparing to older versions.
-mergeIdenExpr :: Bool -> PrimOp -> [(AExpr,AExpr)] ->  [(AExpr,AExpr)]
-mergeIdenExpr stable op eps = if ( length newpairs < length eps ) then newpairs else eps
+mergeIdenExpr :: PrimOp -> [(AExpr,AExpr)] ->  [(AExpr,AExpr)]
+mergeIdenExpr op eps = if ( length newpairs < length eps ) then newpairs else eps
     where
       flattenGrps :: [(AExpr,AExpr)] -> (AExpr,AExpr)
       flattenGrps [] = internalError( "AOpt::mergeIdenExpr" )
@@ -1235,14 +1189,7 @@ mergeIdenExpr stable op eps = if ( length newpairs < length eps ) then newpairs 
                 testf :: (AExpr,AExpr) -> (AExpr,AExpr) -> Bool
                 testf (_,x1) (_,x2) = isASAny x1 == isASAny x2
       --
-      -- Under -stable-verilog the PrimMux arm sort keys on the arm's
-      -- TEXT (with ASAny arms last, the invariant sortPairASAny exists
-      -- to repair) instead of Ord AExpr, which bottoms out in intern
-      -- order; structurally equal arms have identical text, so groupBy
-      -- still finds them adjacent.
-      sortfn | op /= PrimMux = id
-             | stable        = sortBy (comparing (\ (_,e) -> (isASAny e, ppString e)))
-             | otherwise     = sortPairASAny . sortBy cmpSnd
+      sortfn = if (op == PrimMux) then (sortPairASAny . sortBy cmpSnd) else id
       meps = groupBy eqSnd (sortfn eps)
       newpairs = map flattenGrps meps
 
@@ -1739,7 +1686,7 @@ aOptAPackageLite errh flags apkg =
     apkgN
   where
       -- Expand to inline some defs
-      apkg1 = expandAPackage errh (stableVerilog flags) apkg
+      apkg1 = expandAPackage errh apkg
       -- Optimize expressions
       (ds1) = aOptPackage1 apkg1
       apkg2 = apkg1 { apkg_local_defs = ds1 }
