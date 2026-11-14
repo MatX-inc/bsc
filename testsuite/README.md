@@ -94,9 +94,12 @@ These tests are disabled if `showrules` is not found in the
 #### bluehs
 
 The test suite has tests of the bsc library, run as scripts with
-`bluehs`, in `bsc.bluehs`.  These tests are disabled if `bluehs` is not
-found in `TEST_RELEASE` at `bluehs/bin/bluehs`, where `make install-bluehs`
-installs it.
+`bluehs`, in `bsc.bluehs` (and in `bsc.driver/intern_table`). These
+tests are disabled if `bluehs` is not found in `TEST_RELEASE` at
+`bluehs/bin/bluehs`, where `make install-bluehs` installs it, or at the
+path `TEST_BLUEHS` names. A checkout's `util/bluehs/bluehs` runs the
+scripts that import `InternRestore` only while the checkout's `bsc-json`
+library is built (`util/bluehs/README.md`).
 
 #### Developer tools
 
