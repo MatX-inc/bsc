@@ -2401,6 +2401,17 @@ If you do not want to use the value returned by {\nterm{exp}}, you can
 use {\nterm{exp}} as a statement by itself (no need for the
 {\qbs{\nterm{varId} <-}} part).
 
+A binding statement can be preceded by one or more \te{doc} pragmas:
+
+\gram{stmt}{\many{\nterm{docPragma} \term{;}} \nterm{stmt}}
+
+\gram{docPragma}{\term{\{-\#} \term{doc} \term{=} \nterm{string} \term{\#-\}}}
+
+The strings are carried through to the generated {\veri} code as
+comments adjacent to the state instantiated by the statement.
+Each string appears on a separate comment line.
+\index{doc@\te{doc} (pragma)}
+
 Statements can also be \te{let} statements, which are used for
 ordinary value bindings (the left-hand side identifier and the
 right-hand side expression can be of any type).
@@ -3545,6 +3556,10 @@ argument's port).
 \litem{\te{options}}
 specify additional compiler flags that override the current compiler flags
 (as given on the command line).
+\litem{\te{doc}}
+attach a comment to the module, to be carried through to the generated
+{\veri} code.  The property can be given multiple times; each string
+appears on a separate comment line.
 \end{list}
 
 The \te{alwaysReady} and \te{alwaysEnabled} properties are useful when the generated
