@@ -1,6 +1,8 @@
 module FixupDefs(fixupDefs, updDef,
                  DictBuckets, mkDictBuckets,
-                 DictRedirects, mkDictRedirects) where
+                 DictEvMap, DictRedirects,
+                 mkDictRedirects, mkDictEvMapAndRedirects,
+                 extendDictRedirects) where
 
 import Control.Monad.State.Strict(State, evalState, gets, modify)
 import Data.List(nub)
@@ -92,13 +94,35 @@ type DictRedirects = M.Map Id Id
 -- match nothing (redirection is idempotent).  Recomputing it per call
 -- -- once per synthesized module via "updDef" -- rebuilt the evidence
 -- map over every imported def each time.
-mkDictRedirects :: DictBuckets -> IPackage a -> [(IPackage a, String)]
-                -> DictRedirects
-mkDictRedirects buckets (IPackage _ _ _ ds _) ipkgs =
+type DictEvMap = EvMap
+
+mkDictEvMapAndRedirects :: DictBuckets -> IPackage a -> [(IPackage a, String)]
+                        -> (DictEvMap, DictRedirects)
+mkDictEvMapAndRedirects buckets (IPackage _ _ _ ds _) ipkgs =
     let ads = concat (ds : [ ds' | (IPackage _ _ _ ds' _, _) <- ipkgs ])
         evmap = M.fromList [ (i, (t, getDictEv props))
                            | IDef i t _ props <- ads, isLiftedDict i ]
-    in  mkRedirects buckets evmap
+    in  (evmap, mkRedirects buckets evmap)
+
+mkDictRedirects :: DictBuckets -> IPackage a -> [(IPackage a, String)]
+                -> DictRedirects
+mkDictRedirects buckets ipkg ipkgs =
+    snd (mkDictEvMapAndRedirects buckets ipkg ipkgs)
+
+-- Incrementally extend the evidence and redirect maps with dictionaries
+-- lifted during wrapper compilation (liftDictsWrapper), without rescanning
+-- imported packages.
+extendDictRedirects :: DictBuckets -> DictEvMap -> [IDef a] -> DictRedirects
+                    -> (DictEvMap, DictRedirects)
+extendDictRedirects buckets evmap new_defs redirects =
+    let new_entries = [ (i, (t, getDictEv props))
+                      | IDef i t _ props <- new_defs, isLiftedDict i ]
+    in  if null new_entries
+        then (evmap, redirects)
+        else let evmap' = foldr (uncurry M.insert) evmap new_entries
+                 new_dicts = [ (i, t) | (i, (t, Just _)) <- new_entries ]
+                 extra = mkRedirectsFor buckets evmap' new_dicts
+             in  (evmap', M.union extra redirects)
 
 -- Verification of a pair of dictionaries ("verifyPair"): equal names
 -- are one def; otherwise both must carry evidence identities, and the
@@ -118,9 +142,12 @@ mkDictRedirects buckets (IPackage _ _ _ ds _) ipkgs =
 -- refusing (never trusting) a revisited pair.
 mkRedirects :: DictBuckets -> EvMap -> DictRedirects
 mkRedirects buckets evmap =
+    mkRedirectsFor buckets evmap [ (i, t) | (i, (t, Just _)) <- M.toList evmap ]
+
+mkRedirectsFor :: DictBuckets -> EvMap -> [(Id, IType)] -> DictRedirects
+mkRedirectsFor buckets evmap dicts =
     M.fromList (concat (evalState (mapM tryRedirect dicts) M.empty))
   where
-    dicts = [ (i, t) | (i, (t, Just _)) <- M.toList evmap ]
 
     tryRedirect :: (Id, IType) -> State (M.Map (Id, Id) Bool) [(Id, Id)]
     tryRedirect (i, t) =
