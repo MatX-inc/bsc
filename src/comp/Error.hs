@@ -3122,6 +3122,10 @@ getErrorText (WTransitiveIncoherentMatch pred root_pred root_inst) =
             "depends on an incoherent match of " ++ root_pred ++
             " against instance " ++ root_inst))
 
+getErrorText (WInterfaceSyntaxUsedForStruct name) =
+    (Type 168, empty, s2par ("Interface syntax used to construct " ++ quote name ++
+                             ", but that type is a struct, not an interface."))
+
 -- Generation Errors
 
 getErrorText (EGenerate num s) =
