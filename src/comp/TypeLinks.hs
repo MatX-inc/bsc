@@ -106,6 +106,14 @@ endHeld :: End -> Bool
 endHeld (ELeaf _ _ _) = True
 endHeld _ = False
 
+-- an end a view could flow through: not a constant, a don't-care or absent
+linkable :: End -> Bool
+linkable (ECell _) = True
+linkable (ENode _) = True
+linkable (ENamed _) = True
+linkable (ELeaf _ _ _) = True
+linkable _ = False
+
 recHeld :: Rec -> Bool
 recHeld (RK _ _ _ _ b v) = endHeld b || endHeld v
 recHeld (RA _ n _ nm _ _ es) = endHeld n || nameHeld nm || any endHeld es
@@ -204,7 +212,7 @@ instLead t _ = t
 
 ctN, ctC, ctK, ctAS, ctAR, ctAF, ctV, ctD, ctM, ctP, ctT, ctErr, ctDeferred,
   ctSkipCell, ctSkipLink, ctSkipDictSel, ctSkipPlain, ctSelfLink, ctNoHead,
-  ctClass0, nCounters :: Int
+  ctInline, ctSkipConst, ctClass0, nCounters :: Int
 ctN = 0
 ctC = 1
 ctK = 2
@@ -224,7 +232,9 @@ ctSkipDictSel = 15  -- selections from a dictionary cell
 ctSkipPlain = 16    -- redexes that are plain calls
 ctSelfLink = 17     -- links from a cell to itself
 ctNoHead = 18       -- applications with a head that has no kind
-ctClass0 = 19       -- cells by class: ctClass0 + class
+ctInline = 19       -- inline arguments not described (written as absent)
+ctSkipConst = 20    -- live applications with no end to link
+ctClass0 = 21       -- cells by class: ctClass0 + class
 nCounters = ctClass0 + nClasses
 
 counterNames :: [(Int, String)]
@@ -234,7 +244,8 @@ counterNames =
       (ctT, "T"), (ctErr, "read-failed"), (ctDeferred, "deferred"),
       (ctSkipCell, "skip-cell"), (ctSkipLink, "skip-on-cell"),
       (ctSkipDictSel, "skip-dict-sel"), (ctSkipPlain, "skip-plain-call"),
-      (ctSelfLink, "skip-self-link"), (ctNoHead, "no-kind") ] ++
+      (ctSelfLink, "skip-self-link"), (ctNoHead, "no-kind"),
+      (ctInline, "inline-absent"), (ctSkipConst, "skip-no-link") ] ++
     [ (ctClass0 + c, "cells-" ++ clsName c) | c <- [0 .. nClasses - 1] ]
 
 -- -----
@@ -561,7 +572,9 @@ flatAp e = (e, [], [])
 
 -- The ends of the arguments: a cell, leaf or constant as it is; an inline
 -- application gets a node of its own, described to the given depth (not at
--- all when stop is set: the arm of a conditional).
+-- all when stop is set: the arm of a conditional).  An inline application
+-- that is not described, or whose record says nothing (see describe), is
+-- an absent end.
 argEnds :: TLog -> Char -> Int -> Bool -> [IExpr a] -> IO [End]
 argEnds l vw depth stop es0 = go [] es0
   where go acc [] = return (reverse acc)
@@ -574,14 +587,15 @@ argEnd l vw depth stop e = do
   case r of
     Right en -> return en
     Left False -> return ENone
-    Left True -> do
-      n <- newNode l
-      let other s = emit l (RA vw (ENode n) "other" (NmStr s) (-1) [] [])
-      if stop then other "inline"
-        else if depth <= 0 then other "deep"
-        else do done <- reading l False (describe l vw (depth - 1) (ENode n) Nothing Nothing e)
-                unless done (other "ap")
-      return (ENode n)
+    Left True
+      | stop || depth <= 0 -> do bump l ctInline
+                                 return ENone
+      | otherwise -> do
+          n <- newNode l
+          done <- reading l False (describe l vw (depth - 1) (ENode n) Nothing Nothing e)
+          if done then return (ENode n)
+            else do bump l ctInline
+                    return ENone
 
 -- Describe an application as the value of node, in a view; True when a
 -- record was written.  mft is the head's instantiated function type when
@@ -602,8 +616,15 @@ describe l vw depth node mft mends e0 = do
                      Nothing -> do a <- argEnds l vw depth False (take k es)
                                    b <- argEnds l vw depth (vw /= 'F') (drop k es)
                                    return (a ++ b)
-      out kind name tid nts xs = do emit l (RA vw node kind name tid nts xs)
-                                    return True
+      -- In the live views a record none of whose ends is a cell, a node
+      -- or a leaf links nothing and is not written (a constant structure,
+      -- a computation on constants); a call always is.
+      out kind name tid nts xs
+        | vw /= 'F' && kind /= "call" && not (any linkable xs) = do
+            bump l ctSkipConst
+            return False
+        | otherwise = do emit l (RA vw node kind name tid nts xs)
+                         return True
       tyArg k = case drop k ts of
                   (t : _) -> Just t
                   [] -> Nothing
@@ -631,19 +652,25 @@ describe l vw depth node mft mends e0 = do
             xs <- ends False
             out "tup" (NmStr (show n)) tid [] xs
         ICSel { selNo = k, numSel = m } -> do
-            -- the selected value first: a selection from a dictionary cell
-            -- (a class method) is not logged
-            first <- case mends of
-                       Just (x : _) -> return (Just x)
-                       Just [] -> return Nothing
-                       Nothing -> case es of
-                                    (x : _) -> Just <$> argEnd l vw depth False x
-                                    [] -> return Nothing
-            dict <- case first of
-                      Just (ECell p) -> (== clsClass) <$> cellClass l p
-                      _ -> return False
-            if dict then do bump l ctSkipDictSel
-                            return True
+            -- A selection from a dictionary (a class method) is not
+            -- logged: told by the selected value's type, or by its cell.
+            (stid, scls) <- reading l (-1, clsOther) $
+                              case funType ic >>= arrowParts of
+                                Just (t, _) -> tlType l t
+                                Nothing -> return (-1, clsOther)
+            first <- if scls == clsClass then return Nothing
+                     else case mends of
+                            Just (x : _) -> return (Just x)
+                            Just [] -> return Nothing
+                            Nothing -> case es of
+                                         (x : _) -> Just <$> argEnd l vw depth False x
+                                         [] -> return Nothing
+            dictCell <- case first of
+                          Just (ECell p) -> (== clsClass) <$> cellClass l p
+                          _ -> return False
+            if scls == clsClass || dictCell
+              then do bump l ctSkipDictSel
+                      return False
               else do
                 rest <- case mends of
                           Just xs -> return (drop 1 xs)
@@ -651,8 +678,8 @@ describe l vw depth node mft mends e0 = do
                 case first of
                   Just (ELeaf lk inst _) | lk == lkState ->
                       out "call" (NmCall inst hi) (-1) [] rest
-                  Just x -> sel k m ic (x : rest)
-                  Nothing -> sel k m ic []
+                  Just x -> sel k m stid (x : rest)
+                  Nothing -> sel k m stid []
         ICOut { conTagInfo = cti } -> do
             nm <- ctiName cti
             tid <- scrutTid ic
@@ -703,9 +730,8 @@ describe l vw depth node mft mends e0 = do
         _ -> do bump l ctNoHead
                 return False
      where
-      sel k m ic xs = do
+      sel k m tid xs = do
           nm <- reading l "-" (evaluate (let s = show k ++ "." ++ show m in length s `seq` s))
-          tid <- scrutTid ic
           out "sel" (NmStr nm) tid [] xs
       -- pack or unpack at the type argument, of the argument after the
       -- dictionary; a one-bit (or narrower) coercion that is a cell's own
@@ -723,7 +749,7 @@ describe l vw depth node mft mends e0 = do
                      Nothing -> return True
           when (vw == 'R' && (w == 0 || w == 1) && not isBit) $
               case (node, operand) of
-                (ECell _, x : _) ->
+                (ECell _, x : _) | linkable x ->
                     emit l (if dir == 'p' then RK 'p' "fall" tid w node x
                             else RK 'u' "fall" tid w x node)
                 _ -> return ()
@@ -858,16 +884,41 @@ tlStored l p f ts ft as = safely l $ do
     _ <- describe l 'S' 0 (ECell p) (Just ft) (Just xs) (IAps f ts as)
     return ()
 
--- The cell p's own expression e, read after it was evaluated (A R).
-tlRedex :: TLog -> Int -> IExpr a -> IO ()
-tlRedex l p e0 = safely l $ do
+-- The cell p's own expression e, read after it was evaluated to r (A R).
+-- Not when r is a constant (a literal, a don't-care, or a constructor tag
+-- of a literal): the record would describe a computation on constants.
+tlRedex :: TLog -> Int -> IExpr a -> IExpr a -> IO ()
+tlRedex l p e0 r = safely l $ do
   skip <- skippedCell l p
   if skip then bump l ctSkipLink else do
-    e <- evaluate e0
-    case e of
-      IAps _ _ _ -> do done <- describe l 'R' 2 (ECell p) Nothing Nothing e
-                       unless done (bump l ctSkipPlain)
-      _ -> return ()
+    constant <- reading l False (constValue r)
+    if constant then bump l ctSkipConst else do
+      e <- evaluate e0
+      case e of
+        IAps _ _ _ -> do done <- describe l 'R' 2 (ECell p) Nothing Nothing e
+                         unless done (bump l ctSkipPlain)
+        _ -> return ()
+
+-- whether an evaluated value is a constant
+constValue :: IExpr a -> IO Bool
+constValue r0 = do
+  r <- evaluate r0
+  case r of
+    ICon _ ic0 -> do ic <- evaluate ic0
+                     return (constCon ic)
+    IAps (ICon _ (ICPrim { primOp = PrimChr })) _ [x] -> do
+        x' <- evaluate x
+        case x' of
+          ICon _ ic0 -> do ic <- evaluate ic0
+                           return (constCon ic)
+          _ -> return False
+    _ -> return False
+  where constCon (ICInt {}) = True
+        constCon (ICReal {}) = True
+        constCon (ICString {}) = True
+        constCon (ICChar {}) = True
+        constCon (ICUndet {}) = True
+        constCon _ = False
 
 -- -----
 -- The end of elaboration

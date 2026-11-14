@@ -93,7 +93,7 @@ import CaptureEvents(CapLogF, MoveSpec(..), moveSpec,
                      evPackMerge, evUnpackMerge, lkMat, lkCopy)
 import CaptureRebuild(typeObservations)
 import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
-                 tlValue, tlFixValue, tlArgsReset, tlStored,
+                 tlValue, tlFixValue, tlArgsReset, tlStored, tlRedex,
                  tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr, tlNamed,
                  tlFinalEnd)
 import ISyntaxXRef(mapIExprPosition)
@@ -4090,6 +4090,10 @@ evalHeap (ptr, ref) = do
                                       tlIO (\ l -> tlCopy l "copy" ptr src)
                                       return True
           _ -> return False
+        -- the cell's own expression, read now that the base has evaluated
+        -- what it needs of it (type links)
+        case pe0 of
+          P _ e_res -> tlIO (\ l -> tlRedex l ptr e e_res)
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, pe'))
         case pe' of
             P _ (IAps (ICon _ (ICUndet { })) _ _) -> internalError ("evalHeap: " ++ ppReadable (ptr, pe'))
