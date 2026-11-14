@@ -27,6 +27,9 @@ jobs:
       - name: Check spelling of tool names
         shell: bash
         run: ".github/workflows/check_spelling.sh"
+      - name: Check file encodings
+        shell: bash
+        run: ".github/workflows/check_encoding.sh"
 
   build-check-testsuite:
     name: "Check: testsuite lint"
