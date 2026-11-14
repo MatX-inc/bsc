@@ -171,6 +171,8 @@ data IdProp = IdPCanFire
                                         -- a top-level nullary binding, which is
                                         -- what lifted dictionaries become
                                         -- (introduced by LiftDicts)
+              -- desugared from '0 or '1, so errors can mention the literal
+              | IdPUnbasedUnsized
         deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
 
 -- #############################################################################
