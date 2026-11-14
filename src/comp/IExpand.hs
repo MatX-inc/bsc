@@ -610,7 +610,6 @@ removeInlinedPositions flags imod0 =
     rmConInfo ic@(ICMethArg {}) = ic
     rmConInfo ic@(ICModPort {}) = ic
     rmConInfo ic@(ICModParam {}) = ic
-    rmConInfo ic@(ICIFace {}) = ic
     rmConInfo ic@(ICRuleAssert {}) = ic
     rmConInfo ic@(ICSchedPragmas {}) = ic
     rmConInfo ic@(ICName {}) = ic

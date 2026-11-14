@@ -872,21 +872,20 @@ ordC (ICMethArg { }) = 16
 ordC (ICModPort { }) = 17
 ordC (ICModParam { }) = 18
 ordC (ICValue { }) = 19
-ordC (ICIFace { }) = 20
-ordC (ICRuleAssert { }) = 21
-ordC (ICSchedPragmas { }) = 22
-ordC (ICClock { }) = 23
-ordC (ICReset { }) = 24
-ordC (ICInout { }) = 25
-ordC (ICLazyArray { }) = 26
-ordC (ICName { }) = 27
-ordC (ICAttrib { }) = 28
-ordC (ICPosition { }) = 29
-ordC (ICType { }) = 30
-ordC (ICPred { }) = 31
-ordC (ICMethod { }) = 32
-ordC (ICLazyPack { }) = 33
-ordC (ICLazyUnpack { }) = 34
+ordC (ICRuleAssert { }) = 20
+ordC (ICSchedPragmas { }) = 21
+ordC (ICClock { }) = 22
+ordC (ICReset { }) = 23
+ordC (ICInout { }) = 24
+ordC (ICLazyArray { }) = 25
+ordC (ICName { }) = 26
+ordC (ICAttrib { }) = 27
+ordC (ICPosition { }) = 28
+ordC (ICType { }) = 29
+ordC (ICPred { }) = 30
+ordC (ICMethod { }) = 31
+ordC (ICLazyPack { }) = 32
+ordC (ICLazyUnpack { }) = 33
 
 instance Eq (IConInfo a) where
     x == y  =  cmpC x y == EQ
