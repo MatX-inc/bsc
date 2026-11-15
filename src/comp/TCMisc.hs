@@ -890,11 +890,22 @@ reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
                         | otherwise              -> Just i
                     _                            -> Nothing
 
-        f :: Bool -> [Inst] -> TI (Maybe Reduction)
+        pr_tvs = tv ts'
+
+        -- RuledOut instances (constructor head at a pure-input position where
+        -- the predicate has a type-variable head) cannot match one-way; check
+        -- incoherence capture directly on declaredHead when variables are apart.
+        f :: Bool -> [Candidate Inst] -> TI (Maybe Reduction)
         f incoherent [] = return Nothing
-        f incoherent (i@(Inst _ _ (_ :=> h_orig) _):is)
-          | useLegacyInstIndex && not (canMatch pr' h_orig) = f incoherent is
-        f incoherent (i:is) = do
+        f incoherent (cand : is)
+          | useLegacyInstIndex
+          , Inst _ _ (_ :=> h_orig) _ <- candidateInst cand
+          , not (canMatch pr' h_orig) = f incoherent is
+        f incoherent (RuledOut (Inst _ vs (_ :=> h_orig) _) : is)
+          | incoherent || all (`notElem` pr_tvs) vs =
+                f (incoherent || earlierInstanceMayCapture pr' (declaredHead h_orig)) is
+        f incoherent (cand : is) = do
+                let i = candidateInst cand
                 (m_tv, i'@(Inst _ _ (_ :=> h) _)) <- newInst i (getVPredPositions v')
                 x <- byInst v' i'
                 case x of
@@ -963,9 +974,11 @@ reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
                          sb''  = sb' { solvedClass = Just c }
                      return $ Just (Reduction qs sb'' fd_subst minst mpkg)
 
-    let is' = genInsts c bound_tyvars dvs pr'
-    r <- f False is'
-    rpTrace ("reducePred " ++ ppReadable (dvs, pr', is', r)) $ return ()
+    let cands = genCandidates c bound_tyvars dvs pr'
+        isTry (Try _) = True
+        isTry _       = False
+    r <- if any isTry cands then f False cands else return Nothing
+    rpTrace ("reducePred " ++ ppReadable (dvs, pr', [ i | Try i <- cands ], r)) $ return ()
     popSatStackContext
     -- Numeric predicates that instance reduction cannot discharge are
     -- no longer sent to the proviso SAT solver here, one at a time
@@ -991,6 +1004,21 @@ predUnify bound_tyvars (IsIn c1 ts1) (IsIn c2 ts2)
 -- incoherence this check exists to detect.
 earlierInstanceMayCapture :: Pred -> Pred -> Bool
 earlierInstanceMayCapture = predUnify []
+
+-- The head byInst matches is the declared head after apSub, which
+-- rebuilds it through normTAp and expandSyn: a head free of synonyms
+-- and primitive type functions comes through unchanged (up to the
+-- renaming of its variables), and any other is put through the same
+-- normalisation here, so that the capture check reducePred takes on
+-- a declared head sees what it would see on a fresh copy.
+declaredHead :: Pred -> Pred
+declaredHead h@(IsIn _ ts)
+    | all normal ts = h
+    | otherwise     = apSub nullSubst h
+  where normal (TAp f a) = normal f && normal a
+        normal (TCon (TyCon _ _ (TItype {}))) = False
+        normal (TCon (TyCon i _ _)) = not (isPrimTFunName i)
+        normal _ = True
 
 -- The hatches that license output-driven fall-through (assumption A5
 -- in the design note): the class's own `incoherent' annotation, with
