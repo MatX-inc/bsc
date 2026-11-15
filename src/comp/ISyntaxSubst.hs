@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -26,6 +27,13 @@ module ISyntaxSubst(
         etSubst,
         tSubstBatch,
         eSubstBatch,
+        eSubstClosed,
+        eScanClosed,
+        eSubstClosedT,
+        tSubstClosedT,
+        forceTypeCtx,
+        tSubstScan,
+        tyEffectFree,
         -- Internal types (exposed for testing/debugging)
         SubstContext(..),
         SomeCtx(..),
@@ -42,6 +50,8 @@ module ISyntaxSubst(
 import ISyntax
 import Changed
 import Id
+import CType(TISort(..))
+import PreIds(idTStrCat, idTNumToStr)
 import qualified Data.Set as S
 import qualified Data.Map as M
 
@@ -211,6 +221,7 @@ instance SubstContext BatchTypeNorm IType where
 {-# SPECIALIZE tSubstWith :: EmptyType -> S.Set Id -> IType -> Changed IType #-}
 {-# SPECIALIZE tSubstWith :: SingleType -> S.Set Id -> IType -> Changed IType #-}
 {-# SPECIALIZE tSubstWith :: BatchType -> S.Set Id -> IType -> Changed IType #-}
+{-# SPECIALIZE tSubstWith :: BatchTypeNorm -> S.Set Id -> IType -> Changed IType #-}
 tSubstWith :: TypeSubstCtx tctx => tctx -> S.Set Id -> IType -> Changed IType
 tSubstWith tctx allIds t
     | ctxIsEmpty tctx = Unchanged
@@ -486,6 +497,175 @@ eSubstBatch norm exprMap typeMap e
                         ftxv = foldr (vsUnion . fTVarSet) vsEmpty (M.elems typeMap)
                         ftx = S.unions (map fTVars (M.elems typeMap))
                     in eSubstWith (BatchExpr exprMap fvx) (BatchTypeNorm typeMap ftxv norm) (fvx `S.union` ftx `S.union` aVars e) e
+
+-- Public API: batch expression substitution whose payloads are all closed.
+-- The same result as eSubstBatch with no type substitution, without the
+-- O(size of map) free-variable union per call: with closed payloads that
+-- union is empty, so no binder needs renaming.
+eSubstClosed :: forall a. M.Map Id (IExpr a) -> IExpr a -> IExpr a
+eSubstClosed exprMap e
+    | M.null exprMap = e
+    | Changed e' <- eSubstWith (BatchExpr exprMap S.empty) EmptyType S.empty e = e'
+    | otherwise = e
+
+-- What eSubstClosed's walk forces, in its order, without building: each
+-- node it visits, the list cells of type and argument lists, the Ids it looks
+-- up, and the parts of an IConInfo that etSubstIConInfo enters.  No type is
+-- forced (the type context is empty).  The payloads must be forced already
+-- (as the free-variable union forces them); a lookup then forces only the
+-- Id, so a variable needs no lookup.  False if a binder empties the
+-- context, which stops the walk below it; True if the walk reaches every
+-- node.
+eScanClosed :: M.Map Id (IExpr a) -> IExpr a -> Bool
+eScanClosed m0 e0
+    | M.null m0 = False
+    | otherwise = goE m0 e0
+  where
+    both :: Bool -> Bool -> Bool
+    both !r1 !r2 = r1 && r2
+    forceList :: [b] -> ()
+    forceList [] = ()
+    forceList (_:xs) = forceList xs
+    forceList2 :: [[b]] -> ()
+    forceList2 [] = ()
+    forceList2 (x:xs) = case forceList x of () -> forceList2 xs
+    goE !m e = case e of
+      ILam i _ b -> case M.lookup i m of
+                      Just _ -> let m' = M.delete i m
+                                in if M.null m' then False else goE m' b
+                      Nothing -> goE m b
+      ILAM _ _ b -> goE m b
+      IVar i -> i `seq` True
+      IAps f ts es -> case goE m f of
+                        r1 -> r1 `seq` case forceList ts of
+                                         () -> both r1 (goEs m es)
+      ICon _ ii -> goI m ii
+      IRefT _ _ _ _ -> True
+    goEs !_ [] = True
+    goEs !m (x:xs) = case goE m x of
+                       r -> r `seq` both r (goEs m xs)
+    goClk !m clk = goE m (ic_wires clk)
+    goRst !m rst = case goClk m (ir_clock rst) of
+                     r -> r `seq` both r (goE m (ir_wire rst))
+    -- the cases of etSubstIConInfo
+    goI !m ii = case ii of
+      ICVerilog { } -> case forceList2 (vMethTs ii) of () -> True
+      ICType { } -> True
+      ICUndet { imVal = mval } -> maybe True (goE m) mval
+      ICClock { iClock = clk } -> goClk m clk
+      ICReset { iReset = rst } -> goRst m rst
+      ICInout { iInout = io } ->
+        case goClk m (io_clock io) of
+          r1 -> r1 `seq` case goRst m (io_reset io) of
+                           r2 -> r2 `seq` both (r1 && r2) (goE m (io_wire io))
+      ICLazyArray { uninit = mu } ->
+        case mu of
+          Nothing -> True
+          Just (a, b) -> case goE m a of
+                           r -> r `seq` both r (goE m b)
+      _ -> True
+
+-- Public API: batch substitution whose expression payloads are closed and
+-- whose type payloads are ground, normalizing changed types as eSubstBatch
+-- does.  No binder can need renaming, so the free-variable unions and the
+-- avoid set are empty.
+eSubstClosedT :: forall a. (IType -> Changed IType) -> M.Map Id (IExpr a)
+              -> M.Map Id IType -> IExpr a -> IExpr a
+eSubstClosedT norm exprMap typeMap e
+    | M.null typeMap = eSubstClosed exprMap e
+    | M.null exprMap = changedOr e (eSubstWith (EmptyExpr :: EmptyExpr a) tctx S.empty e)
+    | otherwise = changedOr e (eSubstWith (BatchExpr exprMap S.empty) tctx S.empty e)
+  where tctx = BatchTypeNorm typeMap vsEmpty norm
+
+-- A binder type under eSubstClosedT's type context, as its walk rewrites it
+-- (normalized only when the substitution changed it).
+tSubstClosedT :: (IType -> Changed IType) -> M.Map Id IType -> IType -> IType
+tSubstClosedT norm typeMap t
+    | M.null typeMap = t
+    | otherwise = changedOr t (changed1 (changedOrId norm)
+                                (tSubstWith (BatchTypeNorm typeMap vsEmpty norm) S.empty t))
+
+-- What building eSubstBatch's type context forces: its payloads and their
+-- free-variable sets, in the same order.
+forceTypeCtx :: M.Map Id IType -> ()
+forceTypeCtx typeMap
+    | M.size typeMap == 1 = let (_, t) = M.findMin typeMap
+                            in t `seq` fTVarSet t `seq` ()
+    | otherwise = foldr (vsUnion . fTVarSet) vsEmpty (M.elems typeMap) `seq` ()
+
+-- The walk eSubstWith makes over an expression under a type context with
+-- domain dom and ground payloads, without building anything: the same
+-- nodes in the same order.  f2 stands for building the type context, which
+-- the walk does at the first point it consults it.  -1 when some type the
+-- walk changes may have an effect beyond building type nodes (see
+-- tyEffectFree), or when a binder empties the type context (the walk then
+-- depends on the expression context); otherwise 1 if the walk consults the
+-- type context and 0 if not.
+tSubstScan :: () -> [Id] -> IExpr a -> Int
+tSubstScan f2 dom0 e0 = goE 0 dom0 e0
+  where
+    andThen :: Int -> (Int -> Int) -> Int
+    andThen r k = if r < 0 then r else k r
+    {-# INLINE andThen #-}
+    goE !st dom e = case e of
+      ILam _ t b -> goT st dom t `andThen` \st' -> goE st' dom b
+      ILAM i _ b
+        | i `elem` dom -> f2 `seq` case filter (/= i) dom of
+                                     [] -> -1
+                                     dom' -> goE 1 dom' b
+        | otherwise -> f2 `seq` goE 1 dom b
+      IVar _ -> st
+      IAps f ts es -> goE st dom f `andThen` \s1 -> goTs s1 dom ts `andThen` \s2 -> goEs s2 dom es
+      ICon _ ii -> goI st dom ii
+      IRefT _ _ _ _ -> st
+    goEs !st _ [] = st
+    goEs !st dom (x:xs) = goE st dom x `andThen` \st' -> goEs st' dom xs
+    goTs !st _ [] = st
+    goTs !st dom (x:xs) = goT st dom x `andThen` \st' -> goTs st' dom xs
+    goTss !st _ [] = st
+    goTss !st dom (ts:tss) = goTs st dom ts `andThen` \st' -> goTss st' dom tss
+    goT !st dom t = case t of
+      ITForAll _ _ _ -> f2 `seq` interior
+      ITAp _ _ -> f2 `seq` interior
+      ITVar _ -> f2 `seq` 1
+      _ -> st
+      where interior | not (any (`vsMember` fTVarSet t) dom) = 1
+                     | tyEffectFree t = 1
+                     | otherwise = -1
+    goM _ !st _ Nothing = st
+    goM g !st dom (Just x) = g st dom x
+    goPair !st dom (a, b) = goE st dom a `andThen` \st' -> goE st' dom b
+    goClk !st dom clk = goE st dom (ic_wires clk)
+    goRst !st dom rst = goClk st dom (ir_clock rst) `andThen` \st' -> goE st' dom (ir_wire rst)
+    goIo !st dom io = goClk st dom (io_clock io) `andThen` \s1 ->
+                      goRst s1 dom (io_reset io) `andThen` \s2 -> goE s2 dom (io_wire io)
+    -- the cases of etSubstIConInfo
+    goI !st dom ii = case ii of
+      ICVerilog { } -> goT st dom (iConType ii) `andThen` \st' -> goTss st' dom (vMethTs ii)
+      ICType { } -> goT st dom (iType ii)
+      ICUndet { imVal = mval } -> goT st dom (iConType ii) `andThen` \st' -> goM goE st' dom mval
+      ICClock { iClock = clk } -> goClk st dom clk
+      ICReset { iReset = rst } -> goRst st dom rst
+      ICInout { iInout = io } -> goT st dom (iConType ii) `andThen` \st' -> goIo st' dom io
+      ICLazyArray { uninit = mu } -> goT st dom (iConType ii) `andThen` \st' -> goM goPair st' dom mu
+      ICDef { } -> st
+      ICValue { } -> st
+      ICLazyPack { } -> st
+      ICLazyUnpack { } -> st
+      _ -> goT st dom (iConType ii)
+
+-- No head whose application or normalization can intern a string or
+-- consult the type-function cache: building an application of a string
+-- operator interns its result, and normalizing an associated type function
+-- looks it up in a cache that grows during evaluation.  Numeric operators
+-- reduce to numerals and are harmless.
+tyEffectFree :: IType -> Bool
+tyEffectFree (ITAp f a) = tyEffectFree f && tyEffectFree a
+tyEffectFree (ITForAll _ _ b) = tyEffectFree b
+tyEffectFree (ITCon i _ s) = case s of
+                               TIatf { } -> False
+                               _ -> i /= idTStrCat && i /= idTNumToStr
+tyEffectFree _ = True
 
 {-# INLINE mapChanged #-}
 mapChanged :: (a -> Changed a) -> [a] -> Changed [a]
