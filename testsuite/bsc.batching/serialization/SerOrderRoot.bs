@@ -1,0 +1,8 @@
+package SerOrderRoot where
+
+import SerOrderScramble
+import SerOrder
+
+{-# verilog mkSerOrderRoot #-}
+mkSerOrderRoot :: Module VPair
+mkSerOrderRoot = mkSerOrder

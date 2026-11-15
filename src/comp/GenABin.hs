@@ -24,7 +24,6 @@ import ABin
 import BinData
 import FileIOUtil(writeBinaryFileCatch)
 
-import qualified Data.Set as S
 import qualified Data.Map as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -452,18 +451,13 @@ instance Bin RuleUses where
 -- Only the disjoint sets are recorded (see ExclusiveRulesDB)
 instance Bin ExclusiveRulesDB where
     writeBytes erdb =
-        section "ExclusiveRulesDB" $
-            toBin [ (r, S.toList ds)
-                  | (r, ds) <- M.toList (erdbDisjointSets erdb) ]
-    readBytes = do ds <- fromBin
-                   let conv (r, rs) = (r, S.fromList rs)
-                   return (DisjointRulesOnly (M.fromList (map conv ds)))
+        section "ExclusiveRulesDB" $ toBin (erdbDisjointSets erdb)
+    readBytes = DisjointRulesOnly <$> fromBin
 
 instance Bin RuleRelationDB where
     writeBytes (RuleRelationDB cmap) =
-        section "RuleRelationDB" $ toBin (M.toList cmap)
-    readBytes = do cmap_list <- fromBin
-                   return (RuleRelationDB (M.fromList cmap_list))
+        section "RuleRelationDB" $ toBin cmap
+    readBytes = RuleRelationDB <$> fromBin
 
 instance Bin RuleRelationInfo where
     writeBytes (RuleRelationInfo mCF mSC mRes mCycle mPragma mArb) =

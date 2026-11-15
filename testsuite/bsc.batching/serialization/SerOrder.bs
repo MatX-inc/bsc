@@ -1,0 +1,22 @@
+package SerOrder where
+
+interface VPair =
+    mBeta  :: Bit 8
+    mAlpha :: Bit 8
+
+vMkPair :: Module VPair
+vMkPair =
+    module verilog "Pair8" "CLK" {
+        mBeta  = "BETA_OUT";
+        mAlpha = "ALPHA_OUT";
+    } [ [mBeta, mAlpha] <> [mBeta, mAlpha] ]
+
+{-# verilog mkSerOrder #-}
+mkSerOrder :: Module VPair
+mkSerOrder =
+    module
+        instBeta  <- vMkPair
+        instAlpha <- vMkPair
+        interface VPair
+            mBeta  = instBeta.mBeta
+            mAlpha = instAlpha.mAlpha

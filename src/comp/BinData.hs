@@ -109,6 +109,8 @@ import Prim hiding(PrimArg(..))
 import Util(hashInit, nextHashByte, showHash)
 
 import Data.List(mapAccumL)
+import qualified Data.List as L
+import Data.Ord(comparing)
 import Control.Monad(liftM, ap, when)
 import Control.Monad.ST(ST, runST)
 import GHC.ST(ST(..))
@@ -489,15 +491,19 @@ data W = W
   , wV2       :: !(Maybe W2)  -- format 2 (see encodeV2)
   }
 
-newWTable :: IO WTable
-newWTable = WTable <$> wbNew 65536 <*> wbNew 4096 <*> newIORef 0
+newWTable :: Int -> Int -> IO WTable
+newWTable capBytes capSpans =
+  WTable <$> wbNew capBytes <*> wbNew capSpans <*> newIORef 0
 
 newW :: IO W
 newW = newWWith Nothing
 
 newWWith :: Maybe W2 -> IO W
-newWWith v2 = do
-  body <- wbNew 65536
+newWWith = newWWithCap 65536 65536 4096
+
+newWWithCap :: Int -> Int -> Int -> Maybe W2 -> IO W
+newWWithCap capBody capTab capSpan v2 = do
+  body <- wbNew capBody
   let WBuf h = body
   cur <- mallocBytes 8
   poke cur h
@@ -505,7 +511,8 @@ newWWith v2 = do
     <*> newIORef IM.empty <*> newIORef [] <*> newIORef 0
     <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty
     <*> newIORef IM.empty
-    <*> newWTable <*> newWTable <*> newWTable <*> newWTable
+    <*> newWTable capTab capSpan <*> newWTable capTab capSpan
+    <*> newWTable capTab capSpan <*> newWTable capTab capSpan
     <*> newIORef IM.empty <*> newIORef 0 <*> pure v2
 
 {-# INLINE curBuf #-}
@@ -1022,12 +1029,38 @@ instance (Bin a, Bin b) => Bin (Either a b) where
                    1 -> do { y <- fromBin; return (Right y) }
                    n -> internalError $ "BinData.Bin(Either a b).readBytes: " ++ show n
 
+-- Order elements by the standalone container encoding of their keys so
+-- Map, Set, and MethodConflictInfo serialization does not depend on
+-- Ord instances backed by FString or IType intern ids.  Under format 2
+-- (including encodeV2Strip / keepPositions), keys are encoded in a
+-- fresh writer with the same position-stripping mode.
+orderByEncoding :: (Bin k) => (a -> k) -> [a] -> Out [a]
+orderByEncoding _ [] = return []
+orderByEncoding _ [x] = return [x]
+orderByEncoding key xs = Out $ \parentW -> do
+  keyed <- mapM (\x -> do { bs <- encodeKeyFor parentW (key x); return (bs, x) }) xs
+  return (map snd (L.sortBy (comparing fst) keyed))
+
+encodeKeyFor :: (Bin k) => W -> k -> IO B.ByteString
+encodeKeyFor parentW k =
+  case wV2 parentW of
+    Nothing -> do
+      w <- newWWithCap 64 64 32 Nothing
+      runOut (toBin k) w
+      finishW w
+    Just parentSt -> do
+      keep <- readIORef (w2Keep parentSt)
+      st <- newW2WithCap 64 (w2Strip parentSt) keep
+      w <- newWWithCap 64 16 16 (Just st)
+      runOut (toBin k) w
+      finishW2 w st
+
 instance (Ord a, Bin a, Bin b) => Bin (M.Map a b) where
-    writeBytes omap = toBin (M.toList omap)
+    writeBytes omap = orderByEncoding fst (M.toList omap) >>= toBin
     readBytes       = do { ms <- fromBin; return (M.fromList ms) }
 
 instance (Ord a, Bin a) => Bin (S.Set a) where
-    writeBytes set = toBin (S.toList set)
+    writeBytes set = orderByEncoding id (S.toList set) >>= toBin
     readBytes      = do { ss <- fromBin; return (S.fromList ss) }
 
 -- ---------
@@ -1579,8 +1612,8 @@ instance (Bin a, Ord a) => Bin (SchedInfo a) where
 instance (Bin a, Ord a) => Bin (MethodConflictInfo a) where
     writeBytes mci@(MethodConflictInfo cfs sbs mes ps sbrs cs exts) =
         section "MethodConflictInfo" $
-        do let meths = extractFromMethodConflictInfo mci
-               arr :: Array Int a
+        do meths <- orderByEncoding id (extractFromMethodConflictInfo mci)
+           let arr :: Array Int a
                arr = listArray (0,length(meths)-1) meths
                arr_map = M.fromList (zip meths [0..])
            toBin arr -- write array of methods
@@ -2052,7 +2085,7 @@ finishContainer fmt w finishTables = do
   strs <- reverse <$> readIORef (wStrs w)
   nStr <- readIORef (wNStr w)
   when (length strs /= nStr) $ internalError "BinData.finishW: string table"
-  sb <- wbNew 65536
+  sb <- wbNew (max 64 (4 + 16 * nStr))
   wbU32 sb nStr
   mapM_ (wbFString sb) strs
   strBytes <- wbFreeze sb
@@ -2154,9 +2187,10 @@ apKey2 na nb
 -- next index
 data Table2 = Table2 { t2Entries :: !WBuf, t2Offsets :: !WBuf, t2Next :: !(IORef Int) }
 
-newTable2 :: IO Table2
-newTable2 = do e <- wbNew 4096; o <- wbNew 4096; n <- newIORef 0
-               return (Table2 e o n)
+newTable2 :: Int -> IO Table2
+newTable2 cap = do
+  e <- wbNew cap; o <- wbNew cap; n <- newIORef 0
+  return (Table2 e o n)
 
 -- Append an entry: its index
 addEntry2 :: Table2 -> BS.ByteString -> IO Int
@@ -2220,12 +2254,16 @@ newW2 :: IO W2
 newW2 = newW2With Nothing
 
 newW2With :: Maybe (Position -> Bool) -> IO W2
-newW2With sel =
+newW2With sel = newW2WithCap 4096 sel False
+
+newW2WithCap :: Int -> Maybe (Position -> Bool) -> Bool -> IO W2
+newW2WithCap cap sel keep =
   W2 <$> newIORef IM.empty <*> newIORef M.empty <*> newIORef IM.empty
      <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty
      <*> newIORef IM.empty <*> newIORef IM.empty <*> newIORef M.empty
-     <*> pure sel <*> newIORef False
-     <*> newTable2 <*> newTable2 <*> newTable2 <*> newTable2 <*> newTable2
+     <*> pure sel <*> newIORef keep
+     <*> newTable2 cap <*> newTable2 cap <*> newTable2 cap
+     <*> newTable2 cap <*> newTable2 cap
 
 -- The bodies region is complete: add the five tables, the string table,
 -- the chunk index and the footer.  W's format 1 tables are not used.
