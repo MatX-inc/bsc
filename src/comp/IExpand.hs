@@ -98,7 +98,8 @@ import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlFallUnpack, tlPreRewrite, tlUnpackAt,
                  tlRoot, tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr,
                  tlFinalTuple, tlNamed, tlRootAliases, tlAlias, tlClosedExpr,
-                 tlClosed, tlUnitExpr, tlInstance, tlInstArg, tlFinalEnd)
+                 tlClosed, tlUnitExpr, tlInstance, tlInstArg, tlInstReset,
+                 tlOutReset, tlFinalEnd)
 import TypeLinksDecl(tlFieldTypes, tlConEncodings, tlBitsInstance)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
@@ -469,6 +470,7 @@ iExpandTL tl_file errh flags symt alldefs atf_cache is_noinlined_func pps def@(I
   let tl_end = when (tlOn tl_log) $
                    iExpandTypeLinks tl_log iheap ptr_map ptr_info insts rules
                                     rules_cleanup ifc (go_port_types go)
+                                    vresetinfo
                                     (changedOrId norm)
                                     (tlFieldTypes flags symt (changedOrId norm))
                                     (tlConEncodings symt)
@@ -979,17 +981,17 @@ iExpandCapture iheap ptr_map ptrm0 ptr_info args caplog =
 -- forced, so every cell, name and type read here is already evaluated.
 -- norm is the type normalizer with the cache of the end of elaboration;
 -- field_types, con_encodings and has_bits read the symbol table
--- (TypeLinksDecl).
+-- (TypeLinksDecl); own_resets are the module's reset ports.
 iExpandTypeLinks :: TLog -> IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
                     [(HeapPointer, (HExpr, Maybe HDef))] ->
                     [(Id, HStateVar)] -> HRules -> HRules -> [HEFace] ->
-                    PortTypeMap ->
+                    PortTypeMap -> VResetInfo ->
                     (IType -> IType) ->
                     (IType -> Maybe [(Int, Int, String, Maybe IType)]) ->
                     (IType -> Maybe [(Integer, Integer, Integer)]) ->
                     (IType -> Maybe Bool) -> IO ()
 iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules_clean)
-                 ifc port_types norm field_types con_encodings has_bits = do
+                 ifc port_types own_resets norm field_types con_encodings has_bits = do
     tlFinalBegin l norm
     let cellExpr p = case IM.lookup p iheap of
                        Just (HNF { hc_pexpr = P _ e }) -> Just e
@@ -1118,6 +1120,48 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
                                       in  tlInstArg l (getIdString inst) k kind name)
                          (zip [0 ..] (vArgs vmi)))
           insts
+    -- which reset each reset argument of an instance is under: the reset
+    -- that is never asserted, a reset input of the module (its port), a
+    -- reset output of an instance (the instance and the output's port),
+    -- or one that cannot be named
+    let reset_source Nothing = ("?", [])
+        reset_source (Just r)
+          | isNoReset r = ("none", [])
+          | otherwise =
+              case getResetWire r of
+                ICon i (ICModPort {}) -> ("in", [getIdString i])
+                IAps (ICon f (ICSel {})) _ [ICon src (ICStateVar { iVar = v })] ->
+                    let outs = output_resets (vRst (isv_vmi v))
+                        port = case (lookup f outs, lookup (unQualId f) outs) of
+                                 (Just (Just vn, _), _) -> getVNameString vn
+                                 (Nothing, Just (Just vn, _)) -> getVNameString vn
+                                 _ -> "-"
+                    in  ("inst", [getIdString src, port])
+                _ -> ("?", [])
+    mapM_ (\ (inst, sv) ->
+               mapM_ (\ (k, a) ->
+                          case a of
+                            ResetArg i ->
+                                let (what, names) = reset_source (lookup i (isv_resets sv))
+                                in  tlInstReset l (getIdString inst) k what names
+                            _ -> return ())
+                     (zip [0 ..] (vArgs (isv_vmi sv))))
+          insts
+    -- which reset each output reset of the module is, told the same way,
+    -- with the port it goes out on
+    mapM_ (\ ief ->
+               case (ief_fieldinfo ief, ief_value ief) of
+                 (Reset _, Just (ICon _ (ICReset { iReset = r }), _)) ->
+                     let i = ief_name ief
+                         outs = output_resets own_resets
+                         port = case (lookup i outs, lookup (unQualId i) outs) of
+                                  (Just (Just vn, _), _) -> getVNameString vn
+                                  (Nothing, Just (Just vn, _)) -> getVNameString vn
+                                  _ -> "-"
+                         (what, names) = reset_source (Just r)
+                     in  tlOutReset l (getIdString i) port what names
+                 _ -> return ())
+          ifc
     -- instance arguments
     mapM_ (\ (inst, sv) ->
                mapM_ (\ (k, e) -> do

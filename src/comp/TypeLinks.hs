@@ -13,9 +13,11 @@
 -- data and struct types; E the tag value and tag width of a data type's
 -- constructors; B whether a type has an instance of Bits; I each
 -- state instance's Verilog module; G what each instance argument feeds in
--- that module; Q the number of calls of each instance method in the final
--- expressions; L the source position of a one-constructor type's
--- constructor application or of an unpack, a number into the table X.
+-- that module; R which reset an instance's reset argument is under; O
+-- which reset an output reset of the module is; Q the number of
+-- calls of each instance method in the final expressions; L the source
+-- position of a one-constructor type's constructor application or of an
+-- unpack, a number into the table X.
 --
 -- Forcing.  A hook here may evaluate a type to weak head normal form, match
 -- an expression's constructor and read lazy fields of a constructor's info.
@@ -47,7 +49,7 @@ module TypeLinks(
         End, tlCellEnd,
         tlFinalBegin, tlDef, tlMerge, tlFinalExpr, tlFinalTuple, tlNamed,
         tlRootAliases, tlAlias, tlClosedExpr, tlClosed, tlUnitExpr,
-        tlInstance, tlInstArg, tlFinalEnd
+        tlInstance, tlInstArg, tlInstReset, tlOutReset, tlFinalEnd
     ) where
 
 import Control.Exception(SomeException, evaluate, try, catch)
@@ -253,7 +255,8 @@ ctN, ctC, ctK, ctAS, ctAR, ctAF, ctV, ctD, ctM, ctP, ctT, ctErr, ctDeferred,
   ctDecided, ctOutPayload, ctFallInline, ctPreRewrite, ctPreRewriteSeen,
   ctB, ctNormRec, ctNormType, ctNormLeft, ctPreRewriteInline, ctPreRewriteLost,
   ctPreRewriteCarried, ctPreRewriteZero, ctG, ctL, ctX, ctLNone, ctE,
-  ctETypes, ctEDefault, ctENone, ctClass0, nCounters :: Int
+  ctETypes, ctEDefault, ctENone, ctR, ctRNone, ctRIn, ctRInst, ctRUnknown,
+  ctO, ctClass0, nCounters :: Int
 ctN = 0
 ctC = 1
 ctK = 2
@@ -302,7 +305,13 @@ ctE = 44
 ctETypes = 45       -- data types that have E records
 ctEDefault = 46     -- such types whose tags are the constructor numbers at the least width
 ctENone = 47        -- data types whose constructors were not found
-ctClass0 = 48       -- cells by class: ctClass0 + class
+ctR = 48
+ctRNone = 49        -- reset arguments under the reset that is never asserted
+ctRIn = 50          -- under a reset input of the module
+ctRInst = 51        -- under a reset output of an instance
+ctRUnknown = 52     -- under a reset that could not be named
+ctO = 53
+ctClass0 = 54       -- cells by class: ctClass0 + class
 nCounters = ctClass0 + nClasses
 
 counterNames :: [(Int, String)]
@@ -328,6 +337,13 @@ counterNames =
       (ctETypes, "E-types"), (ctEDefault, "E-default-types"),
       (ctENone, "E-no-declaration") ] ++
     [ (ctClass0 + c, "cells-" ++ clsName c) | c <- [0 .. nClasses - 1] ]
+
+-- the counts of the records that are written last (R, O), which come
+-- after every other count
+lateCounterNames :: [(Int, String)]
+lateCounterNames =
+    [ (ctR, "R"), (ctRNone, "R-none"), (ctRIn, "R-in"), (ctRInst, "R-inst"),
+      (ctRUnknown, "R-unknown"), (ctO, "O") ]
 
 -- -----
 -- The log
@@ -389,6 +405,9 @@ data TLog = TLog {
     -- the table, newest first
     tl_posTab :: !(IORef (M.Map (FString, Int, Int) Int)),
     tl_posList :: !(IORef [Position]),
+    -- the records that are written after every other record (R, then
+    -- O), each with its counter, newest first
+    tl_late :: !(IORef [(Int, B.Builder)]),
     tl_counts :: !(IOUArray Int Int)
   }
 
@@ -444,6 +463,7 @@ tlNewLog mfile = do
   heads <- newIORef []
   posTab <- newIORef M.empty
   posList <- newIORef []
+  late <- newIORef []
   counts <- newArray (0, nCounters - 1) 0
   return (TLog { tlOn = maybe False (const True) mh,
                  tl_out = maybe (error "TypeLinks: no file") id mh,
@@ -458,7 +478,7 @@ tlNewLog mfile = do
                  tl_prerwApps = prerwApps, tl_prerwKeys = prerwKeys,
                  tl_prerwRes = prerwRes, tl_heads = heads,
                  tl_posTab = posTab, tl_posList = posList,
-                 tl_counts = counts })
+                 tl_late = late, tl_counts = counts })
 
 -- The value a rewrite gave (the name of that very object: the cell that
 -- stores it is told by identity, with no comparison of expressions), the
@@ -1769,6 +1789,38 @@ tlInstArg l inst k kind name = safely l $ do
   put l ctG (B.string7 "G " <> B.stringUtf8 (word inst) <> sp <> B.intDec k <> sp <>
              B.string7 kind <> sp <> B.stringUtf8 (word name))
 
+-- The reset argument k of the state instance inst (the argument whose G
+-- record has the kind "reset") is under the reset told by what and names
+-- (R): "none", the reset that is never asserted; "in" and the port of one
+-- of the module's own reset inputs; "inst", an instance and the port of
+-- its reset output ("-": it has no port); "?", not known.  The record is
+-- kept and written after every other record (tlFinalEnd), so that no
+-- other record's line moves.
+tlInstReset :: TLog -> String -> Int -> String -> [String] -> IO ()
+tlInstReset l inst k what names = safely l $ do
+  -- read first: a failure must not leave half a record
+  _ <- evaluate (length inst + length what + sum (map length names))
+  late l ctR (B.string7 "R " <> B.stringUtf8 (word inst) <> sp <> B.intDec k <> sp <>
+              B.string7 what <> mconcat [ sp <> B.stringUtf8 (word n) | n <- names ])
+  bump l (case what of
+            "none" -> ctRNone
+            "in" -> ctRIn
+            "inst" -> ctRInst
+            _ -> ctRUnknown)
+
+-- The output reset of the module that is the interface field name, with
+-- the port it goes out on ("-": none), is the reset told by what and
+-- names, as for R (O).  Kept and written with the R records.
+tlOutReset :: TLog -> String -> String -> String -> [String] -> IO ()
+tlOutReset l name port what names = safely l $ do
+  _ <- evaluate (length name + length port + length what + sum (map length names))
+  late l ctO (B.string7 "O " <> B.stringUtf8 (word name) <> sp <> B.stringUtf8 (word port) <>
+              sp <> B.string7 what <> mconcat [ sp <> B.stringUtf8 (word n) | n <- names ])
+
+-- keep a record that is written after every other record
+late :: TLog -> Int -> B.Builder -> IO ()
+late l ct b = modifyIORef' (tl_late l) ((ct, b) :)
+
 -- -----
 -- Roots
 
@@ -1809,7 +1861,8 @@ tlNamed l kname declared width name =
 -- Write the named ends (P), with the declared source type of a leaf where
 -- the lookup has one; the call counts (Q) of the given instance methods
 -- and of any other method called; the field types (F), the constructor
--- encodings (E) and the types (T); and the counts; and close the file.
+-- encodings (E) and the types (T); the positions (X); the records kept
+-- for last (R, O); and the counts; and close the file.
 -- fieldsOf gives a data or struct type's constructor payloads and fields
 -- as (constructor number, field number, name, type), or Nothing when it
 -- has no declaration to read.  encOf gives a data type's constructors as
@@ -1927,6 +1980,12 @@ tlFinalEnd l declared fieldsOf encOf bitsOf methods = do
       put l ctX (B.string7 "X " <> B.intDec n <> sp <> B.intDec (pos_line pos) <> sp <>
                  B.intDec (pos_column pos) <> sp <>
                  B.char7 (if pos_is_stdlib pos then '1' else '0') <> sp <> B.stringUtf8 file)
+  -- the records kept to be written last: R, then O (each kind in the
+  -- order it was made)
+  safely l $ do
+    rs <- reverse <$> readIORef (tl_late l)
+    forM_ [ctR, ctO] $ \ kind ->
+        forM_ rs $ \ (ct, b) -> when (ct == kind) $ put l ct b
   safely l $ do
     forM_ counterNames $ \ (k, name) -> do
       v <- readArray (tl_counts l) k
@@ -1952,6 +2011,10 @@ tlFinalEnd l declared fieldsOf encOf bitsOf methods = do
     -- what the rewrites of a concat with a don't-care operand gave
     results <- readIORef (tl_prerwRes l)
     forM_ (M.toList results) $ \ (tag, n) -> cline ("pre-rewrite-result." ++ word tag) n
+    -- the counts of the records written last
+    forM_ lateCounterNames $ \ (k, name) -> do
+      v <- readArray (tl_counts l) k
+      cline name v
   B.closeOut (tl_out l) `catch` \ (_ :: SomeException) -> return ()
 
 -- The field records: for every type of class data, struct or dcon (a
