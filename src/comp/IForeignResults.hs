@@ -34,6 +34,15 @@ module IForeignResults(checkForeignResults) where
 -- they are (see alternatives and ifKey).  There is no other reasoning
 -- about values: a condition that is equivalent to another but built
 -- differently (c && d against d && c) is a different condition.
+--
+-- A conversion (toActionValue_, toAction_ or toPrimAction, which splitIf
+-- uses) makes the call once, where it converts the action, so every
+-- execution of the converted action shares that one cookie, in whichever
+-- rule or method runs it.  A use of the result in a rule or method that
+-- can run two of those executions in one cycle is reported here, since
+-- the result belongs to neither.  A use in a rule or method other than
+-- the one that runs the call is NOT reported, and the Verilog and the
+-- Bluesim code for that case disagree; it is still open.
 
 import Control.Monad(zipWithM)
 import Control.Monad.State(State, evalState, gets, modify)
@@ -42,7 +51,7 @@ import qualified Data.IntMap as IM
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.List(minimumBy, sortBy)
+import Data.List(minimumBy, sortBy, tails)
 import Data.Maybe(mapMaybe, maybeToList)
 import Data.Ord(comparing)
 
@@ -75,6 +84,17 @@ data Owner = ORuleBody Id | ORuleCond Id | OMethod Id | OReady Id
 -- and the value of the arm (Nothing for the default).
 data Cond = CIf CKey Bool | CSel CKey Integer | CCase CKey (Maybe CKey)
     deriving (Eq, Ord)
+
+-- Whether no path can have both conditions: two arms of the same choice
+-- (the arms of a case have different values)
+excludes :: Cond -> Cond -> Bool
+excludes (CIf k1 b1) (CIf k2 b2) = k1 == k2 && b1 /= b2
+excludes (CSel k1 n1) (CSel k2 n2) = k1 == k2 && n1 /= n2
+excludes (CCase k1 v1) (CCase k2 v2) = k1 == k2 && v1 /= v2
+excludes _ _ = False
+
+exclusive :: Path -> Path -> Bool
+exclusive p1 p2 = any (\ c1 -> any (excludes c1) (S.toList p2)) (S.toList p1)
 
 type Path = S.Set Cond
 
@@ -185,19 +205,29 @@ checkForeignResults infos meth_poss imod
         let -- (in the order of the walk)
             calls = M.fromListWith (flip (++))
                         [ (k, [(o, p)]) | ICall k o p <- items ]
-            inScope o p k c =
-                any (\ (o', pk) -> o' == o && pk `S.isSubsetOf` S.union p c)
-                    (M.findWithDefault [] k calls)
-            bad o p m_self uses =
-                sequence
-                  [ (\ made -> (o, info, made)) <$>
-                        callMade o (S.union p c) k_calls (ci_kind info)
-                  | (k, c) <- M.toList uses,
-                    Just k /= m_self,
-                    not (inScope o p k c),
-                    Just info <- [M.lookup k infos],
-                    let k_calls = M.findWithDefault [] k calls ]
-            use (IUse o p m_self e) = bad o p m_self =<< exprUses infos e
+            -- A use under the conditions s is in scope where the owner
+            -- makes the call under at most s, and, of the executions of
+            -- the call in the owner that s does not exclude, no two can
+            -- run in one cycle (a converted call, which they share).
+            useOf o p (k, c)
+                | Just info <- M.lookup k infos = do
+                    let s = S.union p c
+                        k_calls = M.findWithDefault [] k calls
+                        own = [ pk | (o', pk) <- k_calls, o' == o ]
+                        live = [ pk | pk <- own, not (exclusive pk s) ]
+                        twice = or [ not (exclusive pk1 pk2)
+                                   | (pk1 : pks) <- tails live, pk2 <- pks ]
+                    if twice
+                      then return [(o, info, ForeignCallMadeTwice (ownerKind o))]
+                      else if any (`S.isSubsetOf` s) own
+                      then return []
+                      else (\ made -> [(o, info, made)]) <$>
+                               callMade o s k_calls (ci_kind info)
+                | otherwise = return []
+            use (IUse o p m_self e) = do
+                uses <- exprUses infos e
+                concat <$> mapM (useOf o p)
+                                [ kc | kc@(k, _) <- M.toList uses, Just k /= m_self ]
             use (ICall { }) = return []
         concat <$> mapM use items
 
@@ -516,9 +546,10 @@ foreignResultMsgs meth_poss imod bad =
 madeKey :: ForeignCallMade -> (Int, Maybe (String, Int, Int), String)
 madeKey (ForeignCallNotMade (Just p)) = (0, Just (posKey p), "")
 madeKey (ForeignCallNotMade Nothing) = (1, Nothing, "")
-madeKey (ForeignCallMadeHereUndet s p) = (2, Just (posKey p), s)
-madeKey (ForeignCallMadeHere s) = (3, Nothing, s)
-madeKey (ForeignCallMadeIn s) = (4, Nothing, s)
+madeKey (ForeignCallMadeTwice s) = (2, Nothing, s)
+madeKey (ForeignCallMadeHereUndet s p) = (3, Just (posKey p), s)
+madeKey (ForeignCallMadeHere s) = (4, Nothing, s)
+madeKey (ForeignCallMadeIn s) = (5, Nothing, s)
 
 posKey :: Position -> (String, Int, Int)
 posKey p = (getPositionFile p, getPositionLine p, getPositionColumn p)
