@@ -240,6 +240,7 @@ library
     Log2
     MVarStrict
     MakeSymTab
+    MapTurns
     PFPrint
     PPrint
     PVPrint

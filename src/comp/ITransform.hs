@@ -40,6 +40,7 @@ import ISyntax
 import ISyntaxUtil
 import IPrims(doPrimOp)
 import IInline(iSortDs, iInline)
+import MapTurns(Found(..), lookupTurns, insertTurns)
 import BExpr
 
 -- For boolean opt
@@ -1535,15 +1536,14 @@ getDoBO = do
 newExprT :: IType -> IExpr a -> T (IExpr a) a
 newExprT t e = do
   ts <- get
-  cmap <- gets cse_map
-  case (M.lookup e cmap) of
-    Just (e', _) -> return e'
-    Nothing -> do
-        n <- gets idNo
-        let i = setBadId $ mkId noPosition (mkFString ((prefix ts) ++ itos n))
+  case lookupTurns e (cse_map ts) of
+    Found (e', _) -> return e'
+    Missing turns depth -> do
+        let n = idNo ts
+            i = setBadId $ mkId noPosition (mkFString ((prefix ts) ++ itos n))
             e' = ICon i (ICValue t e)
             d = IDef i t e []  -- props get lost here, but restored in iTransRenameIdsInDef
-            cmap' = M.insert e (e', d) cmap
+            cmap' = insertTurns turns depth e (e', d) (cse_map ts)
             emap  = exp_map ts
             emap' = case e of
                       IAps (ICon _ (ICPrim _ p)) _ _ | isAndOrCmp p
