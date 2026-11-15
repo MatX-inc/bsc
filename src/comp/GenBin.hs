@@ -10,6 +10,7 @@ import Position
 import Pragma
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import ISyntax
+import Id(isLiftedDict)
 import ISyntaxUtil(icUndet)
 import CSyntax
 import Undefined(UndefKind(UNoMatch))
@@ -27,7 +28,7 @@ doTrace = elem "-trace-genbin" progArgs
 -- .bo file tag -- change this whenever the .bo format changes
 -- See also GenABin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260715-7"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260715-8"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -40,7 +41,7 @@ genBinFile errh remapP fn bi_sig bo_sig ipkg =
     -- bodies to find out
     let poisoned = any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]
     in  writeBinaryFileCatch errh fn
-            (header ++ encodeWith remapP (bi_sig, bo_sig, poisoned, ipkg))
+            (header ++ encodeWith remapP (BoFile bi_sig bo_sig poisoned ipkg))
 
 hasPoisonPill :: IExpr a -> Bool
 hasPoisonPill (ILam _ _ e)  = hasPoisonPill e
@@ -61,10 +62,27 @@ readBinFilePoison :: ErrorHandle -> String -> B.ByteString ->
 readBinFilePoison errh nm s =
     let hlen = B.length headerBS
     in if B.take hlen s == headerBS
-       then let ((bi_sig, bo_sig, poisoned, ipkg), hash) =
+       then let (BoFile bi_sig bo_sig poisoned ipkg, hash) =
                     decodeWithHash $ B.drop hlen s
             in return (bi_sig, bo_sig, poisoned, ipkg, hash)
        else bsError errh [(noPosition, EBinFileVerMismatch nm)]
+
+-- ----------
+-- The contents of a .bo file
+
+-- The signature with everything visible comes last and is read only
+-- when used (for generating modules): an importing compile otherwise
+-- works from the user-visible signature and the definitions.
+data BoFile a = BoFile CSignature CSignature Bool (IPackage a)
+
+instance Bin (BoFile a) where
+    writeBytes (BoFile bi_sig bo_sig poisoned ipkg) =
+        do toBin bi_sig; toBin poisoned; toBin ipkg; skippable (toBin bo_sig)
+    readBytes = do bi_sig <- fromBin
+                   poisoned <- fromBin
+                   ipkg <- fromBin
+                   bo_sig <- skippableIn fromBin
+                   return (BoFile bi_sig bo_sig poisoned ipkg)
 
 -- ----------
 -- Bin CSignature
@@ -577,16 +595,25 @@ instance Bin (IPackage a) where
 -- Bin IDef
 
 instance Bin (IDef a) where
+    -- The body is read only when it is used: an importing package
+    -- needs the name and properties of every definition, and few of
+    -- the bodies.  It needs the type of every lifted dictionary (they
+    -- are matched up by type across packages) but of few others, so
+    -- the type of any other definition is read along with its body.
     writeBytes (IDef i ty e p) =
         section "IDef" $
-        -- the body is read only when it is used: an importing package
-        -- needs the name, type and properties of every definition, and
-        -- few of the bodies
-        do toBin i; toBin ty; skippable (toBin e); toBin p
+        do toBin i
+           if isLiftedDict i
+             then do toBin ty; skippable (toBin e)
+             else skippable (do toBin ty; toBin e)
+           toBin p
     readBytes = do when doTrace $ traceM("read IDef")
                    i <- fromBin
-                   ty <- fromBin
-                   e <- skippableIn fromBin
+                   ~(ty, e) <- if isLiftedDict i
+                               then do ty <- fromBin
+                                       e <- skippableIn fromBin
+                                       return (ty, e)
+                               else skippableIn fromBin
                    p <- fromBin
                    return $ IDef i ty e p
 
