@@ -955,10 +955,10 @@ instance Monad ActionValue
         in  -- Evaluating the contents of the bound AVStruct before calling the
             -- next action helps prevent memory leaks with ActionValue loops
             -- by ensuring that previous loop iterations have been evaluated
-            -- before future ones start executing. This is not necessarily a
-            -- complete solution because we do not deepSeq v (primSeq is enough
-            -- for PrimAction and ActionWorld, but not for arbitrary types), but
-            -- this should still be an improvement over the previous behavior.
+            -- before future ones start executing. We do not deepSeq v: primSeq
+            -- keeps PrimAction, ActionWorld and literals such as Integer, Bit
+            -- and Bool evaluated, but not the fields of a struct or of a data
+            -- constructor such as Int or UInt (each wraps a Bit).
             primSeq v $ primSeq a $ primSeq aw1 $
             -- An empty, unconditional action needs no wrapper: return the
             -- continuation's own AVStruct by a tail call, so a loop in
