@@ -40,7 +40,7 @@ import VPrims(vPriEnc,vMux,vPriMux,verilogInstancePrefix)
 import AVerilogUtil
 import InlineReg
 import BackendNamingConventions(isRegInst, isClockCrossingRegInst, isInoutConnect)
-import ForeignFunctions(ForeignFuncMap, mkDPIDeclarations, getForeignFunctions)
+import ForeignFunctions(ForeignFuncMap, mkDPIDeclarations, getDPIInstantiations)
 import qualified GraphWrapper as G
 
 --import Debug.Trace
@@ -88,8 +88,8 @@ aVerilog errh flags pps aspack ffmap =
        -- G0131 despite never being printed.)
        let suspect_str s = isVReservedWord s || isSVStdPackageIdent s
            suspect_vid (VId s _ _) = suspect_str s
-           dpi_name_vids = [ n | VDPI n _ _ <- dpi_decls ] ++
-                           [ a | VDPI _ _ args <- dpi_decls,
+           dpi_name_vids = [ n | VDPI n _ _ _ _ <- dpi_decls ] ++
+                           [ a | VDPI _ _ _ _ args <- dpi_decls,
                                  (a, _, _) <- args ]
            has_suspects = any suspect_vid dpi_name_vids ||
                           any (suspect_str . fst) foreign_func_names ||
@@ -132,7 +132,13 @@ aVerilog errh flags pps aspack ffmap =
                     [ (pos, WSVReservedIdent name) | (name, pos) <- sv_clashes ]
          return vprog
   where
-        vco = flagsToVco flags
+        -- vco carries the foreign-function map and def widths so that DPI call
+        -- sites can be monomorphized (name-mangled by concrete width)
+        vco = (flagsToVco flags)
+                { vco_ffmap = ffmap
+                , vco_def_widths =
+                    M.fromList [ (i, aSize t) | ADef i t _ _ <- aspkg_values aspack ]
+                }
         -- look for pass-through comments, taking care of \n
         -- XXX should these attach to the main module instead of the
         -- XXX entire file (attached to file in case of multiple modules)
@@ -268,16 +274,21 @@ aVerilog errh flags pps aspack ffmap =
 
         -- The main module
         -- XXX note, no special port grouping/commenting for bit blasted mod
+        -- DPI imports are emitted at module scope (as body items), so that
+        -- multiple modules using the same foreign function don't collide at
+        -- Verilator's shared $unit scope; they go in the module that contains
+        -- the foreign-function calls (the main module).
+        dpi_items = map VMDPI dpi_decls
         mainMod =
             if doBitBlast
             then VModule { vm_name = modnameBB,
                            vm_comments = [],
                            vm_ports = [(bargs,[])],
-                           vm_body = bbItems }
+                           vm_body = dpi_items ++ bbItems }
             else VModule { vm_name = modnameUB,
                            vm_comments = [],
                            vm_ports = (groupPorts signal_info args),
-                           vm_body = ubItems }
+                           vm_body = dpi_items ++ ubItems }
 
         -- The un-blasted wrapper, when bit-blasting
         -- It has the unblasted name, the unblasted ports,
@@ -313,7 +324,7 @@ aVerilog errh flags pps aspack ffmap =
     -- create import-DPI statements, if using DPI
 
         dpi_decls = if (useDPI flags)
-                    then mkDPIDeclarations $ getForeignFunctions ffmap aspack
+                    then mkDPIDeclarations $ getDPIInstantiations ffmap aspack
                     else []
 
     -- ----------
@@ -2046,15 +2057,15 @@ instance VUse VExpr where
 renameSVStdIdents :: [(String, Position)] -> VProgram
                   -> (VProgram, [(String, String, Position)], [(String, Position)])
 renameSVStdIdents foreign_funcs (VProgram vmods dpis comments) =
-    let dpi_names = S.fromList ([ s | VDPI (VId s _ _) _ _ <- dpis ] ++
-                                [ s | VDPI _ _ args <- dpis,
+    let dpi_names = S.fromList ([ s | VDPI (VId s _ _) _ _ _ _ <- dpis ] ++
+                                [ s | VDPI _ _ _ _ args <- dpis,
                                       (VId s _ _, _, _) <- args ])
         -- foreign Verilog function/task calls name a definition in the
         -- user's own Verilog code, so, like DPI names, they must never
         -- be renamed (the call would no longer match its definition)
         extern_names = dpi_names `S.union` S.fromList (map fst foreign_funcs)
         dpi_clashes = [ (s, getPosition i)
-                      | VDPI (VId s i _) _ _ <- dpis,
+                      | VDPI (VId s i _) _ _ _ _ <- dpis,
                         isSVStdPackageIdent s ]
         foreign_clashes = [ (s, pos) | (s, pos) <- foreign_funcs,
                                        isSVStdPackageIdent s ]
@@ -2200,6 +2211,7 @@ vModuleDeclVIds vmod =
     go (VMRegGroup i _ _ it) = i : go it
     go (VMGroup _ itss)      = concatMap (concatMap go) itss
     go (VMFunction (VFunction n _ decls _)) = n : concatMap declVIds decls
+    go (VMDPI (VDPI n _ _ _ args)) = n : [ a | (a, _, _) <- args ]
     declVIds :: VVDecl -> [VId]
     declVIds (VVDecl _ _ vs) = map vvName vs
     declVIds (VVDWire _ v _) = [vvName v]
