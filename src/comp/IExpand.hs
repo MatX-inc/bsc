@@ -3377,33 +3377,25 @@ evalDef i t e as = do
   -- recurse into evaluating e
   step i
   e' <- cacheDef i t e
-  as' <- callPositionArgs as
-  -- a definition that cacheDef heaps is evaluated once, for every
-  -- reference (see withoutCallSite); applying its value to arguments is
-  -- this call
-  case e' of
-    IRefT t' ptr _ ref | not (null as') -> do
-      P p v <- withoutCallSite $ evalHeap (ptr, ref)
-      withCallSite i $ evalAp "ICDef" (iePrimWhenPred t' p v) as'
-    IRefT {} -> withoutCallSite $ evalAp "ICDef" e' as'
-    _ -> withCallSite i $ evalAp "ICDef" e' as'
+  if isCallSiteDef i
+    then withCallSite i $ evalAp "ICDef" e' as
+    else evalAp "ICDef" e' as
 
--- The arguments of a call, made where the call is: an argument
--- primWithCallPosition e with no position in the design takes the call
--- position there, as toHeap gives it where it puts the argument on the
--- heap, before the call is pushed (see withCallSite).
-callPositionArgs :: [Arg] -> G [Arg]
-callPositionArgs as
-    | any unstamped as = do
-        pos <- getCallPosition
-        return (if usablePosition pos then map (stamp pos) as else as)
-    | otherwise = return as
-  where unstamped (E (IAps (ICon i (ICPrim _ PrimWithCallPosition)) _ _)) =
-            not (usablePosition (getIdPosition i))
-        unstamped _ = False
-        stamp pos a@(E (IAps (ICon i ic) ts es))
-            | unstamped a = E (IAps (ICon (setIdPosition pos i) ic) ts es)
-        stamp _ a = a
+-- The definitions whose calls in the design a diagnostic about a foreign
+-- function call names (see withCallSite): the conversions of the
+-- ActionValue_ of a foreign function call into an ActionValue
+-- (fromForeignActionValue_ and fromForeignAction_, which TCheck inserts
+-- and the system tasks in the Prelude use, and bitsFromForeignActionValue_,
+-- which IConv inserts for Classic foreign functions), whose call is the
+-- call of the function, and __value (peekGet), which reads an ActionValue
+-- without running it.  (mfix is a class method, see conAp' ICSel.)  A call
+-- of any other definition is evaluated as a tail call.
+isCallSiteDef :: Id -> Bool
+isCallSiteDef i = isConversionDef i || i == id__value
+
+isConversionDef :: Id -> Bool
+isConversionDef i = i == idFromForeignActionValue_ || i == idFromForeignAction_ ||
+                    i == idBitsFromForeignActionValue_
 
 -- evaluate a function application
 -- [arg] is a stack of application arguments on the left spine of the expression
@@ -3753,9 +3745,12 @@ conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
               toHeapArg a = return a
           as'' <- mapM toHeapArg as'
 -}
-          -- (a method selected in the design is a call, see withCallSite)
-          withCallSite c $
-              evalStaticOp' True True False e resType (doSel sel c tys ty n as')
+          -- mfix reads the value of an ActionValue without running it
+          -- where the design calls it (see isCallSiteDef)
+          if c == idMfix
+            then withCallSite c $
+                     evalStaticOp' True True False e resType (doSel sel c tys ty n as')
+            else evalStaticOp' True True False e resType (doSel sel c tys ty n as')
       _ -> internalError ("conAp': ICSel: " ++ ppReadable (mkAp sel as))
 
 -- constructors are non-strict
@@ -4740,9 +4735,9 @@ conAp' _ (ICPrim _ PrimCondWorld) f as@[E _] = do
 
 -- primWithCallPosition e is e, evaluated with the position of the Id as
 -- the call position.  Where the Id has no position in the design, it gets
--- the call position where e is made: from toHeap when e is put on the
--- heap, and from callPositionArgs (in evalDef) when e is an argument of a
--- call of a definition, such as the function that mfix applies.
+-- the call position where e is made, from toHeap when e is put on the
+-- heap (as the argument of the function that mfix applies is, where that
+-- function binds it).
 conAp' i (ICPrim _ PrimWithCallPosition) _ (T _ : E e : as) =
   withCallSite i $ evalAp "PrimWithCallPosition" e as
 
@@ -4789,26 +4784,20 @@ conAp' i (ICPrim prim_t PrimMarkForeignCall) _ [T t, E call_e, E av_, E world] =
       sel_t = ITForAll v IKStar (ITAp av_con (ITVar v) `itFun` ITVar v)
       sel_value = ICon idAVValue_ (ICSel { iConType = sel_t, selNo = 0,
                                            numSel = 2 })
-      -- The call in the design: the name the design calls and the name
-      -- the function is linked to, and the position of the call, or, when
-      -- the ActionValue was made where no call in the design was being
-      -- evaluated, the declaration of an imported function (a system task
-      -- is declared in the Prelude).  The design calls the definition at
-      -- the call when that wraps the function (an import "BDPI" or a
-      -- system task in the Prelude), and otherwise the function itself
-      -- (the system task, for a Prelude name).
+      -- The call in the design: the name of the function (the system
+      -- task, for a function that the Prelude declares) and the name it
+      -- is linked to, and the position of the call, or, when the
+      -- ActionValue was made where no call in the design was being
+      -- evaluated, the declaration of an imported function.
       noteCall :: Integer -> Id -> IConInfo HeapData -> CallKind -> G ()
       noteCall n fi fc kind = do
           call_i <- evalName call_e
-          defs <- getDefEnv
           let link = fName fc
               call_pos = getIdPosition call_i
               pos | usablePosition call_pos = call_pos
                   | isC fc = getIdPosition fi
                   | otherwise = noPosition
-              name | Just d <- M.lookup call_i defs,
-                     foreignWrapperLink d == Just link = getIdBaseString call_i
-                   | getIdQual fi == fsPrelude = link
+              name | getIdQual fi == fsPrelude = link
                    | otherwise = getIdBaseString fi
           noteForeignCall n (CallInfo name link pos kind)
       -- the call, not made: no action, and the value side of the call
@@ -4870,19 +4859,17 @@ conAp' _ (ICPrim _ PrimMarkForeignCall) f as =
   internalError ("conAp' PrimMarkForeignCall: " ++ ppReadable (mkAp f as))
 
 -- primForeignCallName av_ is the call in the design that is being evaluated
--- (see withCallSite): the Id called, at the position of the call.  Of
--- calls at the same position (a function and those its definition calls
--- there, such as fromForeignActionValue_ in an import "BDPI", which
--- FixupDefs gives the position of the reference), it is the outermost,
--- which the design names.  bitsFromForeignActionValue_ applies it where it
--- makes an ActionValue of av_, when the design makes the call; av_ (the
--- call) is not evaluated.
+-- (see withCallSite): the conversion of the ActionValue_ of a foreign
+-- function call that is called there, at the position of the call (which
+-- FixupDefs gives to fromForeignActionValue_ in an import "BDPI" or a
+-- system task in the Prelude, and TCheck and IConv where they insert a
+-- conversion).  bitsFromForeignActionValue_ applies it where it makes an
+-- ActionValue of av_, when the design makes the call; av_ (the call) is
+-- not evaluated.  A read that is being evaluated (__value, mfix or
+-- primWithCallPosition) is not the call.
 conAp' i (ICPrim _ PrimForeignCallName) _ [T _, E _] = do
   sites <- getCallSites
-  let site = case sites of
-               (j : js) -> let at_j k = getIdPosition k == getIdPosition j
-                           in  fromMaybe j (listToMaybe (reverse (takeWhile at_j js)))
-               [] -> dummyId noPosition
+  let site = fromMaybe (dummyId noPosition) (find isConversionDef sites)
   return (pExpr (iMkName i site))
 
 -- assuming any remaining primitives are non-strict
