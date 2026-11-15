@@ -1,0 +1,65 @@
+# Issue: LiftDicts numbered top-level ground dictionaries sequentially
+# (_lifted_dict0, _lifted_dict1, ...), so adding an unrelated definition with
+# its own dictionaries renumbered every later dictionary in the package.
+# Fix: LiftDicts names ground dictionaries by rendered type plus an evidence
+# hash (_dict_<Type>_<hash>).
+# Probe: verify keepVal's lifted dictionary names in -dinternal stay identical
+# when unrelatedVal (with its own lifted dictionaries) is added before it,
+# that no counter-named _lifted_dict appears, and that the .bo is invariant
+# under -trace-intern-reverse.
+
+proc keepval_dicts { out } {
+    global srcdir
+    global subdir
+    set fh [open [file join [absolute $srcdir] $subdir $out]]
+    set in_keepval 0
+    set dicts [list]
+    while { [gets $fh line] >= 0 } {
+        if { [regexp {^LiftDictsOrder\.keepVal =} $line] } {
+            set in_keepval 1
+        } elseif { $in_keepval && [regexp {^next def\.} $line] } {
+            set in_keepval 0
+        }
+        if { $in_keepval } {
+            foreach m [regexp -all -inline {LiftDictsOrder\._dict_[^= )]+} $line] {
+                lappend dicts $m
+            }
+            if { [regexp {_lifted_dict[0-9]+} $line] } {
+                close $fh
+                return [list "COUNTER_DICT_FOUND"]
+            }
+        }
+    }
+    close $fh
+    return [lsort -unique $dicts]
+}
+
+set src LiftDictsOrder.bs
+set out [make_bsc_output_name $src]
+
+erase LiftDictsOrder.bo
+copy v1/LiftDictsOrder.bs $src
+compile_pass $src {-dinternal}
+move $out v1.internal-out
+set v1_dicts [keepval_dicts v1.internal-out]
+
+erase LiftDictsOrder.bo
+copy v2/LiftDictsOrder.bs $src
+compile_pass $src {-dinternal}
+move $out v2.internal-out
+set v2_dicts [keepval_dicts v2.internal-out]
+
+if { [llength $v1_dicts] >= 2 && $v1_dicts ne [list "COUNTER_DICT_FOUND"] } {
+    pass "keepVal lifts content-named _dict_* dictionaries ($v1_dicts)"
+} else {
+    fail "expected >= 2 content-named _dict_* references in keepVal, got `$v1_dicts'"
+}
+
+if { $v1_dicts eq $v2_dicts } {
+    pass "keepVal _dict_* names unchanged when unrelatedVal is added before it"
+} else {
+    fail "keepVal _dict_* names shifted from `$v1_dicts' to `$v2_dicts'"
+}
+
+reverse_intern_same_bo $src
+erase $src

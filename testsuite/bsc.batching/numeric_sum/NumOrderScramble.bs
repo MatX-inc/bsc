@@ -1,0 +1,5 @@
+package NumOrderScramble where
+
+-- Parsed before NumOrder in the batch: interns "m" before "n"; NumOrder's
+-- text has n first.
+type NumOrderScrambleAlias m n = Bit (TAdd m n)

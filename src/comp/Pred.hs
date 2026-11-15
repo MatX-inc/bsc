@@ -5,7 +5,9 @@ module Pred(
             removePredPositions, getPredPositions, addPredPositions, mkPredWithPositions,
             PredAncestor(..),
             getPredAncestors, mkPredAncestor, addPredAncestors,
-            expandSyn, expandSynPred, predToType, qualToType, mkInst,
+            expandSyn, expandSynPred, resetExpandSynMemo,
+            predToType, qualToType, mkInst,
+            dictBaseName, hashType,
             Candidate(..), candidateInst, candidatesFromInsts,
             Instantiate(..),
             predToCPred, qualTypeToCQType,
@@ -16,13 +18,15 @@ module Pred(
 import Prelude hiding ((<>))
 #endif
 
-import Data.List(union, genericSplitAt, genericLength)
+import Data.List(union, genericSplitAt, genericLength, intersperse)
 import Data.Maybe(fromMaybe, isNothing)
-import qualified Data.Map.Strict as M
-import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import qualified Data.IntMap.Strict as IM
+import Data.IORef(IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import System.IO.Unsafe(unsafePerformIO)
+import System.Mem.StableName(StableName, makeStableName, hashStableName, eqStableName)
 import Control.Monad(when)
-import FStringCompat(FString)
+import FStringCompat(FString, getFString)
+import Util(Hash, hashInit, nextHashByte, nextHashString, showHash, itos)
 import Eval
 import Error(ErrMsg(..), internalError, bsErrorReallyUnsafe)
 import Position
@@ -358,35 +362,128 @@ instance PVPrint Inst where
 
 -----------------------------------------------------------------------------
 
+-- The base name for a lifted dictionary: its rendered type plus a hash of a
+-- discriminator.
+--
+-- Content-derived rather than counter-derived, so that adding an unrelated
+-- definition to a package does not renumber its dictionaries and move the
+-- bytes of every artifact that references them.  Readable, because these
+-- names reach the user in typechecker output and in dumped IR.
+--
+-- Callers pass whatever pins the dictionary down beyond its type: its evidence
+-- rendering where the type does not determine it (LiftDicts, where two
+-- dictionaries can share a type and differ in evidence); a pool keyed on the
+-- ground type alone would pass the type itself.
+--
+-- The discriminator is hashed in unconditionally, never only to break a tie.
+-- A tie-break would make the name depend on what else the package happens to
+-- contain, which is the positional instability this exists to remove.  The
+-- rendering below is therefore for readability only; distinctness rests on
+-- the hash, so nobody has to re-prove the rendering injective when type
+-- normalisation changes.
+dictBaseName :: Type -> Hash -> String
+dictBaseName t disc =
+    "_dict_" ++ dictRender (expandSyn t) ("_" ++ showHash disc)
+
+-- Hash a type by walking its structure directly, without pretty-printing it.
+--
+-- A constructor tag per node keeps this at least as discriminating as the
+-- printed form, because the application shape is in the tags: C (D E) and
+-- C D E fold differently even though their leaves agree.  Qualified names are
+-- hashed so two classes of the same base name in different packages cannot
+-- collide.  Positions are excluded because they are not stable across builds,
+-- and kinds and sorts are excluded because the printed form does not carry
+-- them either.
+hashType :: Type -> Hash
+hashType = go hashInit
+  where
+    go h (TAp f a)    = go (go (nextHashByte h 1) f) a
+    go h (TCon c)     = tycon (nextHashByte h 2) c
+    go h (TVar v)     = nextHashString (nextHashByte h 3) (tyVarQual v)
+    go h (TGen _ n)   = nextHashString (nextHashByte h 4) (itos n)
+    go h (TDefMonad _) = nextHashByte h 5
+    tycon h (TyCon i _ _) = nextHashString h (getIdString i)
+    tycon h (TyNum n _)   = nextHashString h (itos n)
+    tycon h (TyStr s _)   = nextHashString h (getFString s)
+    tyVarQual v = case genTyVarNum v of
+                    Just n  -> "_tctyvar" ++ itos n
+                    Nothing -> getIdString (tv_name v)
+
+-- Structure-preserving, unlike mkInstId's flattening: a nested application is
+-- bracketed, so C (D E) F does not read as C D (E F).  Built as a ShowS so
+-- nested dictionary types render in time linear in tree size, flattening once
+-- directly onto the hash suffix in dictBaseName.
+dictRender :: Type -> ShowS
+dictRender ty = case dictSpine ty [] of
+                  (h, [])   -> dictLeaf h
+                  (h, args) -> foldr (.) id $
+                                 intersperse (showChar '~')
+                                             (dictLeaf h : map dictArg args)
+
+dictArg :: Type -> ShowS
+dictArg a = case dictSpine a [] of
+              (h, []) -> dictLeaf h
+              _       -> showChar '(' . dictRender a . showChar ')'
+
+dictSpine :: Type -> [Type] -> (Type, [Type])
+dictSpine (TAp f x) acc = dictSpine f (x:acc)
+dictSpine h acc         = (h, acc)
+
+dictLeaf :: Type -> ShowS
+dictLeaf (TVar v)             = case genTyVarNum v of
+                                  Just n  -> showString "_tctyvar" . showString (itos n)
+                                  Nothing -> showString (getIdBaseString (tv_name v))
+dictLeaf (TCon (TyCon i _ _)) = showString (getIdBaseString i)
+dictLeaf (TCon (TyNum n _))   = showString (itos n)
+dictLeaf (TCon (TyStr s _))   = showString (getFString s)
+dictLeaf _                    = showString "_"
+
+-----------------------------------------------------------------------------
+
 -- Canonical nodes are already normal forms, so expandSyn returns them
 -- unchanged.
 --
--- Nullary qualified synonyms expand to the same type wherever they
--- appear, so the expansion is memoized by name.  Without it, a body
--- that names the same synonym twice re-expands it once per path
--- through the body, which is exponential on synonym towers.  Recursive
--- nullary synonyms are rejected at symbol-table construction, before
--- this memo can see one.
+-- Nullary qualified synonyms expand to the same type wherever the same
+-- defining body appears, so the expansion is memoized by qualified name
+-- and the StableName of the WHNF synonym body.  Without memoization, a
+-- body that names the same synonym twice re-expands it once per path
+-- through the body, which is exponential on synonym towers; keying on
+-- the body object as well ensures that reloading a redefined package in
+-- the same process misses on the new body instead of returning a stale
+-- expansion.  Recursive nullary synonyms are rejected at symbol-table
+-- construction, before this memo can see one.
+type SynMemoEntry = ((FString, FString, StableName Type), Type)
+
 {-# NOINLINE expandSynNameMemo #-}
-expandSynNameMemo :: IORef (M.Map (FString, FString) Type)
-expandSynNameMemo = unsafePerformIO $ newIORef M.empty
+expandSynNameMemo :: IORef (IM.IntMap [SynMemoEntry])
+expandSynNameMemo = unsafePerformIO $ newIORef IM.empty
+
+resetExpandSynMemo :: IO ()
+resetExpandSynMemo = writeIORef expandSynNameMemo IM.empty
 
 -- The caller supplies the walk with its synonym stack intact, so
 -- ETypeSynRecursive still fires on a recursive synonym that slipped
 -- past the symbol table's SCC rejection.  Only canonical results are
 -- memoized: a raw result carries the position of this occurrence,
 -- which the next caller must not see.
-expandNullaryMemo :: Id -> Type -> Type
-expandNullaryMemo i walk = unsafePerformIO $ do
-    let key = (getIdQual i, getIdBase i)
+expandNullaryMemo :: Id -> Type -> Type -> Type
+expandNullaryMemo i body walk = unsafePerformIO $ body `seq` do
+    sn <- makeStableName body
+    let qual = getIdQual i
+        base = getIdBase i
+        h    = hashStableName sn
+        sameKey (q', b', sn') = q' == qual && b' == base && eqStableName sn sn'
     m0 <- readIORef expandSynNameMemo
-    case M.lookup key m0 of
-      Just r -> return r
-      Nothing -> do
+    case [ r | (k, r) <- IM.findWithDefault [] h m0, sameKey k ] of
+      (r : _) -> return r
+      [] -> do
         let r = walk
         _ <- return $! r
         when (isCanonType r) $
-          atomicModifyIORef' expandSynNameMemo (\ m -> (M.insert key r m, ()))
+          let ins m = case [ r0 | (k, r0) <- IM.findWithDefault [] h m, sameKey k ] of
+                        (_ : _) -> (m, ())
+                        []      -> (IM.insertWith (++) h [((qual, base, sn), r)] m, ())
+          in atomicModifyIORef' expandSynNameMemo ins
         return r
 
 expandSyn :: Type -> Type
@@ -408,12 +505,12 @@ expandSyn t0 = exp [] f as
           -- context (which includes the eventual return from exp), it is an error.
           | let numArgs = genericLength as,
             numArgs < n = bsErrorReallyUnsafe [(getPosition i, EPartialTypeApp (pfpString i) n numArgs)]
-          -- Nullary qualified synonyms expand once process-wide (see
+          -- Nullary qualified synonyms expand once per defining body (see
           -- expandNullaryMemo).  The walk keeps the (i:syns) stack.
           -- Requires consing, since the memo returns shared positions
           -- that the raw path must not observe.
           | n == 0, null as, consCTypeEnabled, not (isUnqualId i) =
-              expandNullaryMemo i $
+              expandNullaryMemo i t $
                 let (f', as') = splitTAp (setTypePosition (getIdPosition i) t)
                 in exp (i:syns) f' as'
           -- We have a synonym we can expand, so do so.

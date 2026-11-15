@@ -7,6 +7,7 @@ module MakeSymTab(
                   cConvInst,
                   convCQType, convCQTypeWithAssumps,
                   convCType,
+                  resetChkSynSeen,
                   ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
@@ -18,12 +19,14 @@ import Control.Monad(when)
 import Control.Monad.Except(throwError)
 import qualified Data.Set as S
 import qualified Data.Map as M
+import qualified Data.IntMap.Strict as IM
 
 import Data.Either(partitionEithers)
 import PredTrie
 import FStringCompat(concatFString, FString)
-import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import Data.IORef(IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import System.IO.Unsafe(unsafePerformIO)
+import System.Mem.StableName(StableName, makeStableName, hashStableName, eqStableName)
 import PFPrint
 import PreStrings(fsMangleSep)
 import PreIds
@@ -1410,17 +1413,20 @@ trCType' _ _ t@(TDefMonad _) = internalError "trCTypeN: TDefMonad"
 -- Check type synonym applications in the input type.
 -- The tricky thing is that we have to expand synonyms before checking
 -- to implement LiberalTypeSynonyms correctly.
--- A nullary synonym that kind-checked clean is remembered
--- process-wide by qualified name.  chkTAp re-expands synonym
+-- A nullary synonym that kind-checked clean is remembered by qualified
+-- name and the StableName of its WHNF body.  chkTAp re-expands synonym
 -- applications once per path, exponentially on synonym towers, and
--- runs once per symbol-table construction.  The check is context-free
--- and pure validation, so a clean name never needs re-checking; a
--- failing name is never recorded and re-errors at every occurrence,
--- as before.  Recursive nullary synonyms are rejected earlier in
--- mkSymTab.
+-- runs once per symbol-table construction.  Keying on the body object
+-- keeps towers linear while ensuring that a redefined body after a
+-- package reload is checked afresh; a failing body is never recorded
+-- and re-errors at every occurrence.  Recursive nullary synonyms are
+-- rejected earlier in mkSymTab.
 {-# NOINLINE chkSynSeen #-}
-chkSynSeen :: IORef (S.Set (FString, FString))
-chkSynSeen = unsafePerformIO $ newIORef S.empty
+chkSynSeen :: IORef (IM.IntMap [(FString, FString, StableName Type)])
+chkSynSeen = unsafePerformIO $ newIORef IM.empty
+
+resetChkSynSeen :: IO ()
+resetChkSynSeen = writeIORef chkSynSeen IM.empty
 
 chkTAp :: Type -> K.KI ()
 -- a canonical node is a ground normal form that contains no synonym,
@@ -1434,8 +1440,17 @@ chkTAp t = (uncurry (chkTAp' []) . splitTAp) t
           | let numArgs = genericLength as,
             numArgs < n = K.err (getPosition i, EPartialTypeApp (pfpString i) n numArgs)
           | n == 0, null as, consCTypeEnabled, not (isUnqualId i) =
-              let key = (getIdQual i, getIdBase i)
-              in if unsafePerformIO (S.member key <$> readIORef chkSynSeen)
+              let qual = getIdQual i
+                  base = getIdBase i
+                  sameKey (q', b', sn') sn =
+                      q' == qual && b' == base && eqStableName sn sn'
+                  probe = t `seq` do
+                      sn <- makeStableName t
+                      m <- readIORef chkSynSeen
+                      let bucket = IM.findWithDefault [] (hashStableName sn) m
+                      return (sn, any (`sameKey` sn) bucket)
+                  (sn, alreadySeen) = unsafePerformIO probe
+              in if alreadySeen
                  then return ()
                  else do -- the body check keeps the (i:syns) stack, so
                          -- ETypeSynRecursive still fires on anything
@@ -1444,9 +1459,13 @@ chkTAp t = (uncurry (chkTAp' []) . splitTAp) t
                                splitTAp (setTypePosition (getIdPosition i) t)
                          chkTAp' (i:syns) f' as'
                          -- reached only when the check succeeded
-                         unsafePerformIO
-                           (atomicModifyIORef' chkSynSeen
-                              (\ s -> (S.insert key s, ())))
+                         let h = hashStableName sn
+                             ins s =
+                               let bucket = IM.findWithDefault [] h s
+                               in if any (`sameKey` sn) bucket
+                                  then (s, ())
+                                  else (IM.insertWith (++) h [(qual, base, sn)] s, ())
+                         unsafePerformIO (atomicModifyIORef' chkSynSeen ins)
                            `seq` return ()
           | otherwise = let (as1, as2) = genericSplitAt n as
                             t' = setTypePosition (getIdPosition i) t

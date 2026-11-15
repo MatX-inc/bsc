@@ -1,0 +1,26 @@
+package TrieOrder where
+
+-- A polymorphic module context: every submodule instantiation leaves an
+-- IsModule predicate whose module type is still a variable when context
+-- reduction first sees it, so the instance trie is queried Free and
+-- enumerates every IsModule instance.  ModuleContext brings a second
+-- instance, under a different head than Module.
+import ModuleContext
+
+interface Ifc =
+  v :: Bool
+
+mkLeaf :: (IsModule m c) => m Ifc
+mkLeaf =
+  module
+    r :: Reg Bool <- mkReg False
+    interface
+      v = r
+
+mkTrieOrder :: (IsModule m c) => m Ifc
+mkTrieOrder =
+  module
+    a :: Ifc <- mkLeaf
+    b :: Ifc <- mkLeaf
+    interface
+      v = a.v && b.v

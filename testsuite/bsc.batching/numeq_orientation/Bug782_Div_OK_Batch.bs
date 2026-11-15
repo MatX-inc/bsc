@@ -1,0 +1,320 @@
+package Bug782_Div_OK_Batch where
+
+-- Classic translation of Bug782_Div_OK, compiled through
+-- Bug782_Div_OK_BatchTop.bs with -u after Bug782_Div_OK_BatchPre.bs has been
+-- parsed (see that file) and under -trace-intern-reverse.
+
+import List
+import Vector
+
+type FRAC_TABLE = 21
+
+tab_size :: Integer
+tab_size = 64
+
+type Tab_Index_Type = Bit 6
+type Table_Type = FixedPoint 2 FRAC_TABLE
+
+interface PipeFragment a b =
+  exec :: Maybe a -> ActionValue (Maybe b)
+
+type DLifc t = PipeFragment t t
+
+type Divide int_n fra_n int_d fra_d int_q fra_q =
+  PipeFragment (FixedPoint int_n fra_n, FixedPoint int_d fra_d)
+               (FixedPoint int_q fra_q)
+
+mkDivide :: (Add 3 fra_d int_ex,
+             Add a__ fra_q 21,
+             Add b__ int_q 2,
+             Add c__ 1 int_ex,
+             Add d__ int_q (TAdd int_n fra_d),
+             Add int_n fra_n (TAdd int_d e__)) =>
+            Module (Divide int_n fra_n int_d fra_d int_q fra_q)
+mkDivide =
+  module
+    buf1 :: Reg (Maybe (FixedPoint int_ex fra_n, FixedPoint 3 fra_d))
+      <- mkReg Invalid
+    buf2 :: Reg (Maybe (FixedPoint int_ex fra_n,
+                        FixedPoint 3 fra_d,
+                        FixedPoint 2 FRAC_TABLE))
+      <- mkReg Invalid
+    buf3 :: Reg (Maybe (FixedPoint 3 FRAC_TABLE, FixedPoint 2 FRAC_TABLE))
+      <- mkReg Invalid
+    buf4 :: Reg (Maybe (FixedPoint 2 FRAC_TABLE))
+      <- mkReg Invalid
+
+    max_x :: Reg (FixedPoint 2 FRAC_TABLE) <- mkReg 0
+    min_x :: Reg (FixedPoint 2 FRAC_TABLE) <- mkReg (fromRational 3 2)
+
+    letseq fradv :: Integer = valueOf fra_d
+           fractv :: Integer = valueOf FRAC_TABLE
+
+    qdl :: DLifc (FixedPoint int_n fra_n,
+                  FixedPoint int_d fra_d,
+                  FixedPoint int_q fra_n) <- mkDelayLine 3
+
+    interface
+      exec args = do
+        letseq stage0 :: Action =
+                 case args of
+                   Invalid -> do
+                     buf1 := Invalid
+                     _ <- qdl.exec Invalid
+                     return ()
+                   Valid (num0, denom0) -> do
+                     let q :: FixedPoint int_q fra_n =
+                           if denom0 == 0 then 0 else fxptDivide num0 denom0
+                     _ <- qdl.exec (Valid (num0, denom0, q))
+                     letseq num_init :: FixedPoint int_ex fra_n = adjust num0
+                            denom_init :: FixedPoint 3 fra_d = adjust denom0
+                            b = fradv
+                            n0 = pack num_init
+                            d0 = pack denom_init
+                            (d1, n1) =
+                              if d0[b : (b - 15)] == (0 :: Bit 16)
+                              then (d0 << (16 :: Integer), n0 << (16 :: Integer))
+                              else (d0, n0)
+                            (d2, n2) =
+                              if d1[b : (b - 7)] == (0 :: Bit 8)
+                              then (d1 << (8 :: Integer), n1 << (8 :: Integer))
+                              else (d1, n1)
+                            (d3, n3) =
+                              if d2[b : (b - 3)] == (0 :: Bit 4)
+                              then (d2 << (4 :: Integer), n2 << (4 :: Integer))
+                              else (d2, n2)
+                            (d4, n4) =
+                              if d3[b : (b - 1)] == (0 :: Bit 2)
+                              then (d3 << (2 :: Integer), n3 << (2 :: Integer))
+                              else (d3, n3)
+                            (d5, n5) =
+                              if d4[b : b] == (0 :: Bit 1)
+                              then (d4 << (1 :: Integer), n4 << (1 :: Integer))
+                              else (d4, n4)
+                            num :: FixedPoint int_ex fra_n = unpack n5
+                            denom :: FixedPoint 3 fra_d = unpack d5
+                     buf1 := Valid (num, denom)
+               stage1 :: Action =
+                 case buf1._read of
+                   Invalid -> buf2 := Invalid
+                   Valid (num, denom) ->
+                     if denom == 1 then do
+                       let two :: FixedPoint 3 fra_d = 2 - unpack 1
+                       buf2 := Valid (negate (num << (1 :: Integer)),
+                                      two,
+                                      fromRational 1 2)
+                     else do
+                       letseq d_bits = pack denom
+                              idx :: Tab_Index_Type = d_bits[(fradv - 1) : (fradv - 6)]
+                              y :: FixedPoint 2 fra_d = unpack (d_bits[(fradv - 7) : 0])
+                              r = recip idx
+                              r_prime = deriv idx
+                              r1_raw :: FixedPoint 2 FRAC_TABLE =
+                                r - fxptTruncate (fxptMult y r_prime)
+                              r1 :: FixedPoint 2 FRAC_TABLE =
+                                if (pack r1_raw)[(fractv - 1) : (fractv - 1)] /= 1
+                                then fromRational 1 2
+                                else r1_raw
+                       buf2 := Valid (negate num, denom, r1)
+               stage2 :: Action =
+                 case buf2._read of
+                   Invalid -> buf3 := Invalid
+                   Valid (num, denom, r1) -> do
+                     letseq r :: FixedPoint 2 FRAC_TABLE =
+                              unpack ((0b001 :: Bit 3) ++ (pack r1)[(fractv - 2) : 0])
+                            d :: FixedPoint 2 fra_d =
+                              unpack ((0b01 :: Bit 2) ++ (pack denom)[(fradv - 1) : 0])
+                            q1 :: FixedPoint 3 FRAC_TABLE = fxptTruncate (fxptMult num r)
+                            x1 :: FixedPoint 2 FRAC_TABLE = fxptTruncate (fxptMult d r)
+                     if x1 > max_x._read then max_x := x1 else noAction
+                     if x1 < min_x._read then min_x := x1 else noAction
+                     buf3 := Valid (q1, x1)
+               stage3 :: Action =
+                 case buf3._read of
+                   Invalid -> buf4 := Invalid
+                   Valid (q1, x1) -> do
+                     letseq w :: FixedPoint 2 FRAC_TABLE =
+                              unpack ((0b1 :: Bit 1) ++ (pack x1)[fractv : 0])
+                            q2 :: FixedPoint 2 FRAC_TABLE = fxptTruncate (fxptMult w q1)
+                     buf4 := Valid q2
+        stage0
+        stage1
+        stage2
+        stage3
+        case buf4._read of
+          Invalid -> return Invalid
+          Valid q3 -> return (Valid (dropMSBs (dropLSBs q3)))
+
+stepDelayLine :: Reg (Maybe t) -> List (Reg (Maybe t)) -> ActionValue (Maybe t)
+stepDelayLine prev Nil = return prev._read
+stepDelayLine prev (Cons cur more) = do
+  cur := prev._read
+  stepDelayLine cur more
+
+mkDelayLine :: (Bits t st) => Integer -> Module (DLifc t)
+mkDelayLine delay =
+  module
+    rs :: List (Reg (Maybe t)) <- List.mapM (const (mkReg Invalid)) (upto 1 delay)
+    interface
+      exec mx =
+        case rs of
+          Nil -> return mx
+          Cons r0 rest -> do
+            r0 := mx
+            stepDelayLine r0 rest
+
+dropLSBs :: (Add p1__ rf f, Add i f (TAdd i f), Add i rf (TAdd i rf)) =>
+            FixedPoint i f -> FixedPoint i rf
+dropLSBs a =
+  letseq bits :: Bit f = a.f
+         out :: Bit rf = bits[(valueOf f - 1) : (valueOf f - valueOf rf)]
+  in  FixedPoint { i = a.i; f = out }
+
+dropMSBs :: (Add p1__ (TAdd ri f) (TAdd i f)) =>
+            FixedPoint i f -> FixedPoint ri f
+dropMSBs a = unpack (truncate (pack a))
+
+fxptDivide :: (Add ni nf sz,
+               Add df sz sz2,
+               Add ni df sz3,
+               Add p1__ (TAdd di df) sz2,
+               Add p2__ ri sz3,
+               Add sz3 nf sz2) =>
+              FixedPoint ni nf -> FixedPoint di df -> FixedPoint ri nf
+fxptDivide num denom =
+  letseq n :: Int sz2 = unpack (signExtend (pack num)) << valueOf df
+         d :: Int sz2 = unpack (signExtend (pack denom))
+         q :: Int sz2 = n / d
+         out :: FixedPoint sz3 nf = unpack (pack q)
+  in  dropMSBs out
+
+adjust :: (Add ai af a_sz,
+           Add ri rf r_sz,
+           Add ri rf (TAdd ri rf),
+           Add ai ri ki,
+           Add af rf kf) =>
+          FixedPoint ai af -> FixedPoint ri rf
+adjust a =
+  letseq base = pack a
+         int_part :: Bit ai = base[(valueOf a_sz - 1) : valueOf af]
+         frac_part :: Bit af = base[(valueOf af - 1) : 0]
+         int_out :: Bit ki = signExtend int_part
+         frac_out :: Bit kf = frac_part ++ (0 :: Bit rf)
+         ip :: Bit ri = int_out[(valueOf ri - 1) : 0]
+         fp :: Bit rf = frac_out[(valueOf kf - 1) : (valueOf kf - valueOf rf)]
+  in  unpack (ip ++ fp)
+
+tables :: Bool -> Vector 64 Table_Type
+tables isRecip =
+  letseq one :: FixedPoint 10 FRAC_TABLE = 1
+         del :: FixedPoint 10 FRAC_TABLE = fromRational 1 tab_size
+  in  let build :: Integer -> FixedPoint 10 FRAC_TABLE -> List Table_Type
+          build k d =
+            if k >= tab_size then Nil
+            else
+              letseq r :: Table_Type = fxptDivide one d
+                     entry :: Table_Type =
+                       if isRecip then r else fxptTruncate (fxptMult r r)
+              in  Cons entry (build (k + 1) (d + del))
+      in  toVector (build 0 one)
+
+{-# noinline recip #-}
+recip :: Tab_Index_Type -> Table_Type
+recip idx = select (tables True) idx
+
+{-# noinline deriv #-}
+deriv :: Tab_Index_Type -> Table_Type
+deriv idx = select (tables False) idx
+
+struct FixedPoint isize fsize =
+  i :: Bit isize
+  f :: Bit fsize
+ deriving (Eq)
+
+_fromInternal :: (Add i f b) => Int b -> FixedPoint i f
+_fromInternal x = unpack (pack x)
+
+_toInternal :: (Add i f b) => FixedPoint i f -> Int b
+_toInternal x = unpack (pack x)
+
+instance (Add i f b) => Bits (FixedPoint i f) b where
+  pack x = x.i ++ x.f
+  unpack x =
+    letseq pair :: (Bit i, Bit f) = split x
+           (ip, fp) = pair
+    in  FixedPoint { i = ip; f = fp }
+
+instance (Add i f b) => Bounded (FixedPoint i f) where
+  minBound =
+    let minb :: Int b = minBound
+    in  _fromInternal minb
+  maxBound =
+    let maxb :: Int b = maxBound
+    in  _fromInternal maxb
+
+instance (Add i f b) => Arith (FixedPoint i f) where
+  (+) in1 in2 = _fromInternal (_toInternal in1 + _toInternal in2)
+  (-) in1 in2 = _fromInternal (_toInternal in1 - _toInternal in2)
+  negate in1 = _fromInternal (negate (_toInternal in1))
+  (*) _ _ = error "FixedPoint (*)"
+  (/) _ _ = error "FixedPoint (/)"
+  (%) _ _ = error "FixedPoint (%)"
+
+instance (Add i f b) => Literal (FixedPoint i f) where
+  fromInteger n =
+    let conv :: Int i = fromInteger n
+    in  FixedPoint { i = pack conv; f = 0 }
+  inLiteralRange _ n =
+    let int_part :: Int i = _
+    in  inLiteralRange int_part n
+
+instance (Add i f b) => Ord (FixedPoint i f) where
+  (<) in1 in2 = _toInternal in1 < _toInternal in2
+  (<=) in1 in2 = _toInternal in1 <= _toInternal in2
+  (>) in1 in2 = _toInternal in1 > _toInternal in2
+  (>=) in1 in2 = _toInternal in1 >= _toInternal in2
+
+instance (Add i f b) => Bitwise (FixedPoint i f) where
+  (>>) in1 sftamt = _fromInternal (_toInternal in1 >> sftamt)
+  (<<) in1 sftamt = _fromInternal (_toInternal in1 << sftamt)
+  invert _ = error "FixedPoint invert"
+  (^~) _ _ = error "FixedPoint (^~)"
+  (~^) _ _ = error "FixedPoint (~^)"
+  (^) _ _ = error "FixedPoint (^)"
+  (|) _ _ = error "FixedPoint (|)"
+  (&) _ _ = error "FixedPoint (&)"
+  msb in1 = msb (pack in1)
+  lsb in1 = lsb (pack in1)
+
+fromRational :: (Add i f b) => Integer -> Integer -> FixedPoint i f
+fromRational numerator denominator =
+  letseq temp0 = numerator * (2 ** valueOf f)
+         temp =
+           if denominator /= 0
+           then div temp0 denominator
+           else error "FixedPoint::fromRational zero denominator"
+         lim = 2 ** (valueOf i + valueOf f - 1)
+         rangeOk = (temp < lim) && (temp >= negate lim)
+         res :: Int b =
+           if rangeOk
+           then fromInteger temp
+           else error "FixedPoint::fromRational out of range"
+  in  _fromInternal res
+
+fxptMult :: (Add ai bi ri,
+             Add af bf rf,
+             Add ai af ab,
+             Add bi bf bb,
+             Add ab bb rb,
+             Add ri rf rb) =>
+            FixedPoint ai af -> FixedPoint bi bf -> FixedPoint ri rf
+fxptMult a b =
+  letseq ap :: Int ab = _toInternal a
+         bp :: Int bb = _toInternal b
+         prod :: Int rb = signedMul ap bp
+  in  _fromInternal prod
+
+fxptTruncate :: (Add xxA ri ai, Add xxB rf af) =>
+                FixedPoint ai af -> FixedPoint ri rf
+fxptTruncate a =
+  FixedPoint { i = truncate a.i; f = truncateLSB a.f }

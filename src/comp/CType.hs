@@ -346,15 +346,12 @@ type CType = Type
 -- TyStr leaf is keyed on its value alone.  Soundness rests on the
 -- same one-tycon-per-qualified-name invariant as Eq TyCon.
 --
--- Lifetime: the tables are process-global and never reset, so in a
--- multi-package process a shared leaf carries a position that depends
--- on compile order.  Output is semantically identical either way, but
--- .bo bytes are not reproducible per input.  A per-session reset would
--- fix that, and would also be needed before reloading a redefined
--- package in one process, where a name-keyed memo goes stale in
--- semantics and not just positions.  It would have to cover ccState,
--- ctRnfSeen, GroundCType's gctState and ptrTable, and any later memo
--- that is keyed on type names or intern ids.
+-- Lifetime: the tables are process-global and never reset.  Canonical
+-- nodes are position-free values and the constructors return the
+-- caller's own occurrence tree, so .bo positions do not depend on
+-- compile order.  Reloading a redefined non-synonym type in one
+-- process still requires content-keyed leaves or a per-session reset
+-- covering ccState, ctRnfSeen, and GroundCType's gctState and ptrTable.
 
 -- A fused ap key holds two ids as base-2^31 digits, so consing needs
 -- a 64-bit Int.  All of bsc's supported platforms have one.

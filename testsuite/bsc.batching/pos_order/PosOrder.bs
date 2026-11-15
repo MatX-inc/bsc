@@ -1,0 +1,15 @@
+package PosOrder where
+
+-- Ground types that the scrambler also writes, so that in the batch their
+-- hash-consed nodes are first built while the scrambler is parsed.  The
+-- .bo's signature carries these types with positions; they must be this
+-- file's positions in both compiles.
+import Vector
+
+type Row = Vector 4 (Bit 8)
+
+firstOf :: Row -> Maybe (Bit 8)
+firstOf r = Valid (head r)
+
+tagIt :: Bit 8 -> (Bool, Bit 8)
+tagIt x = (x /= 0, x)

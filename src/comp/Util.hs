@@ -5,11 +5,16 @@ import Data.Char(intToDigit)
 import Data.Word(Word8,Word32,Word64)
 import Data.Bits
 import Data.List(sort, sortBy, group, groupBy, nubBy, union)
+import qualified Data.List as L
 import Data.Bifunctor(first,second)
 import Control.Monad(foldM)
 import Debug.Trace(trace)
 import qualified Data.Set as S
 import qualified Data.Map as M
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 -- import Numeric(showHex)
 
 import ErrorUtil(internalError)
@@ -321,6 +326,20 @@ joinByFst =
     groupBy (\ (x,_) (y,_) -> x==y) .
     sortBy (\ (x,_) (y,_) -> x `compare` y)
 
+-- The groups of joinByFst, in the order in which their keys first
+-- occur, each keeping its elements' order.  joinByFst orders the
+-- groups by the key, and for a key built on Id that is string-intern
+-- order, which depends on which names the process has already seen;
+-- use this where the group order is observable.
+joinByFstStable :: (Ord a) => [(a, b)] -> [(a, [b])]
+joinByFstStable xs =
+    let step (!groups, keysRev) (k, v) =
+            case M.lookup k groups of
+              Nothing -> (M.insert k [v] groups, k : keysRev)
+              Just vs -> (M.insert k (v : vs) groups, keysRev)
+        (groups, keysRev) = L.foldl' step (M.empty, []) xs
+    in  [ (k, reverse (M.findWithDefault [] k groups)) | k <- reverse keysRev ]
+
 mergeWith :: (Ord b) => (a -> a -> a) -> [(b, a)] -> [(b, a)] -> [(b, a)]
 mergeWith f = mergeWithCmp cmpFst f'
     where f' (k,v) (_,v') = (k, v `f` v')
@@ -620,7 +639,10 @@ isWhitespace _ = False
 -- A computational simple hash
 -- 4000000063 and 1442968193 are large primes that fit in 32 bits
 
+-- Eq/Ord so a hash can be stored and compared as itself rather than
+-- escaping immediately to its decimal rendering.
 data Hash = Hash !Word32 !Word32
+  deriving (Eq, Ord)
 
 hashInit :: Hash
 hashInit = Hash 0 4000000063
@@ -639,5 +661,20 @@ nextHashByte (Hash x y) !c =
 hashValue :: Hash -> Word64
 hashValue (Hash x y) = ((fromIntegral x) `shiftL` 32) .|. (fromIntegral y)
 
+hashBytes :: B.ByteString -> Hash
+hashBytes = B.foldl' nextHashByte hashInit
+
+hashBytesL :: BL.ByteString -> Hash
+hashBytesL = BL.foldl' nextHashByte hashInit
+
+hashString :: String -> Hash
+hashString = nextHashString hashInit
+
+-- Continue a fold with a string's UTF-8 bytes so callers hashing a
+-- structure can interleave tags and strings without concatenating first.
+nextHashString :: Hash -> String -> Hash
+nextHashString h s = B.foldl' nextHashByte h (TE.encodeUtf8 (T.pack s))
+
+-- For diagnostics and user-visible output.
 showHash :: Hash -> String
 showHash h = show (hashValue h)

@@ -18,6 +18,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 
 import Error(internalError)
+import Util(stableOrdNub)
 import CType(Type(..), TyCon(..), TISort(..), TyVar, leftTyCon)
 import TypeOps(isPrimTFunName)
 import Pred(Pred(..), Class(inputPositions), Candidate(..), expandSyn)
@@ -30,10 +31,24 @@ import Pred(Pred(..), Class(inputPositions), Candidate(..), expandSyn)
 -- Keys in the map are Maybe TyCon:
 --   Just tc  -- this instance has constructor tc at this position
 --   Nothing  -- this instance has a type variable at this position
+--
+-- A node also keeps its keys in the order in which their first item
+-- appears in the build list, and every enumeration of a node's
+-- branches (Free/Var queries, allItems) follows that order, never the
+-- map's.  The map orders TyCons by Id, and Id order is string-intern
+-- order: it depends on which names the process has already seen, so
+-- it differs between a one-shot compile and a batched one.  The
+-- enumeration order is observable: context reduction instantiates
+-- candidate instances with fresh type variables before trying them,
+-- so the order decides the variable counter at every later
+-- dictionary, and those numbers are names in the .bo.  First
+-- appearance in the build list is declaration order (imports in
+-- their sorted order, then the package's own instances), which is a
+-- function of the sources alone.
 -- ---------------------------------------------------------------------------
 
 data PredTrie a = Leaf [a]
-                | Node (M.Map (Maybe TyCon) (PredTrie a))
+                | Node (M.Map (Maybe TyCon) (PredTrie a)) [Maybe TyCon]
 
 -- ---------------------------------------------------------------------------
 -- Building the trie
@@ -67,30 +82,35 @@ buildRaw _ [] = internalError "PredTrie.buildRaw: empty list"
 -- An empty trie with the right depth for a given key.
 emptyForKey :: [Maybe TyCon] -> PredTrie a
 emptyForKey []    = Leaf []
-emptyForKey (_:_) = Node M.empty
+emptyForKey (_:_) = Node M.empty []
 
--- Insert one item into the trie.
+-- Insert one item into the trie.  buildRaw folds from the right, so
+-- items arrive last to first and prepending k leaves the key list in
+-- arrival order; sortTrieLeaves deduplicates each node's list once in
+-- O(n log k) via stableOrdNub.
 insertItem :: (a -> [Maybe TyCon]) -> a -> PredTrie a -> PredTrie a
 insertItem keyOf item = go (keyOf item)
   where
     go []     (Leaf ys) = Leaf (item : ys)
-    go (k:ks) (Node m)  =
+    go (k:ks) (Node m ord) =
         let sub  = M.findWithDefault (emptyForKey ks) k m
             sub' = go ks sub
-        in  Node (M.insert k sub' m)
+        in  Node (M.insert k sub' m) (k : ord)
     go key trie = internalError ("PredTrie.insertItem: key/trie depth mismatch" ++
                                  " (key remaining=" ++ show (length key) ++
                                  ", trie=" ++ trieShape trie ++ ")")
 
 trieShape :: PredTrie a -> String
 trieShape (Leaf xs) = "Leaf[" ++ show (length xs) ++ "]"
-trieShape (Node _)  = "Node"
+trieShape (Node _ _) = "Node"
 
--- | Sort the items in each leaf using a whole-list sorting function.
+-- Sort the items in each leaf using a whole-list sorting function and
+-- deduplicate each node's key list in first-appearance order.
 -- Use this once at build time so that lookupPredTrie returns items in order.
 sortTrieLeaves :: ([a] -> [a]) -> PredTrie a -> PredTrie a
 sortTrieLeaves f (Leaf xs) = Leaf (f xs)
-sortTrieLeaves f (Node m)  = Node (M.map (sortTrieLeaves f) m)
+sortTrieLeaves f (Node m ord) =
+    Node (M.map (sortTrieLeaves f) m) (stableOrdNub ord)
 
 -- ---------------------------------------------------------------------------
 -- Querying the trie
@@ -120,15 +140,15 @@ sortTrieLeaves f (Node m)  = Node (M.map (sortTrieLeaves f) m)
 data QueryElem = Free | Bound | Con TyCon | Var
     deriving (Show, Eq)
 
--- | Collect all items whose trie key is compatible with the given query.
+-- Collect all items whose trie key is compatible with the given query.
 -- The result is a superset of matching instances; the type checker's
 -- unification will filter to the actual matches.
 lookupPredTrie :: [QueryElem] -> PredTrie a -> [a]
 lookupPredTrie []     (Leaf xs) = xs
-lookupPredTrie []     (Node _)  = internalError "PredTrie.lookupPredTrie: query too short"
+lookupPredTrie []     (Node _ _) = internalError "PredTrie.lookupPredTrie: query too short"
 lookupPredTrie (_:_)  (Leaf []) = []   -- empty trie at any depth: no instances
 lookupPredTrie (_:_)  (Leaf _)  = internalError "PredTrie.lookupPredTrie: query too long (items at leaf)"
-lookupPredTrie (q:qs) (Node m)  =
+lookupPredTrie (q:qs) (Node m ord) =
     case q of
         -- Concrete constructor: check same-constructor instances first, then
         -- catch-alls (Nothing branch).
@@ -136,9 +156,9 @@ lookupPredTrie (q:qs) (Node m)  =
         -- Rigid variable: only catch-all instances can match.
         Bound   -> descend Nothing
         -- Free metavar: any instance could match.  Return concrete-constructor
-        -- branches before the Nothing (catch-all) branch so that more-specific
-        -- instances are encountered first by the type checker's scan.
-        -- (M.elems would put Nothing first since Nothing < Just in Map order.)
+        -- branches, in declaration order, before the Nothing (catch-all)
+        -- branch so that more-specific instances are encountered first by
+        -- the type checker's scan.
         Free    -> allBranches
         -- Variable head: every item, as for Free; this is the lookup for
         -- walks that unify with the items (lookupCandidates is the one
@@ -146,9 +166,7 @@ lookupPredTrie (q:qs) (Node m)  =
         Var     -> allBranches
   where
     descend k = maybe [] (lookupPredTrie qs) (M.lookup k m)
-    allBranches = let (_, m_nothing, justBranches) = M.splitLookup Nothing m
-                  in  concatMap (lookupPredTrie qs) (M.elems justBranches)
-                      ++ maybe [] (lookupPredTrie qs) m_nothing
+    allBranches = concat [ descend (Just tc) | Just tc <- ord ] ++ descend Nothing
 
 -- The items lookupPredTrie returns for the query, in its order, each
 -- marked Try or RuledOut: at a Var position the items under the
@@ -167,10 +185,10 @@ lookupCandidates = go Try
   where
     go :: (a -> Candidate a) -> [QueryElem] -> PredTrie a -> [Candidate a]
     go mark []     (Leaf xs) = map mark xs
-    go _    []     (Node _)  = internalError "PredTrie.lookupCandidates: query too short"
+    go _    []     (Node _ _) = internalError "PredTrie.lookupCandidates: query too short"
     go _    (_:_)  (Leaf []) = []
     go _    (_:_)  (Leaf _)  = internalError "PredTrie.lookupCandidates: query too long (items at leaf)"
-    go mark (q:qs) (Node m)  =
+    go mark (q:qs) (Node m ord) =
         case q of
           Con tc -> descend mark (Just tc) ++ descend mark Nothing
           Bound  -> descend mark Nothing
@@ -178,17 +196,16 @@ lookupCandidates = go Try
           Var    -> branches RuledOut
       where
         descend mark' k = maybe [] (go mark' qs) (M.lookup k m)
-        -- the constructor branches, with the given mark, then the
-        -- variable branch, as lookupPredTrie orders them
+        -- the constructor branches, in declaration order with the given
+        -- mark, then the variable branch, as lookupPredTrie orders them
         branches mark' =
-            let (_, m_nothing, justBranches) = M.splitLookup Nothing m
-            in  concatMap (go mark' qs) (M.elems justBranches)
-                ++ maybe [] (go mark qs) m_nothing
+            concat [ descend mark' (Just tc) | Just tc <- ord ]
+            ++ descend mark Nothing
 
--- | Collect ALL items stored in the trie (e.g. for getInsts).
+-- Collect ALL items stored in the trie (e.g. for getInsts).
 allItems :: PredTrie a -> [a]
 allItems (Leaf xs) = xs
-allItems (Node m)  = concatMap allItems (M.elems m)
+allItems (Node m ord) = concat [ maybe [] allItems (M.lookup k m) | k <- ord ]
 
 -- ---------------------------------------------------------------------------
 -- Trie key and query building for class predicates

@@ -63,7 +63,7 @@ import PreIds(idIsModule, idInout_, idClock, idReset, idInout,
 import PreStrings(fsEmpty, fsLoop, fsBody)
 import CSyntax
 import CType
-import Pred(Qual(..), expandSyn)
+import Pred(Qual(..), expandSyn, resetExpandSynMemo)
 import ISyntax
 import ISyntaxUtil(itBool, itClock, itReset)
 import ASyntax
@@ -195,6 +195,8 @@ resetSession :: IO ()
 resetSession = void unloadCurrentModel `CE.finally`
   (closeOpenHandles globalErrHandle `CE.finally`
    (do writeIORef globalVar initState
+       resetExpandSynMemo
+       resetChkSynSeen
        resetErrorHandle globalErrHandle))
 
 -- Drop ownership before shutdown, including when a replacement model fails
@@ -757,10 +759,14 @@ tclPackage ["depend"] = do
 ----------
 tclPackage ["clear"] = do
   let clrCPkg (CPackage pid _ _ _ _ _ _) = (CPackage pid (Right []) [] [] [] [] [])
-  modifyIORef globalVar (\gv -> gv { tp_binmap  = M.empty,
-                                     tp_hashmap = M.empty,
-                                     tp_symtab  = emptySymtab,
-                                     tp_cpack   = clrCPkg (tp_cpack gv) })
+  resetExpandSynMemo
+  resetChkSynSeen
+  modifyIORef globalVar (\gv -> gv { tp_binmap   = M.empty,
+                                     tp_hashmap  = M.empty,
+                                     tp_symtab   = emptySymtab,
+                                     tp_cpack    = clrCPkg (tp_cpack gv),
+                                     tp_packView = initExpandInfoBag,
+                                     tp_typeView = ([], initExpandInfoBag) })
   return $ TLst []
 ---------
 tclPackage ["types",pkg] = do

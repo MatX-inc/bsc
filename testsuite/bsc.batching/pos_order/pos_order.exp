@@ -1,0 +1,11 @@
+# Issue: CType's hash-cons table previously returned canonical nodes holding
+# the positions of whichever file first constructed each ground type, leaking
+# sibling-file positions into .bo signatures in a `bsc -u` batch.
+# Fix: canonical nodes are position-free values (GroundCType included) and
+# constructors return occurrence spines carrying the caller's own positions.
+# Probe: PosOrder writes ground types that PosOrderScramble builds first in
+# the batch; its .bo dump, hash included, must match a one-shot compile and
+# remain invariant under -trace-intern-reverse.
+
+batching_bo_pair PosOrder.bs PosOrderRoot.bs PosOrderScramble.bs
+reverse_intern_same_bo PosOrder.bs
