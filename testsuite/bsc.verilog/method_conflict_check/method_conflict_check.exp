@@ -1,0 +1,16 @@
+# Dynamic simulation check in generated Verilog that conflicting interface
+# methods are not enabled in the same clock cycle.
+
+compile_verilog_pass MethodConflict.bsv mkMethodConflict
+find_n_strings mkMethodConflict.v {EN_a && EN_b} 1
+find_regexp mkMethodConflict.v \
+    {conflict and may not be enabled in the same clock cycle}
+find_regexp mkMethodConflict.v {synopsys translate_off}
+
+compile_verilog_pass NoConflict.bsv mkNoConflict
+find_regexp_fail mkNoConflict.v \
+    {conflict and may not be enabled in the same clock cycle}
+
+# Under -split-if, the pair check is still emitted once on EN_a && EN_b.
+compile_verilog_pass SplitIfNoAction.bsv mkSplitIfNoAction {-split-if}
+find_n_strings mkSplitIfNoAction.v {EN_a && EN_b} 1
