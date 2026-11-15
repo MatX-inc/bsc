@@ -1,0 +1,11 @@
+package SimClockDomainsTop where
+
+import SimClockDomainsScramble
+import SimClockDomains
+
+{-# verilog sysSimClockDomainsTop #-}
+sysSimClockDomainsTop :: Module Empty
+sysSimClockDomainsTop =
+  module
+    s :: Empty <- mkSimClockDomainsScramble
+    p :: Empty <- sysSimClockDomains

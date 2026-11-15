@@ -1,0 +1,64 @@
+-- Registers on three clocks, named so that the first register on each clock
+-- visits the clocks in an order (clkM, default CLK, clkZ) distinct from both
+-- the clock ports' order (CLK, clkZ, clkM) and alphabetical order (CLK, clkM,
+-- clkZ). The default clock carries two resets, and the asynchronous-reset
+-- registers visit the three clocks in the opposite order.
+package InlinedRegisterOrder where
+
+interface Counts =
+    m  :: UInt 8
+    a  :: UInt 8
+    a2 :: UInt 8
+    z  :: UInt 8
+
+onCR :: (IsModule mod modType) => Clock -> Reset -> mod a -> mod a
+onCR c r = changeSpecialWires (Just c) (Just r) Nothing
+
+onR :: (IsModule mod modType) => Reset -> mod a -> mod a
+onR r = changeSpecialWires Nothing (Just r) Nothing
+
+{-# verilog mkInlinedRegisterOrder #-}
+mkInlinedRegisterOrder ::
+  Clock -> Reset -> Clock -> Reset -> Reset -> Module Counts
+mkInlinedRegisterOrder clkZ rstZ clkM rstM rstA2 =
+  module
+    -- asynchronous-reset registers: clkZ, default clock, clkM
+    a1_z  :: Reg (UInt 8) <- onCR clkZ rstZ (mkRegA 0)
+    a2_a  :: Reg (UInt 8) <- mkRegA 0
+    a3_m  :: Reg (UInt 8) <- onCR clkM rstM (mkRegA 0)
+
+    -- synchronous-reset registers: clkM, default clock, clkZ
+    n1_m  :: Reg (UInt 8) <- onCR clkM rstM (mkReg 0)
+    n2_a  :: Reg (UInt 8) <- mkReg 0
+    n3_z  :: Reg (UInt 8) <- onCR clkZ rstZ (mkReg 0)
+
+    -- second reset on the default clock, met after the first
+    n4_a2 :: Reg (UInt 8) <- onR rstA2 (mkReg 0)
+
+    -- uninitialized registers on the two argument clocks
+    u5_m  :: Reg (UInt 8) <- onCR clkM noReset mkRegU
+    u6_z  :: Reg (UInt 8) <- onCR clkZ noReset mkRegU
+
+    rules
+      "tick_m": when True ==> action
+        n1_m := n1_m + 1
+        u5_m := n1_m
+        a3_m := a3_m + 2
+
+      "tick_a": when True ==> action
+        n2_a := n2_a + 1
+        a2_a := a2_a + 2
+
+      "tick_a2": when True ==> action
+        n4_a2 := n4_a2 + 3
+
+      "tick_z": when True ==> action
+        n3_z := n3_z + 1
+        u6_z := n3_z
+        a1_z := a1_z + 2
+
+    interface
+      m  = n1_m + u5_m + a3_m
+      a  = n2_a + a2_a
+      a2 = n4_a2
+      z  = n3_z + u6_z + a1_z

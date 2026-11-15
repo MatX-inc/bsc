@@ -79,7 +79,7 @@ convAPackageToLambdaCalc errh flags apkg0 | (apkg_is_wrapped apkg0) =
                   -- use the method name (the apkg name has "module_" prepended)
                   body = runCM methId defmap deforder M.empty argset $ do
                            ret_expr <- convAExpr ret_e
-                           ds <- mapM convUse (M.toList uses)
+                           ds <- mapM convUse (tsortUseDefs defmap deforder uses)
                            return $ sLet ds ret_expr
               in
                   [SDValue (noinlineId methId) (funcType arg_types rt) $
@@ -693,7 +693,7 @@ makeModCtor defmap deforder modId inps avis =
         (inst_fs, letdefs) =
             runCM modId defmap deforder M.empty S.empty $ do
               (fs, uses) <- foldM mkInstField ([], M.empty) (reverse avis)
-              ds <- mapM convUse (M.toList uses)
+              ds <- mapM convUse (tsortUseDefs defmap deforder uses)
               return (fs, ds)
 
         ctor_body = sLam ctor_args $
@@ -766,7 +766,7 @@ convAIFace defmap deforder instmap mmap modId
 
       body = runCM modId defmap deforder instmap argset $ do
                  ret_expr <- convAExpr ret_e
-                 ds <- mapM convUse (M.toList uses)
+                 ds <- mapM convUse (tsortUseDefs defmap deforder uses)
                  return $ sLet ds ret_expr
   in
       [SDValue (methId (getIdBaseString modId) mId)
@@ -824,6 +824,7 @@ convAIFaceBody :: MethodOrderMap -> AId -> AId -> [ARule] -> Maybe AExpr ->
                   CM SExpr
 convAIFaceBody mmap modId mId rs m_ret = do
   defmap <- gets defMap
+  deforder <- gets defOrder
   let
       -- get all the defs used in the predicates of the rules
       pred_uses = getAExprDefs defmap M.empty (map arule_pred rs)
@@ -851,7 +852,7 @@ convAIFaceBody mmap modId mId rs m_ret = do
     -- leaving one rule with a non-True predicate?)
     rs -> do
       -- the predicates in the if-else structure may refer to defs
-      ds <- mapM convUse (M.toList pred_uses)
+      ds <- mapM convUse (tsortUseDefs defmap deforder pred_uses)
       -- we don't assume that the predicates are complete,
       -- so the final branch is a null update
       rs_expr <- foldM foldFn nullUpdVar (reverse rs)

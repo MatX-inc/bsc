@@ -10,9 +10,11 @@ import IntLit
 import IntegerUtil(aaaa)
 import Util(mapSndM, map_mapM)
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
-import Id(isFromRHSId, dummy_id, mkIdCanFire, mkIdWillFire)
+import Id(isFromRHSId, dummy_id, mkIdCanFire, mkIdWillFire, getIdString)
 import Position(noPosition)
+import Data.List(sortBy)
 import Data.Maybe
+import Data.Ord(comparing)
 import PPrint
 
 import qualified Data.Map as M
@@ -25,7 +27,8 @@ import Util(map_insertManyWith)
 
 simPackageOpt :: ErrorHandle -> Flags -> SimSystem -> IO SimSystem
 simPackageOpt errh flags ss = do
-  let pkgs0 = M.toList (ssys_packages ss)
+  let pkgs0 = sortBy (comparing (getIdString . fst))
+                     (M.toList (ssys_packages ss))
   pkgs1 <- mapSndM (pkgOpt errh flags) pkgs0
   return $ ss { ssys_packages = M.fromList pkgs1 }
 

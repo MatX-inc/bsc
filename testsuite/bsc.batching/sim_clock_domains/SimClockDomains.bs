@@ -1,0 +1,55 @@
+-- Three clock domains besides the default one, created in order: clkA, clkB
+-- divided from clkA, and clkC, with synchronizing registers crossing between
+-- them.
+package SimClockDomains where
+
+import Clocks
+
+onCR :: (IsModule mod modType) => Clock -> Reset -> mod a -> mod a
+onCR c r = changeSpecialWires (Just c) (Just r) Nothing
+
+{-# verilog sysSimClockDomains #-}
+sysSimClockDomains :: Module Empty
+sysSimClockDomains =
+  module
+    clkA <- mkAbsoluteClock 15 10
+    rstA <- mkAsyncResetFromCR 3 clkA
+
+    divClock :: ClockDividerIfc <- onCR clkA rstA (mkClockDividerOffset 8 4)
+    let clkB = divClock.slowClock
+    rstB <- mkAsyncReset 3 rstA clkB
+
+    clkC <- mkAbsoluteClock 7 6
+    rstC <- mkAsyncResetFromCR 2 clkC
+
+    creg :: Reg (UInt 16) <- mkReg 0
+    areg :: Reg (UInt 16) <- onCR clkA rstA (mkReg 0)
+    breg :: Reg (UInt 16) <- onCR clkB rstB (mkReg 0)
+    xreg :: Reg (UInt 16) <- onCR clkC rstC (mkReg 0)
+
+    aToB :: Reg (UInt 16) <- mkSyncRegToSlow 0 divClock rstB
+    bToA :: Reg (UInt 16) <- mkSyncRegToFast 0 divClock rstB
+    ccToC :: Reg (UInt 16) <- mkSyncRegFromCC 0 clkC
+    cToCC :: Reg (UInt 16) <- mkSyncRegToCC 0 clkC rstC
+
+    rules
+      "tick": when True ==> action
+        creg := creg + 1
+        ccToC := creg
+        $display "cc %0d %0d" creg cToCC
+        if creg >= 200 then $finish 0 else noAction
+
+      "aplus": when True ==> action
+        areg := areg + 1
+        aToB := areg
+        $display "a %0d %0d" areg bToA
+
+      "bplus": when True ==> action
+        breg := breg + 1
+        bToA := breg
+        $display "b %0d %0d" breg aToB
+
+      "cplus": when True ==> action
+        xreg := xreg + 1
+        cToCC := xreg
+        $display "c %0d %0d" xreg ccToC

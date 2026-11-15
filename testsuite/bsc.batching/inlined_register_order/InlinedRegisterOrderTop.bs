@@ -1,0 +1,12 @@
+package InlinedRegisterOrderTop where
+
+import InlinedRegisterOrderScramble
+import InlinedRegisterOrder
+
+{-# verilog mkInlinedRegisterOrderTop #-}
+mkInlinedRegisterOrderTop ::
+  Clock -> Reset -> Clock -> Reset -> Reset -> Module Empty
+mkInlinedRegisterOrderTop clkZ rstZ clkM rstM rstA2 =
+  module
+    s :: Empty  <- mkInlinedRegisterOrderScramble clkM rstM clkZ rstZ rstA2
+    p :: Counts <- mkInlinedRegisterOrder clkZ rstZ clkM rstM rstA2

@@ -1,0 +1,29 @@
+package SimClockDomainsScramble where
+
+import Clocks
+
+onCR :: (IsModule mod modType) => Clock -> Reset -> mod a -> mod a
+onCR c r = changeSpecialWires (Just c) (Just r) Nothing
+
+{-# verilog mkSimClockDomainsScramble #-}
+mkSimClockDomainsScramble :: Module Empty
+mkSimClockDomainsScramble =
+  module
+    clkC <- mkAbsoluteClock 7 6
+    rstC <- mkAsyncResetFromCR 2 clkC
+
+    clkA <- mkAbsoluteClock 15 10
+    rstA <- mkAsyncResetFromCR 3 clkA
+
+    divClock :: ClockDividerIfc <- onCR clkA rstA (mkClockDividerOffset 8 4)
+    let clkB = divClock.slowClock
+    rstB <- mkAsyncReset 3 rstA clkB
+
+    cToCC :: Reg (UInt 16) <- mkSyncRegToCC 0 clkC rstC
+    ccToC :: Reg (UInt 16) <- mkSyncRegFromCC 0 clkC
+    bToA  :: Reg (UInt 16) <- mkSyncRegToFast 0 divClock rstB
+    aToB  :: Reg (UInt 16) <- mkSyncRegToSlow 0 divClock rstB
+
+    rules
+      "tick":  when True ==> ccToC := cToCC
+      "aplus": when True ==> aToB  := bToA

@@ -9,7 +9,7 @@ module LambdaCalcUtil(
     getAActionDefs,
     getAExprDefs,
 
-    tsortActionsAndDefs, mergeStmts,
+    tsortActionsAndDefs, tsortUseDefs, mergeStmts,
 
     MethodOrderMap, mkMethodOrderMap,
 
@@ -27,7 +27,8 @@ import qualified Data.Set as S
 import Control.Monad(when)
 import Control.Monad.State(State, runState, gets, get, put)
 import Data.Maybe(isJust, catMaybes)
-import Data.List(intercalate, partition, union, nub, sortOn)
+import Data.List(intercalate, partition, union, nub, sortBy, sortOn)
+import Data.Ord(comparing)
 
 import Util(makePairs, flattenPairs, allSame, fst2of3)
 import SCC(tsortStable)
@@ -458,6 +459,14 @@ tsortActionsAndDefs mmap defmap defOrder uses acts =
                 in
                    (xs, av_meth_local_vars)
 
+-- Topologically sort a use map so every definition precedes any definition
+-- that references it, breaking ties by definition order rather than Ord AId.
+tsortUseDefs :: DefMap -> M.Map AId Int -> M.Map AId (AType, AExpr) ->
+                [(AId, (AType, AExpr))]
+tsortUseDefs defmap defOrder uses =
+    let (stmts, _) = tsortActionsAndDefs M.empty defmap defOrder uses []
+    in  [ (i, (t, e)) | Left (ADef i t e _) <- stmts ]
+
 -- -----
 
 type Node = Either AId Integer
@@ -579,11 +588,12 @@ instance PPrint AStmt where
       in  pparen (p > 0) (text "AStmtAction" <+> pPrint d 1 act')
   pPrint d p (AStmtIf cset tblk fblk) =
       pparen (p > 0)
-          (text "AStmtIf" <+> pPrint d 1 (S.toList cset) <+>
+          (text "AStmtIf" <+>
+           pPrint d 1 (sortBy (comparing ppString) (S.toList cset)) <+>
            pPrint d 0 tblk <+> pPrint d 0 fblk)
 
 getCondExpr :: S.Set AExpr -> AExpr
-getCondExpr s = aBoolAnds (S.toList s)
+getCondExpr s = aBoolAnds (sortBy (comparing ppString) (S.toList s))
 
 mergeStmts :: DefMap -> [Either ADef AAction] -> [AStmt]
 mergeStmts defmap stmts0 =
@@ -798,7 +808,10 @@ updateAPackageTypes apkg =
 
         ((rs', ifcs', avis'), defmap') = runUTM defmap updateFn
     in
-        apkg { apkg_local_defs = M.elems defmap',
+        apkg { apkg_local_defs =
+                 [ d'
+                 | ADef i _ _ _ <- apkg_local_defs apkg
+                 , Just d' <- [M.lookup i defmap'] ],
                apkg_rules = rs',
                apkg_interface = ifcs',
                apkg_state_instances = avis' }

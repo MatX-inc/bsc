@@ -2,7 +2,7 @@ module SimFileUtils ( analyzeBluesimDependencies
                     , codeGenOptionDescr
                     ) where
 
-import Id(Id,getIdBaseString)
+import Id(Id,getIdBaseString,getIdString)
 import Flags(Flags(..))
 import SimPackage
 import SimPrimitiveModules(isPrimitiveModule)
@@ -19,7 +19,8 @@ import System.Posix.Files
 import System.IO(openFile, hGetContents, hClose, IOMode(..))
 import Control.Monad(filterM)
 import Control.Exception(bracketOnError)
-import Data.List(delete,find,isPrefixOf)
+import Data.List(delete,find,isPrefixOf,sortBy)
+import Data.Ord(comparing)
 import qualified Data.Map as M
 
 -- import Debug.Trace(traceM)
@@ -89,11 +90,13 @@ remove_stale feeds pkgs (x:xs) =
 
 analyzeBluesimDependencies :: Flags -> SimSystem -> FilePath -> IO [String]
 analyzeBluesimDependencies flags sim_system prefix =
-    do let pkgs = M.elems (ssys_packages sim_system)
+    do let pkgs = sortBy (comparing (getIdString . sp_name))
+                         (M.elems (ssys_packages sim_system))
            ba_map = ssys_filemap sim_system
            influences pkg = let pname = getIdBaseString (sp_name pkg)
                                 insts = [ name
-                                        | i <- M.elems (sp_state_instances pkg)
+                                        | i <- sortBy (comparing (getIdString . avi_vname))
+                                                      (M.elems (sp_state_instances pkg))
                                         , let name = getVNameString (vName (avi_vmi i))
                                         , not (isPrimitiveModule name)
                                         ]

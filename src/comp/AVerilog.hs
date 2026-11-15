@@ -1075,7 +1075,10 @@ genInstances errh flags ff_blocks vDef aspack =
 
         (inout_rewire_map, inout_inst_wires) = buildInoutConnectInfo inout_pairs
 
-        buildInoutConnectInfo pairs = apSnd M.keys $ foldr addInoutPair (M.empty, M.empty) inout_pairs
+        buildInoutConnectInfo pairs =
+            let (cm, rcm) = foldr addInoutPair (M.empty, M.empty) pairs
+                inst_wires = [ i | i <- stableOrdNub (map fst pairs), M.member i rcm ]
+            in  (cm, inst_wires)
 
         addInoutPair :: (AId, AId) -> (M.Map AId AId, M.Map AId [AId]) -> (M.Map AId AId, M.Map AId [AId])
         addInoutPair (i1, i2) (cm, rcm) | Just ic1 <- M.lookup i1 cm,

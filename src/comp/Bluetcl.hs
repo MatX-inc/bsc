@@ -1584,8 +1584,13 @@ tclSubmodule ["full",modname] =
           -- convert the method uses map into a subinst uses map
           let mumap = abemi_method_uses_map abmi
               sumap =
-                  let edges = [ (getIdString instId, [(methId, uses)])
-                              | (MethodId instId methId, uses) <- M.toList mumap ]
+                  let sorted_mu =
+                          sortBy (comparing (\(MethodId instId methId, _) ->
+                                               (getIdString instId,
+                                                getIdString methId)))
+                                 (M.toList mumap)
+                      edges = [ (getIdString instId, [(methId, uses)])
+                              | (MethodId instId methId, uses) <- sorted_mu ]
                   in  -- use "flip" to preserve the method order
                       M.fromListWith (flip (++)) edges
           -- mapping from submods to their ifc type

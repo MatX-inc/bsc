@@ -79,7 +79,7 @@ convAPackageToSAL errh flags apkg0 | (apkg_is_wrapped apkg0) =
 
                   body = runCM defmap deforder M.empty argset $ do
                            ret_expr <- convAExpr ret_e
-                           ds <- mapM convUse (M.toList uses)
+                           ds <- mapM convUse (tsortUseDefs defmap deforder uses)
                            return $ sLet ds ret_expr
               in
                   [SDValue noinlineId (funcType arg_types rt) $
@@ -867,7 +867,7 @@ makeModCtorDecl defmap deforder inps avis =
         (inst_fs, letdefs) =
             runCM defmap deforder M.empty S.empty $ do
               (fs, uses) <- foldM mkInstField ([], M.empty) (reverse avis)
-              ds <- mapM convUse (M.toList uses)
+              ds <- mapM convUse (tsortUseDefs defmap deforder uses)
               return (fs, ds)
 
         -- SAL does not support records with no fields
@@ -911,7 +911,7 @@ convAIFace defmap deforder instmap mmap
 
       body = runCM defmap deforder instmap argset $ do
                  ret_expr <- convAExpr ret_e
-                 ds <- mapM convUse (M.toList uses)
+                 ds <- mapM convUse (tsortUseDefs defmap deforder uses)
                  return $ sLet ds ret_expr
   in
       [SDValue (modMethId methId) (valueMethType arg_types modType rt) $
@@ -964,6 +964,7 @@ convAIFaceBody :: MethodOrderMap -> AId -> [ARule] -> Maybe AExpr ->
                   CM SExpr
 convAIFaceBody mmap methId rs m_ret = do
   defmap <- gets defMap
+  deforder <- gets defOrder
   let
       -- get all the defs used in the predicates of the rules
       pred_uses = getAExprDefs defmap M.empty (map arule_pred rs)
@@ -991,7 +992,7 @@ convAIFaceBody mmap methId rs m_ret = do
     -- leaving one rule with a non-True predicate?)
     rs -> do
       -- the predicates in the if-else structure may refer to defs
-      ds <- mapM convUse (M.toList pred_uses)
+      ds <- mapM convUse (tsortUseDefs defmap deforder pred_uses)
       -- we don't assume that the predicates are complete,
       -- so the final branch is a null update
       null_upd <- convMethActions (M.keys pred_uses) mmap [] m_ret

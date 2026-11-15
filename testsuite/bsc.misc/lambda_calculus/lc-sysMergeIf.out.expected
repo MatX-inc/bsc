@@ -43,8 +43,8 @@ dim_sysMergeIf =
 rule_RL_r1_sysMergeIf :: MOD_sysMergeIf -> (Bool, MOD_sysMergeIf, ());
 rule_RL_r1_sysMergeIf =
     (\ (state0 :: MOD_sysMergeIf) ->
-     let { (def_s1__h348 :: Bit #1) = meth_read_RegN (inst_s1__sysMergeIf state0)
-	 ; (def_f3_i_notFull____d1 :: Bit #1) = meth_i_notFull_FIFO2 (inst_f3__sysMergeIf state0)
+     let { (def_f3_i_notFull____d1 :: Bit #1) = meth_i_notFull_FIFO2 (inst_f3__sysMergeIf state0)
+	 ; (def_s1__h348 :: Bit #1) = meth_read_RegN (inst_s1__sysMergeIf state0)
 	 ; (def_f2_i_notFull____d3 :: Bit #1) = meth_i_notFull_FIFO2 (inst_f2__sysMergeIf state0)
 	 ; (def_f1_i_notFull____d4 :: Bit #1) = meth_i_notFull_FIFO2 (inst_f1__sysMergeIf state0)
 	 ; (def_IF_s1_THEN_f2_i_notFull_ELSE_f1_i_notFull___d5 :: Bit #1) =
