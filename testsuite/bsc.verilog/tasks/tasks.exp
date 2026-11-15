@@ -210,6 +210,84 @@ test_c_veri_bsv RepeatedTask_OneRule2
 # test uses of $fgetc in the same rule that are registered separately
 test_c_veri_bsv RepeatedTask_OneRule3
 
+# test that each execution of one ActionValue from a system task (bound
+# by a let, or passed to a function) is its own call of the task:
+# $fopen opens the file twice, $fgetc reads successive characters, and
+# the two executions of $stime have separate results
+test_c_veri_bsv RepeatedTask_LetBound
+if { $vtest == 1 } {
+find_n_strings sysRepeatedTask_LetBound.v {reg [31 : 0] TASK_stime} 2
+}
+
+# the same for $random, which Bluesim does not support
+test_veri_only_bsv RepeatedTask_LetBoundRandom
+
+# the same for $swriteAV, $sformatAV and $time, whose two results in one
+# rule are equal: each display must use two task results, not one twice
+test_c_veri_bsv RepeatedTask_LetBoundFormat
+if { $vtest == 1 } {
+find_regexp sysRepeatedTask_LetBoundFormat.v \
+    {"swriteAV %c %c", \w+, \w+\);}
+find_regexp_fail sysRepeatedTask_LetBoundFormat.v \
+    {"swriteAV %c %c", (\w+), \1\);}
+find_regexp sysRepeatedTask_LetBoundFormat.v \
+    {"sformatAV %s %s", \w+, \w+\);}
+find_regexp_fail sysRepeatedTask_LetBoundFormat.v \
+    {"sformatAV %s %s", (\w+), \1\);}
+find_regexp sysRepeatedTask_LetBoundFormat.v \
+    {"same time = %b", \w+ == \w+\);}
+find_regexp_fail sysRepeatedTask_LetBoundFormat.v \
+    {"same time = %b", (\w+) == \1\);}
+}
+
+# the same for a Classic foreign function that returns ActionValue or Action
+test_c_veri ClassicForeignActionValue
+
+# a system task with a value after actions that a dynamic index chooses,
+# as testbenches do, with each of these options
+test_c_veri_bsv DynSelTime
+foreach opts { {} {-keep-method-conds} {-aggressive-conditions} {-split-if} } {
+erase_many "DynSelTime*.bo"
+compile_verilog_pass DynSelTime.bsv {} $opts
+if { $vtest == 1 } {
+compare_file DynSelTime.bsv.bsc-vcomp-out
+}
+}
+
+# peekGet reads the value of an ActionValue without running it, so the
+# system tasks in the action are not called: a result of one that is used
+# is an error (G0129), and one that the value does not use is not used (a
+# Get that logs with $time, or that logs no result).  The same with each
+# of these options (compiled afresh).
+test_c_veri_bsv PeekTask
+foreach opts { {} {-keep-method-conds} {-aggressive-conditions} {-split-if} } {
+erase_many "PeekTask*.bo"
+compile_verilog_pass PeekTask.bsv {} $opts
+compile_verilog_fail_error PeekTaskUsed.bsv G0129 1 {} $opts
+compile_verilog_pass PeekTaskLog.bsv {} $opts
+compile_verilog_pass PeekTaskNoResult.bsv {} $opts
+if { $vtest == 1 } {
+compare_file PeekTask.bsv.bsc-vcomp-out
+compare_file PeekTaskUsed.bsv.bsc-vcomp-out
+compare_file PeekTaskLog.bsv.bsc-vcomp-out
+compare_file PeekTaskNoResult.bsv.bsc-vcomp-out
+}
+}
+
+# the result of a system task is used where its call is made, in a module
+# that uses peekGet elsewhere: an assertion whose pass action calls $time,
+# where the assertion library runs the action in two arms of a case, and
+# an arm of a case for a value that the case never has, which the
+# evaluator removes
+compile_verilog_pass AssertPropertyTime.bsv
+if { $vtest == 1 } {
+find_n_strings sysAssertPropertyTime.v {= $time;} 2
+}
+compile_verilog_pass CaseArmTimePeek.bsv
+if { $vtest == 1 } {
+find_n_strings sysCaseArmTimePeek.v {= $time;} 2
+}
+
 # ---
 
 # make sure the SystemVerilog assertion tasks compile in both flows

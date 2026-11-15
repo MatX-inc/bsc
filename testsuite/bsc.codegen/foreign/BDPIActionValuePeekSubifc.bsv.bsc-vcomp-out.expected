@@ -1,0 +1,11 @@
+checking package dependencies
+compiling BDPIActionValuePeekSubifc.bsv
+code generation for mkBDPIActionValuePeekSubifc starts
+Error: "BDPIActionValuePeekSubifc.bsv", line 17, column 14: (G0129)
+  The result of the foreign function `my_count' called at
+  "BDPIActionValuePeekSubifc.bsv", line 10, column 33 is used by method
+  `g_get', but the call is not made: the ActionValue that makes it is read
+  without running it at "BDPIActionValuePeekSubifc.bsv", line 12, column 42
+  (for example by peekGet, mfix or impCondOf), so the result does not exist.
+  Use the result only where the call is made, or make the call in a rule that
+  writes its result to a register or FIFO, and read that instead.

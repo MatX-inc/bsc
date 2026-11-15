@@ -1,0 +1,5 @@
+checking package dependencies
+compiling ClassicActionValuePeek.bs
+code generation for sysClassicActionValuePeek starts
+Verilog file created: sysClassicActionValuePeek.v
+All packages are up to date.

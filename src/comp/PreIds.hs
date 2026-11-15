@@ -100,6 +100,9 @@ idToPrimAction = prelude_id_no fsToPrimAction
 idFromPrimAction = prelude_id_no fsFromPrimAction
 idFromActionValue_, idToActionValue_, idRules, idSchedPragma, idValueOf, idStringOf, idStringProxy :: Id
 idFromActionValue_ = prelude_id_no fsFromActionValue_
+idFromForeignActionValue_, idBitsFromForeignActionValue_ :: Id
+idFromForeignActionValue_ = prelude_id_no fsFromForeignActionValue_
+idBitsFromForeignActionValue_ = prelude_id_no fsBitsFromForeignActionValue_
 idToActionValue_ = prelude_id_no fsToActionValue_
 idRules = prelude_id_no fsRules
 idSchedPragma = prelude_id_no fsSchedPragma

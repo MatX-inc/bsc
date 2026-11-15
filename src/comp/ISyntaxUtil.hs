@@ -158,6 +158,27 @@ getAVType :: IType -> Maybe IType
 getAVType (ITAp (ITCon i (IKFun IKStar IKStar) _) t) | i == idActionValue = Just t
 getAVType _ = Nothing
 
+-- The name to which the foreign function that a definition wraps is
+-- linked: the definition of an import "BDPI" (see tiExpr of CForeignFuncC
+-- in TCheck), or of a system task in the Prelude, is, under its lambdas,
+-- a call of the function, perhaps converted by one function (such as
+-- unpack or fromForeignActionValue_).  Nothing for any other definition.
+foreignWrapperLink :: IExpr a -> Maybe String
+foreignWrapperLink (ILAM _ _ e) = foreignWrapperLink e
+foreignWrapperLink (ILam _ _ e) = foreignWrapperLink e
+foreignWrapperLink e@(IAps _ _ es) =
+    case (foreignCallLink e, reverse es) of
+      (Just l, _) -> Just l
+      (Nothing, e_last : _) -> foreignCallLink e_last
+      (Nothing, []) -> Nothing
+foreignWrapperLink e = foreignCallLink e
+
+-- the link name of a foreign function, or of a call of one
+foreignCallLink :: IExpr a -> Maybe String
+foreignCallLink (ICon _ (ICForeign { fName = l })) = Just l
+foreignCallLink (IAps (ICon _ (ICForeign { fName = l })) _ _) = Just l
+foreignCallLink _ = Nothing
+
 itRules, itString, itChar, itHandle, itBufferMode, itFmt :: IType
 itRules = ITCon idRules IKStar tiRules
 itString = ITCon idString IKStar tiString

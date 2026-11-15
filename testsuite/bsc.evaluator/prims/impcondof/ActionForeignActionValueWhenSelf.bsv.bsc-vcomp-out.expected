@@ -1,0 +1,19 @@
+checking package dependencies
+compiling ActionForeignActionValueWhenSelf.bsv
+code generation for sysActionForeignActionValueWhenSelf starts
+Warning: "ActionForeignActionValueWhenSelf.bsv", line 25, column 31: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValueWhenSelf.bsv", line 24, column 9.
+  During elaboration of `sysActionForeignActionValueWhenSelf' at
+  "ActionForeignActionValueWhenSelf.bsv", line 4, column 8.
+Warning: "ActionForeignActionValueWhenSelf.bsv", line 26, column 31: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValueWhenSelf.bsv", line 24, column 9.
+  During elaboration of `sysActionForeignActionValueWhenSelf' at
+  "ActionForeignActionValueWhenSelf.bsv", line 4, column 8.
+Verilog file created: sysActionForeignActionValueWhenSelf.v
+All packages are up to date.

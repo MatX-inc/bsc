@@ -1,0 +1,11 @@
+checking package dependencies
+compiling BDPIActionValuePeekUnused.bsv
+Foreign import file created: my_count.ba
+Foreign import file created: my_flag.ba
+Foreign import file created: my_display.ba
+VPI wrapper files created: vpi_wrapper_my_count.{c,h}
+VPI wrapper files created: vpi_wrapper_my_flag.{c,h}
+VPI wrapper files created: vpi_wrapper_my_display.{c,h}
+code generation for mkBDPIActionValuePeekUnused starts
+Verilog file created: mkBDPIActionValuePeekUnused.v
+All packages are up to date.

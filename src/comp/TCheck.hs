@@ -885,8 +885,7 @@ tiExpr as td exp@(CForeignFuncC link_id wrap_cqt) = do
 
     -- functions for analyzing the argument and result type
     let isPrimArg t = (isTypeBit t) || (isTypeString t)
-        isPrimRes t = (isTypeBit t) ||
-                      (isTypePrimAction t) || (isTypeActionValue_ t)
+        isPrimRes t = (isTypeBit t) || (isTypePrimAction t)
 
     -- given a type, find its bit-size
     let findBitSize t = do
@@ -909,12 +908,17 @@ tiExpr as td exp@(CForeignFuncC link_id wrap_cqt) = do
                 -- return type cannot be a string
                 if (isTypeString resType)
                 then err (getPosition pos, EForeignFuncStringRes)
+                -- nor ActionValue_ (see tiExpl_1)
+                else if (isTypeActionValue_ resType)
+                then internalError ("tiExpr CForeignFuncC: ActionValue_: " ++
+                                    ppReadable link_id)
                 -- primitive types don't need conversion
                 else if (isPrimRes resType)
                 then return ([], resType, \e -> e)
-                -- convert ActionValue types
+                -- convert ActionValue types; each execution of the
+                -- ActionValue is a separate call of the function
                 else if (isTypeActionValue resType)
-                then do let cexpr = \e -> cVApply idFromActionValue_ [e]
+                then do let cexpr = \e -> cVApply idFromForeignActionValue_ [e]
                             av_arg = getActionValueArg resType
                         when (isTypeString av_arg) $
                             err (getPosition pos, EForeignFuncStringRes)
@@ -1555,8 +1559,9 @@ finishSWriteAV as td v f es paramResults eq_ps =
         -- but free in taskcqt does not imply free altogether (may be constrained externally)
         --                    [(CTaskApplyT (CVar task) taskcqt (map TVar (tv taskcqt)) es')])
 
-        -- insert fromActionValue_ so $swtriteAV & friends have type ActionValue
-        let av_exp = (cVApply (setIdPosition (getPosition f) idFromActionValue_)
+        -- insert fromForeignActionValue_ so $swriteAV & friends have type
+        -- ActionValue, each execution of which is a separate call of the task
+        let av_exp = (cVApply (setIdPosition (getPosition f) idFromForeignActionValue_)
                                   [(CTaskApplyT f taskty es')])
         --let action_exp = (CTaskApplyT f taskty es')
 
@@ -1596,7 +1601,7 @@ taskCheckFFlush as td f [file] =
 taskCheckFFlush as td f args = err (getPosition f, (EMissingFileArgument (ppReadable f) "File" "only" ))
 
 
--- Builds fromActionValue_ ( $fopen ( string {,string} ))
+-- Builds fromForeignActionValue_ ( $fopen ( string {,string} ))
 taskCheckFOpen :: TaskCheckT
 taskCheckFOpen as td f [filen] =
     do
@@ -1606,7 +1611,7 @@ taskCheckFOpen as td f [filen] =
           tav32 = TAp (tActionValue_At (getPosition f))  bit32
           fty = tString `fn` tav32
           applied = (CTaskApplyT f  fty    [filentc])
-      let t = cVApply (setIdPosition (getPosition f) idFromActionValue_) [applied]
+      let t = cVApply (setIdPosition (getPosition f) idFromForeignActionValue_) [applied]
       --
       unifyNoEq "taskCheckFOpen"  f td avfile
       (preds,exp) <- tiExpr as td t
@@ -1622,7 +1627,7 @@ taskCheckFOpen as td f [filen,mode] =
           tav32 = TAp (tActionValue_At (getPosition f))  bit32
           fty = tString `fn` tString `fn` tav32
           applied = (CTaskApplyT f  fty    [filentc,modetc])
-      let t = cVApply (setIdPosition (getPosition f) idFromActionValue_) [applied]
+      let t = cVApply (setIdPosition (getPosition f) idFromForeignActionValue_) [applied]
       --
       unifyNoEq "taskCheckFOpen" f td avfile
       (preds,exp) <- tiExpr as td t
@@ -2261,6 +2266,19 @@ tiExpl_1 as (i, cqt, alts, me) = do
     -- internal data structure for a qualified type.  This does
     -- some kind checking, etc.
     qt@(qs :=> t) <- mkQualType cqt
+
+    -- An imported function (import "BDPI") cannot return ActionValue_
+    -- (see chkTopDef for Cforeign in MakeSymTab); the error names the
+    -- function that the design declares, and the one it is linked to
+    case alts of
+      [CClause [] [] (CForeignFuncC link_id _)]
+        | isTypeActionValue_ res_t ->
+            err (getPosition i,
+                 EForeignActionValue_Res (pfpString (unQualId i))
+                                         (getIdString link_id)
+                                         (pfpString res_t))
+        where res_t = snd (getArrows (expandSyn t))
+      _ -> return ()
 
     -- We're going to generalize this type over the type variables,
     -- so figure out which ones are bound.

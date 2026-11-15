@@ -2,10 +2,12 @@ module FixupDefs(fixupDefs, updDef) where
 
 import Data.List(nub)
 import qualified Data.Map as M
+import qualified Data.Set as S
 import PFPrint
 import ErrorUtil(internalError)
 import Id
 import ISyntax
+import Pragma(foreignImportIds)
 import ISyntaxXRef(updateIExprPosition)
 import ISyntaxUtil(iDefsMap)
 --import Debug.Trace
@@ -36,11 +38,12 @@ fixupDefs (IPackage mi _ ps ds own_atf_cache) ipkgs =
         -- Create a recursive data structure by populating the map "m"
         -- with defs created using the map itself
         m = M.fromList [ (i, e) | (IDef i _ e _) <- ads' ]
-        ads' = iDefsMap (fixUp m) ads
+        ads' = iDefsMap (fixUp foreign_is m) ads
+        foreign_is = S.fromList (foreignImportIds ps')
 
         -- The new package contents
         ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _ _), s) <- ipkgs ]
-        ds' = iDefsMap (fixUp m) ds
+        ds' = iDefsMap (fixUp foreign_is m) ds
         -- Note that the package keeps only its own ATF cache entries, so
         -- that .bo files stay proportional to their own package.  The union
         -- with the imported packages' caches (for use during elaboration)
@@ -82,12 +85,19 @@ updDef d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
 
 -- ===============
 
-fixUp :: M.Map Id (IExpr a) -> IExpr a -> IExpr a
-fixUp m (ILam i t e) = ILam i t (fixUp m e)
-fixUp m (ILAM i k e) = ILAM i k (fixUp m e)
-fixUp m (IAps f ts es) = IAps (fixUp m f) ts (map (fixUp m) es)
-fixUp m (ICon i (ICDef t _)) = ICon i (ICDef t (get m i))
-fixUp m e = e
+-- A reference to a definition that imports a foreign function (one of fs)
+-- is marked, so that it keeps its position where a definition around it
+-- is inlined (see updateIExprPosition): IExpand reports a call of the
+-- function there.
+fixUp :: S.Set Id -> M.Map Id (IExpr a) -> IExpr a -> IExpr a
+fixUp fs m (ILam i t e) = ILam i t (fixUp fs m e)
+fixUp fs m (ILAM i k e) = ILAM i k (fixUp fs m e)
+fixUp fs m (IAps f ts es) = IAps (fixUp fs m f) ts (map (fixUp fs m) es)
+fixUp fs m (ICon i (ICDef t _)) =
+    let i_ref | S.member i fs = setForeignImportRefId i
+              | otherwise = i
+    in  ICon i_ref (ICDef t (get m i))
+fixUp fs m e = e
 
 get :: M.Map Id (IExpr a) -> Id -> IExpr a
 get m i = let value = get2 m i

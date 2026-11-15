@@ -1,0 +1,17 @@
+package ClassicActionValue_(sysClassicActionValue_) where
+
+-- A Classic foreign function cannot return ActionValue_ (ActionValue_ ()
+-- included): user code could make an ActionValue of the result with
+-- fromActionValue_, every execution of which would be the same call
+foreign my_fgetc :: Bit 32 -> ActionValue_ (Bit 32) = "$fgetc"
+foreign my_fclose :: Bit 32 -> ActionValue_ () = "$fclose"
+foreign my_c_count :: Bit 8 -> ActionValue_ (Bit 32) = "c_count"
+
+{-# verilog sysClassicActionValue_ #-}
+sysClassicActionValue_ :: Module Empty
+sysClassicActionValue_ =
+  module
+    rules
+      "r": when True ==> do
+        c :: Bit 32 <- fromActionValue_ (my_fgetc 0)
+        $display "%d" c

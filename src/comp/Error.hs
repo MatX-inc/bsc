@@ -16,6 +16,7 @@ module Error(
 
              -- errors, warnings, and messages
              ErrMsg(..),
+             ForeignCallMade(..),
              EMsg, WMsg,
              EMsgs(..),  -- a list of EMsg, to avoid overlapping instances
              bsWarningsAndErrors,
@@ -867,6 +868,10 @@ data ErrMsg =
             String -- ^ type
             Bool   -- ^ is type poly
         | EForeignFuncDuplicates String [(String,Position)]
+        | EForeignActionValue_Res
+            String -- ^ name of the function that the design declares
+            String -- ^ name it is linked to
+            String -- ^ result type
 
         | ENoInlineAction String
         | ENoInlineContext String
@@ -1002,6 +1007,12 @@ data ErrMsg =
         | WRuleAlwaysFalse String Bool
         | WRuleNoActions String Bool
         | WRuleUndetPred Bool String [Position]
+        | EForeignResultUsed
+            String          -- ^ name of the foreign function that is called
+            String          -- ^ name it is linked to
+            Position        -- ^ position of the call
+            String          -- ^ the part of the module that uses the result
+            ForeignCallMade -- ^ where the call is made
         | WMethodNeverReady String
         | WNoScheduleDump String [String]
 
@@ -1210,6 +1221,16 @@ data ErrMsg =
         | EConMismatchNumArgs  String{-String-}      Integer Integer
         | EPartialConMismatchNumArgs  String String{-String-}Integer Integer Integer
         deriving (Eq,Show)
+
+-- Where the call of a foreign function whose result is used outside the
+-- call's scope is made (see EForeignResultUsed): in another rule or method
+-- (named), in the user itself under other conditions (the user's kind,
+-- "rule" or "method"), or nowhere, with the position of the read that does
+-- not run the call, when it is known.
+data ForeignCallMade = ForeignCallMadeIn String
+                     | ForeignCallMadeHere String
+                     | ForeignCallNotMade (Maybe Position)
+        deriving (Eq, Show)
 
 instance PPrint ErrMsg where
     pPrint _ _ e = text (show e)
@@ -3015,6 +3036,22 @@ getErrorText (WTransitiveIncoherentMatch pred root_pred root_inst) =
             "depends on an incoherent match of " ++ root_pred ++
             " against instance " ++ root_inst))
 
+-- A foreign function (import "BDPI", or a Classic foreign function)
+-- cannot return ActionValue_ (ActionValue_ () included; the Prelude does
+-- not export its synonym Action_): a value of that type is one call,
+-- shared by every execution of an action made from it.  A result of type
+-- ActionValue or Action is made into an action that calls the function at
+-- each execution.
+getErrorText (EForeignActionValue_Res f link t) =
+    (Type 159, empty,
+     s2par ("The " ++ foreignCallName f link ++ " has result type " ++
+            ishow t ++ ".  A foreign function cannot return " ++
+            "ActionValue_: a value of that type is a single call of " ++
+            "the function, which every execution of an action made " ++
+            "from it would share.  Declare the result as ActionValue " ++
+            "or Action instead, and the function is called anew at " ++
+            "each execution."))
+
 -- Generation Errors
 
 getErrorText (EGenerate num s) =
@@ -3999,6 +4036,36 @@ getErrorText (WRuleUndetPred is_meth rule poss) =
               nest 4 (vcat (map (text . prPosition) poss))
     )
 
+-- The result of a foreign function call that returns ActionValue_ exists
+-- only in a cycle in which the call is made, so it can be used only by the
+-- rule or method that makes the call, under the conditions under which it
+-- is made (see IForeignResults).
+getErrorText (EForeignResultUsed f link call_pos user made) =
+    (Generate 129, empty,
+     s2par ("The result of the " ++ foreignCallName f link ++ " called" ++
+            atUsefulPosition call_pos ++ " is used by " ++ user ++
+            usedWhere made ++ "  Use the result only where the call is " ++
+            "made, or make the call in a rule that writes its result to " ++
+            "a register or FIFO, and read that instead."))
+  where usedWhere (ForeignCallMadeIn other) =
+            " outside the rule or method and the conditions under which " ++
+            "the call is made (it is made in " ++ other ++ ").  The " ++
+            "result exists only in a cycle in which the call is made."
+        usedWhere (ForeignCallMadeHere kind) =
+            " outside the conditions under which the call is made (it is " ++
+            "made in this " ++ kind ++ " under other conditions).  The " ++
+            "result exists only in a cycle in which the call is made."
+        usedWhere (ForeignCallNotMade (Just read_pos)) =
+            ", but the call is not made: the ActionValue that makes it is " ++
+            "read without running it at " ++ prPosition read_pos ++
+            " (for example by peekGet, mfix or impCondOf), so the result " ++
+            "does not exist."
+        usedWhere (ForeignCallNotMade Nothing) =
+            ", but the call is not made: its action is dropped where an " ++
+            "ActionValue that holds it is read without running it (for " ++
+            "example by peekGet, mfix or impCondOf), so the result does " ++
+            "not exist."
+
 
 ---------------------------------------------------------------------------
 ---------------------------------------------------------------------------
@@ -4530,6 +4597,24 @@ missingEndKeywordSuggestion :: Maybe String -> String
 missingEndKeywordSuggestion Nothing = ""
 missingEndKeywordSuggestion (Just kw) =
     ".  Perhaps " ++ quote kw ++ " is missing?"
+
+-- " at" a position in the design; nothing for a position in a library
+atUsefulPosition :: Position -> String
+atUsefulPosition p
+    | usablePosition p = " at " ++ prPosition p
+    | otherwise = ""
+
+-- The foreign function that the design calls, and the name it is linked
+-- to when that differs (as in T0091): a Verilog system task ($time) or
+-- another (such as a C function)
+foreignCallName :: String -> String -> String
+foreignCallName f link
+    | f == link = linkedName link
+    | otherwise = "foreign function " ++ quote f ++ " (" ++ linkedTo link ++ ")"
+  where linkedName l@('$':_) = "system task " ++ quote l
+        linkedName l = "foreign function " ++ quote l
+        linkedTo l@('$':_) = "the system task " ++ quote l
+        linkedTo l = "imported from " ++ quote l
 
 -- -----
 

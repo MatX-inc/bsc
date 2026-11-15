@@ -1,0 +1,5 @@
+checking package dependencies
+compiling DynSelTime.bsv
+code generation for sysDynSelTime starts
+Verilog file created: sysDynSelTime.v
+All packages are up to date.

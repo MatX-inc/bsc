@@ -1,0 +1,11 @@
+checking package dependencies
+compiling BDPIActionValuePeekTwice.bsv
+code generation for mkBDPIActionValuePeekTwice starts
+Error: "BDPIActionValuePeekTwice.bsv", line 13, column 9: (G0129)
+  The result of the foreign function `my_count' called at
+  "BDPIActionValuePeekTwice.bsv", line 8, column 29 is used by rule `go', but
+  the call is not made: the ActionValue that makes it is read without running
+  it at "BDPIActionValuePeekTwice.bsv", line 14, column 13 (for example by
+  peekGet, mfix or impCondOf), so the result does not exist. Use the result
+  only where the call is made, or make the call in a rule that writes its
+  result to a register or FIFO, and read that instead.

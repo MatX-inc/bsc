@@ -1,0 +1,19 @@
+checking package dependencies
+compiling ActionForeignActionValueWhen.bsv
+code generation for sysActionForeignActionValueWhen starts
+Warning: "ActionForeignActionValueWhen.bsv", line 16, column 31: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValueWhen.bsv", line 15, column 9.
+  During elaboration of `sysActionForeignActionValueWhen' at
+  "ActionForeignActionValueWhen.bsv", line 4, column 8.
+Error: "ActionForeignActionValueWhen.bsv", line 12, column 10: (G0122)
+  The function `when' is being applied to an expression that cannot be lifted
+  to a rule/method condition, either because it contains the result of an
+  ActionValue call or because it is in a method and refers to a method
+  argument.
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValueWhen.bsv", line 15, column 9.
+  During elaboration of `sysActionForeignActionValueWhen' at
+  "ActionForeignActionValueWhen.bsv", line 4, column 8.

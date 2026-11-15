@@ -1,0 +1,18 @@
+checking package dependencies
+compiling ActionForeignActionValueSplitIfGuard.bsv
+code generation for sysActionForeignActionValueSplitIfGuard starts
+Warning: "ActionForeignActionValueSplitIfGuard.bsv", line 25, column 12: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the explicit condition of rule `q' at
+  "ActionForeignActionValueSplitIfGuard.bsv", line 25, column 9.
+  During elaboration of `sysActionForeignActionValueSplitIfGuard' at
+  "ActionForeignActionValueSplitIfGuard.bsv", line 4, column 8.
+Error: "ActionForeignActionValueSplitIfGuard.bsv", line 25, column 9: (G0129)
+  The result of the system task `$fgetc' called at
+  "ActionForeignActionValueSplitIfGuard.bsv", line 19, column 30 is used by
+  the condition of rule `q' outside the rule or method and the conditions
+  under which the call is made (it is made in rule `q'). The result exists
+  only in a cycle in which the call is made. Use the result only where the
+  call is made, or make the call in a rule that writes its result to a
+  register or FIFO, and read that instead.

@@ -50,15 +50,16 @@ import IdPrint
 import IntLit
 import Undefined
 import FStringCompat
-import PreStrings(fsUnderscore)
+import PreStrings(fsUnderscore, fsPrelude)
 import PreIds
 import Flags
 import SymTab(SymTab)
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle,
-             recordHandleOpen, recordHandleClose)
+             recordHandleOpen, recordHandleClose, bsError)
 import Position
 import Id
 import Backend
+import IForeignResults(checkForeignResults)
 import Prim
 import IPrims(doPrimOp)
 import CSyntax
@@ -371,6 +372,12 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
                      (go_ffcallNo go) comments_map
       -- if preserving method conditions, then remove the book-keeping info
       imod = removeInlinedPositions flags imod0
+
+  -- the uses of the results of foreign function calls, in the module as
+  -- the evaluator leaves it, before any other pass
+  let foreign_errs = checkForeignResults (go_foreignCalls go)
+                                         (go_methodPositions go) imod
+  when (not (null foreign_errs)) $ bsError errh foreign_errs
 
   --let traceMethodPred (IDef i _ p props) =
   --        traceM ("Def: " ++ ppReadable (i, getPosition i, getIdProps i, p, props))
@@ -1092,12 +1099,15 @@ iExpandField modId implicitCond clkRst (i, bi, e, t) | isRdyId i =
 iExpandField modId implicitCond clkRst (i, bi, e, t) = do
    showTopProgress ("Elaborating method " ++ quote (pfpString i))
    setIfcSchedNameScopeProgress (Just (IEP_Method i False))
-   (_, P p e') <- evalUH e
-   let (ins, outs, eb) = case e' of
-        ICon _ (ICMethod _ ins outs eb) -> (ins, outs, eb)
-        _ -> internalError ("iExpandField: expected ICMethod: " ++ ppReadable e')
-   (its, ((IDef i1 t1 e1 _), ws1, fi1), ((IDef wi wt we _), ws2, fi2))
-       <- iExpandMethod modId 1 [] (pConj implicitCond p) clkRst (i, bi, ins, outs, eb)
+   -- (the position of the method's definition, for checkForeignResults)
+   ((its, ((IDef i1 t1 e1 _), ws1, fi1), ((IDef wi wt we _), ws2, fi2)), def_pos)
+       <- findMethodDefPosition $ do
+            (_, P p e') <- evalUH e
+            let (ins, outs, eb) = case e' of
+                 ICon _ (ICMethod _ ins outs eb) -> (ins, outs, eb)
+                 _ -> internalError ("iExpandField: expected ICMethod: " ++ ppReadable e')
+            iExpandMethod modId 1 [] (pConj implicitCond p) clkRst (i, bi, ins, outs, eb)
+   addMethodPosition [i1, wi] def_pos
    let wp1 = wsToProps ws1 -- default clock domain forced in by iExpandField
    let wp2 = wsToProps ws2
    setIfcSchedNameScopeProgress Nothing
@@ -3073,7 +3083,33 @@ evalDef i t e as = do
   -- recurse into evaluating e
   step i
   e' <- cacheDef i t e
-  evalAp "ICDef" e' as
+  as' <- callPositionArgs as
+  -- a definition that cacheDef heaps is evaluated once, for every
+  -- reference (see withoutCallSite); applying its value to arguments is
+  -- this call
+  case e' of
+    IRefT t' ptr _ ref | not (null as') -> do
+      P p v <- withoutCallSite $ evalHeap (ptr, ref)
+      withCallSite i $ evalAp "ICDef" (iePrimWhenPred t' p v) as'
+    IRefT {} -> withoutCallSite $ evalAp "ICDef" e' as'
+    _ -> withCallSite i $ evalAp "ICDef" e' as'
+
+-- The arguments of a call, made where the call is: an argument
+-- primWithCallPosition e with no position in the design takes the call
+-- position there, as toHeap gives it where it puts the argument on the
+-- heap, before the call is pushed (see withCallSite).
+callPositionArgs :: [Arg] -> G [Arg]
+callPositionArgs as
+    | any unstamped as = do
+        pos <- getCallPosition
+        return (if usablePosition pos then map (stamp pos) as else as)
+    | otherwise = return as
+  where unstamped (E (IAps (ICon i (ICPrim _ PrimWithCallPosition)) _ _)) =
+            not (usablePosition (getIdPosition i))
+        unstamped _ = False
+        stamp pos a@(E (IAps (ICon i ic) ts es))
+            | unstamped a = E (IAps (ICon (setIdPosition pos i) ic) ts es)
+        stamp _ a = a
 
 -- evaluate a function application
 -- [arg] is a stack of application arguments on the left spine of the expression
@@ -3365,7 +3401,9 @@ conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
               toHeapArg a = return a
           as'' <- mapM toHeapArg as'
 -}
-          evalStaticOp' True True False e resType (doSel sel c tys ty n as')
+          -- (a method selected in the design is a call, see withCallSite)
+          withCallSite c $
+              evalStaticOp' True True False e resType (doSel sel c tys ty n as')
       _ -> internalError ("conAp': ICSel: " ++ ppReadable (mkAp sel as))
 
 -- constructors are non-strict
@@ -4215,11 +4253,178 @@ conAp' i (ICPrim _ PrimArrayDynUpdate) f
       internalError ("conAp' PrimArrayDynUpdate: " ++ ppReadable as')
   bldApUH' "DynUpd" f as
 
+-- primPeekWorld () and primCondWorld () are the worlds in which __value
+-- (peekGet, mfix) and primDeepSeqCond (impCondOf) apply the function of an
+-- ActionValue without running it (see primMarkForeignCall).  Each
+-- evaluates to itself, an application, as ActionWorld () evaluates to an
+-- application of PrimChr, so that an ActionValue that makes no foreign
+-- call is elaborated as in ActionWorld.  The peek world records where the
+-- read is: the call position, which __value sets with primWithCallPosition
+-- (below).
+conAp' i ic@(ICPrim _ PrimPeekWorld) _ [E a] = do
+  noteNotRunWorld
+  pos <- if usablePosition (getIdPosition i)
+         then return (getIdPosition i)
+         else getCallPosition
+  bldAp' "PrimPeekWorld" (ICon (setIdPosition pos i) ic) [E a]
+conAp' _ (ICPrim _ PrimCondWorld) f as@[E _] = do
+  noteNotRunWorld
+  bldAp' "PrimCondWorld" f as
+
+-- primWithCallPosition e is e, evaluated with the position of the Id as
+-- the call position.  Where the Id has no position in the design, it gets
+-- the call position where e is made: from toHeap when e is put on the
+-- heap, and from callPositionArgs (in evalDef) when e is an argument of a
+-- call of a definition, such as the function that mfix applies.
+conAp' i (ICPrim _ PrimWithCallPosition) _ (T _ : E e : as) =
+  withCallSite i $ evalAp "PrimWithCallPosition" e as
+
+-- primMarkForeignCall call av_ world, inside the world lambda of
+-- bitsFromForeignActionValue_, is one application of an ActionValue made
+-- from av_, a foreign function call that returns ActionValue_, which the
+-- design makes at call (see PrimForeignCallName).  Each application is an
+-- execution of the call, with its own cookie, by which AConv pairs the
+-- value and the action of the call.  The call itself is evaluated once,
+-- shared by every application, and tagged with a cookie when it is
+-- evaluated.  The world decides the execution (see worldHead):
+--  * the world of primPeekWorld (__value: peekGet, mfix): the call is not
+--    made, so it is not evaluated and its arguments are not demanded.  Its
+--    action is no action, and its value is the value side of the call with
+--    a fresh cookie and no arguments, which no action in the module makes.
+--  * the world of primCondWorld (primDeepSeqCond: impCondOf): the same,
+--    except that the implicit condition of the call's arguments (buried in
+--    their cells) is collected.
+--  * any other world (ActionWorld, an undetermined world, or a choice of
+--    worlds): the call is made.  The execution in which the call is
+--    evaluated keeps the cookie of that evaluation (it was minted after
+--    this execution began), so a call that runs once is numbered as an
+--    unmarked call would be (bsc.names/signal_names TaskValue dumps the
+--    numbers); every other execution gets a fresh cookie.  Its action can
+--    still be dropped, as by __value in a choice of worlds.
+-- Every execution is recorded by its cookie, and checkForeignResults
+-- reports a use of a value where its call is not made.  A result of no
+-- bits has nothing to use, and is a constant when the call is not made.
+-- A conditional av_ is handled in each arm; any other ActionValue_ (a
+-- method call) is the same at every execution and is returned unchanged.
+conAp' i (ICPrim prim_t PrimMarkForeignCall) _ [T t, E call_e, E av_, E world] = do
+  any_nrw <- anyNotRunWorld
+  call_world <- if any_nrw then worldHead world else return RunWorld
+  res_t <- dropArrows 3 <$> instFunType prim_t [t]
+  let (av_con, val_t) =
+          case res_t of
+            ITAp c vt -> (c, vt)
+            _ -> internalError ("conAp' PrimMarkForeignCall: type: " ++
+                                ppReadable res_t)
+      v = take1tmpVarIds
+      con_t = ITForAll v IKStar
+                (ITVar v `itFun` itAction `itFun` ITAp av_con (ITVar v))
+      con = ICon idActionValue_ (ICTuple con_t [idAVValue_, idAVAction_])
+      sel_t = ITForAll v IKStar (ITAp av_con (ITVar v) `itFun` ITVar v)
+      sel_value = ICon idAVValue_ (ICSel { iConType = sel_t, selNo = 0,
+                                           numSel = 2 })
+      -- The call in the design: the name the design calls and the name
+      -- the function is linked to, and the position of the call, or, when
+      -- the ActionValue was made where no call in the design was being
+      -- evaluated, the declaration of an imported function (a system task
+      -- is declared in the Prelude).  The design calls the definition at
+      -- the call when that wraps the function (an import "BDPI" or a
+      -- system task in the Prelude), and otherwise the function itself
+      -- (the system task, for a Prelude name).
+      noteCall :: Integer -> Id -> IConInfo HeapData -> CallKind -> G ()
+      noteCall n fi fc kind = do
+          call_i <- evalName call_e
+          defs <- getDefEnv
+          let link = fName fc
+              call_pos = getIdPosition call_i
+              pos | usablePosition call_pos = call_pos
+                  | isC fc = getIdPosition fi
+                  | otherwise = noPosition
+              name | Just d <- M.lookup call_i defs,
+                     foreignWrapperLink d == Just link = getIdBaseString call_i
+                   | getIdQual fi == fsPrelude = link
+                   | otherwise = getIdBaseString fi
+          noteForeignCall n (CallInfo name link pos kind)
+      -- the call, not made: no action, and the value side of the call
+      -- with a fresh cookie (or a constant for a result of no bits)
+      notMade :: CallKind -> HPred -> Id -> IConInfo HeapData -> G PExpr
+      notMade kind p fi fc
+          | val_t == itPrimUnit =
+              let unit = ICon idPrimUnit (ICTuple { iConType = itPrimUnit,
+                                                    fieldIds = [] })
+              in  made unit
+          | isEmptyType val_t = made (iMkLit val_t 0)
+          | otherwise = do
+              n <- toInteger <$> newFFCallNo
+              noteCall n fi fc kind
+              made (IAps sel_value [val_t]
+                         [ICon fi (fc { iConType = res_t, fcallNo = Just n })])
+        where made val = return (P p (IAps con [val_t] [val, icNoActions]))
+      peekCall :: Position -> HPred -> Id -> IConInfo HeapData -> (HExpr -> HExpr) ->
+                  G PExpr
+      peekCall read_pos p fi fc _ = notMade (CKPeek read_pos) p fi fc
+      condCall :: HPred -> Id -> IConInfo HeapData -> (HExpr -> HExpr) -> G PExpr
+      condCall p fi fc mk = do
+          p_buried <- getBuriedPreds (mk (ICon fi fc))
+          notMade CKCond (pConj p p_buried) fi fc
+      runCall :: Int -> HPred -> Id -> IConInfo HeapData -> (HExpr -> HExpr) ->
+                 G PExpr
+      runCall first_new p fi fc mk = do
+          n <- case fcallNo fc of
+                 Just n | n >= toInteger first_new -> return n
+                 Just _ -> toInteger <$> newFFCallNo
+                 Nothing -> internalError ("conAp' PrimMarkForeignCall: untagged call: " ++
+                                           ppReadable (mk (ICon fi fc)))
+          noteCall n fi fc (CKRan (if any_nrw then Just world else Nothing))
+          addPredG p $ return (pExpr (mk (ICon fi (fc { fcallNo = Just n }))))
+      markCall :: (HPred -> Id -> IConInfo HeapData -> (HExpr -> HExpr) -> G PExpr) ->
+                  HExpr -> (HPred, HExpr) -> G PExpr
+      markCall onCall _ (p, IAps (ICon fi fc@(ICForeign { })) ts es) =
+          onCall p fi fc (\ c -> IAps c ts es)
+      markCall onCall _ (p, ICon fi fc@(ICForeign { })) = onCall p fi fc id
+      -- not a foreign call: keep the evaluated reference (its cell holds
+      -- the implicit condition)
+      markCall _ e _ = return (pExpr e)
+  case call_world of
+    PeekWorld read_pos -> do
+      -- find the function without evaluating the call; a call that is not
+      -- direct (such as a choice between two calls) has to be evaluated
+      m_call <- foreignCallHead av_
+      case m_call of
+        Just (fi, fc) -> peekCall read_pos pTrue fi fc id
+        Nothing -> evalStaticOp' True True False av_ res_t
+                       (markCall (peekCall read_pos))
+    CondWorld ->
+      evalStaticOp' True True False av_ res_t (markCall condCall)
+    RunWorld -> do
+      first_new <- nextFFCallNo
+      evalStaticOp' True True False av_ res_t (markCall (runCall first_new))
+
+conAp' _ (ICPrim _ PrimMarkForeignCall) f as =
+  internalError ("conAp' PrimMarkForeignCall: " ++ ppReadable (mkAp f as))
+
+-- primForeignCallName av_ is the call in the design that is being evaluated
+-- (see withCallSite): the Id called, at the position of the call.  Of
+-- calls at the same position (a function and those its definition calls
+-- there, such as fromForeignActionValue_ in an import "BDPI", which
+-- FixupDefs gives the position of the reference), it is the outermost,
+-- which the design names.  bitsFromForeignActionValue_ applies it where it
+-- makes an ActionValue of av_, when the design makes the call; av_ (the
+-- call) is not evaluated.
+conAp' i (ICPrim _ PrimForeignCallName) _ [T _, E _] = do
+  sites <- getCallSites
+  let site = case sites of
+               (j : js) -> let at_j k = getIdPosition k == getIdPosition j
+                           in  fromMaybe j (listToMaybe (reverse (takeWhile at_j js)))
+               [] -> dummyId noPosition
+  return (pExpr (iMkName i site))
+
 -- assuming any remaining primitives are non-strict
 conAp' _ ic@(ICPrim { }) f as = do
   bldAp' "ICPrim" f as
 
 -- tag each distinct foreign function call with its generated cookie
+-- (primMarkForeignCall, above, gives a fresh one to every execution of a
+-- call that returns ActionValue_ but the one in which it is evaluated)
 -- foreign function calls should be strict
 conAp' i fc@(ICForeign { fcallNo = Nothing }) f as = do
   n' <- newFFCallNo
@@ -4336,6 +4541,49 @@ getBuriedPreds e@(ICon _ _) = do
 getBuriedPreds e = do
   --traceM("getBuriedPreds: other: e = " ++ ppReadable e ++ show e)
   return pTrue
+
+-----------------------------------------------------------------------------
+
+-- Reading an ActionValue without running it (primPeekWorld, primCondWorld
+-- and primMarkForeignCall in conAp')
+
+-- The world that the function of an ActionValue is applied to (see
+-- primMarkForeignCall): the world of primPeekWorld (with the position of
+-- the read), that of primCondWorld, or any other.
+data CallWorld = RunWorld | PeekWorld Position | CondWorld
+
+-- The world of an expression, by its head alone, through the bookkeeping
+-- around it (primSetSelPosition under -keep-method-conds).  A choice of
+-- worlds (after an action that is chosen dynamically, bind passes the
+-- world after each alternative) and an undetermined world are any other
+-- world: the call is made there, and its action is in the module unless
+-- the choice is inside a read that drops it, which checkForeignResults
+-- then finds.
+worldHead :: HExpr -> G CallWorld
+worldHead w = do
+  P _ w' <- eval1 w >>= unheap
+  case w' of
+    IAps (ICon wi (ICPrim _ PrimPeekWorld)) _ _ ->
+        return (PeekWorld (getIdPosition wi))
+    IAps (ICon _ (ICPrim _ PrimCondWorld)) _ _ -> return CondWorld
+    IAps (ICon _ (ICPrim _ PrimSetSelPosition)) _ [_, w''] -> worldHead w''
+    _ -> return RunWorld
+
+-- The foreign function that an ActionValue_ expression calls, found
+-- without evaluating the call (which would evaluate its arguments):
+-- through heap references to an application of the function, evaluated
+-- or not.  Nothing for anything else, such as a choice between calls.
+foreignCallHead :: HExpr -> G (Maybe (Id, IConInfo HeapData))
+foreignCallHead (ICon fi fc@(ICForeign { })) = return (Just (fi, fc))
+foreignCallHead (IAps (ICon fi fc@(ICForeign { })) _ _) = return (Just (fi, fc))
+foreignCallHead (IRefT _ _ _ r) = do
+  cell <- getHeap r
+  case cell of
+    HUnev { hc_hexpr = e } -> foreignCallHead e
+    HWHNF { hc_pexpr = P _ e } -> foreignCallHead e
+    HNF { hc_pexpr = P _ e } -> foreignCallHead e
+    HLoop { } -> return Nothing
+foreignCallHead _ = return Nothing
 
 {-
 -- Quick utility for printing the refs in an HPred or HExpr,
@@ -5028,11 +5276,22 @@ doSel :: HExpr -> Id -> [IType] -> IType -> Integer -> [Arg] ->
 doSel sel s tys ty n as ee (p, e) =
     case e of
         -- (e1,...en).k  -->  ek
-        IAps (ICon id (ICTuple ictup_ty _)) _ es -> do
+        IAps (ICon id (ICTuple ictup_ty fids)) _ es -> do
             let tupleError id = internalError $ "indexing `" ++ show id ++ "' out of bounds; do you need to recompile dependencies?"
                 index xs i id = if length xs > i then xs!!i else tupleError id
+            -- the definition of a method selected from an interface, or
+            -- of the subinterface that holds it (see findMethodDefPosition)
+            let isIfc t = case leftmost t of
+                            ITCon _ _ (TIstruct (SInterface _) _) -> True
+                            _ -> False
+                ifc_field
+                    | isIfc (snd (itGetArrows (dropForAll ictup_ty))) =
+                        Just (not (isIfc ty))
+                    | otherwise = Nothing
+                atField = noteMethodDefPosition ifc_field
+                              (index fids (fromInteger n) id)
             let field_e = index es (fromInteger n) id
-                dflt_res = addPredG p $ evalAp "sel k" field_e as
+                dflt_res = atField $ addPredG p $ evalAp "sel k" field_e as
             -- if method conditions are not being preserved,
             -- just return the default result
             flags <- getFlags
@@ -5064,7 +5323,7 @@ doSel sel s tys ty n as ee (p, e) =
                         poss_e = iMkPositions poss
                         args = (T ty : E poss_e : E field_e : as)
                     --traceM("doSel IFC: " ++ ppReadable s)
-                    addPredG p $ evalAp "sel k ifc" icon args
+                    atField $ addPredG p $ evalAp "sel k ifc" icon args
 
         -- XXX evalStaticOp can't do this for us because of "as"
         -- _.s  -->  _

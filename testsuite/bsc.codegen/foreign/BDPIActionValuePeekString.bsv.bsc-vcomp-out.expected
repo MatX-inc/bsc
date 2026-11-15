@@ -1,0 +1,12 @@
+checking package dependencies
+compiling BDPIActionValuePeekString.bsv
+code generation for mkBDPIActionValuePeekString starts
+Error: "BDPIActionValuePeekString.bsv", line 11, column 33: (G0013)
+  Compile time expression did not evaluate:
+  Type: Prelude.Position__
+  PrimIf ·Prelude.Position__ (PrimEQ ·32 (.Prelude.avValue_ ·(Prelude.Bit 32) my_count#0) 0) _ _
+
+  During elaboration of `messageM' at "BDPIActionValuePeekString.bsv", line
+  12, column 4.
+  During elaboration of `mkBDPIActionValuePeekString' at
+  "BDPIActionValuePeekString.bsv", line 5, column 8.

@@ -1,0 +1,12 @@
+checking package dependencies
+compiling BDPIActionValuePeekStatic.bsv
+code generation for mkBDPIActionValuePeekStatic starts
+Error: "BDPIActionValueImport.bsv", line 5, column 47: (G0013)
+  Compile time expression did not evaluate:
+  Type: Prelude.Bit 32
+  .Prelude.avValue_ ·(Prelude.Bit 32) my_count#0
+
+  During elaboration of the body of rule `go' at
+  "BDPIActionValuePeekStatic.bsv", line 12, column 9.
+  During elaboration of `mkBDPIActionValuePeekStatic' at
+  "BDPIActionValuePeekStatic.bsv", line 5, column 8.

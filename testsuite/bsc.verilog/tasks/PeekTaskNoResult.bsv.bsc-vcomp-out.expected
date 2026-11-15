@@ -1,0 +1,5 @@
+checking package dependencies
+compiling PeekTaskNoResult.bsv
+code generation for sysPeekTaskNoResult starts
+Verilog file created: sysPeekTaskNoResult.v
+All packages are up to date.

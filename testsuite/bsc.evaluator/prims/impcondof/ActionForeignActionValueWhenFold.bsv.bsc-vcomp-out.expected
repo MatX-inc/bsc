@@ -1,0 +1,12 @@
+checking package dependencies
+compiling ActionForeignActionValueWhenFold.bsv
+code generation for sysActionForeignActionValueWhenFold starts
+Warning: "ActionForeignActionValueWhenFold.bsv", line 19, column 31: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValueWhenFold.bsv", line 18, column 9.
+  During elaboration of `sysActionForeignActionValueWhenFold' at
+  "ActionForeignActionValueWhenFold.bsv", line 4, column 8.
+Verilog file created: sysActionForeignActionValueWhenFold.v
+All packages are up to date.

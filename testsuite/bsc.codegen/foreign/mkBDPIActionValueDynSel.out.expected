@@ -1,0 +1,8 @@
+enq 0 1
+enq 1 2
+enq 2 3
+enq 3 4
+deq 0 0 14
+deq 1 1 24
+deq 2 2 34
+deq 3 3 44

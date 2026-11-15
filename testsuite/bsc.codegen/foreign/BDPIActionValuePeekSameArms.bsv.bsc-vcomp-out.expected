@@ -1,0 +1,5 @@
+checking package dependencies
+compiling BDPIActionValuePeekSameArms.bsv
+code generation for mkBDPIActionValuePeekSameArms starts
+Verilog file created: mkBDPIActionValuePeekSameArms.v
+All packages are up to date.

@@ -1,0 +1,5 @@
+checking package dependencies
+compiling BDPIActionValuePrunedArm.bsv
+code generation for mkBDPIActionValuePrunedArm starts
+Verilog file created: mkBDPIActionValuePrunedArm.v
+All packages are up to date.

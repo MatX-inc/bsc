@@ -1,0 +1,12 @@
+checking package dependencies
+compiling BDPIActionValuePeekWhen.bsv
+code generation for mkBDPIActionValuePeekWhen starts
+Error: "BDPIActionValuePeekWhen.bsv", line 13, column 32: (G0122)
+  The function `when' is being applied to an expression that cannot be lifted
+  to a rule/method condition, either because it contains the result of an
+  ActionValue call or because it is in a method and refers to a method
+  argument.
+  During elaboration of the body of rule `go' at
+  "BDPIActionValuePeekWhen.bsv", line 17, column 9.
+  During elaboration of `mkBDPIActionValuePeekWhen' at
+  "BDPIActionValuePeekWhen.bsv", line 5, column 8.

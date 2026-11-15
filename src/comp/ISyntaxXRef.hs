@@ -23,6 +23,9 @@ updateIExprPosition pos (IAps e ts es) = (IAps (updateIExprPosition pos e) ts es
 updateIExprPosition pos (IVar i) = (IVar (setIdPosition pos i))
 updateIExprPosition pos (ILAM i kind e) = (ILAM (setIdPosition pos i) kind (updateIExprPosition pos e))
 updateIExprPosition pos iexpr@(ICon i (ICStateVar t isv)) = iexpr
+-- a reference to a foreign function's definition keeps its own position,
+-- where IExpand reports a call of the function (see FixupDefs)
+updateIExprPosition pos iexpr@(ICon i _) | isForeignImportRefId i = iexpr
 updateIExprPosition pos (ICon i info) = (ICon (setIdPosition pos i) info)
 updateIExprPosition pos (IRefT t p poss r) = (IRefT (updateITypePosition pos t) p poss' r)
   where poss' = S.insert pos poss

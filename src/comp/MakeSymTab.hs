@@ -691,10 +691,17 @@ chkTopDef r mi src_pkg isDep (Cforeign i qt on ops ni) = do
                 Nothing -> getIdString i
         -- We accept functions whose arguments are bits/string and whose
         -- return result is either bits/string or is a
-        -- primitive action/actionvalue
+        -- primitive action/actionvalue, or, for a function that is not
+        -- bound to a module, an ActionValue of bits or an Action (which
+        -- IConv.iConvVar makes into an action that calls the function at
+        -- each execution)
         isGoodResult :: CType -> Bool
         isGoodResult t = (isTypeBit t) || (isTypeString t) ||
-                         (isTypeActionValue_ t) || (isTypePrimAction t)
+                         (isTypeActionValue_ t) || (isTypePrimAction t) ||
+                         (isNothing ops && isActionValueOfBits t)
+        isActionValueOfBits t =
+            isTypeActionValue t &&
+            (let a = getActionValueArg t in isTypeBit a || isTypeUnit a)
 
         isGoodArg :: CType -> Bool
         isGoodArg t = (isTypeBit t) || (isTypeString t)
@@ -703,6 +710,22 @@ chkTopDef r mi src_pkg isDep (Cforeign i qt on ops ni) = do
         isGoodType t = let (args, res) = getArrows t
                        in  (all isGoodArg args) && (isGoodResult res)
 
+    -- For a function not bound to a module, a result of type ActionValue_
+    -- is one call of the function, which every execution of an action made
+    -- from it would share; the declaration must return ActionValue or
+    -- Action instead (see isGoodResult).  The Prelude declares such
+    -- functions for the system tasks, and wraps every use of one (itself,
+    -- or through TCheck).  Only the package being compiled is checked (mi
+    -- is Nothing for the signatures of imported packages, see addImpSyms).
+    let (_, foreign_res_t) = getArrows (expandSyn t)
+        -- the result type as declared, for the message
+        CQType _ declared_t = qt
+        (_, declared_res_t) = getArrows declared_t
+    when (not ni && isNothing ops && isJust mi && mi /= Just idPrelude &&
+          isTypeActionValue_ foreign_res_t) $
+      throwError (getPosition i,
+                  EForeignActionValue_Res (pfpString i) name
+                                          (pfpString declared_res_t))
     let i' = qual mi i
     -- This check is skipped for noinline-created foreign functions, since their type is
     -- determined by the WrapField type class, and a bad foreign type will raise an error in typecheck.

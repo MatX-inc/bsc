@@ -5,7 +5,7 @@ module IConv(
             ) where
 
 import Data.List(union, findIndex)
-import Data.Maybe(catMaybes)
+import Data.Maybe(catMaybes, isNothing)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.List as List
@@ -30,8 +30,9 @@ import Scheme
 import Assump
 import Pred
 import SymTab
-import Type(tPrimPair, tBit, HasKind(..))
-import CType(cTVarKind, typeclassId, cTVarNum)
+import Type(tPrimPair, tBit, tActionValue_, HasKind(..))
+import CType(cTVarKind, typeclassId, cTVarNum, getArrows,
+             isTypeActionValue, getActionValueArg)
 import TIMonad(CATFCache)
 import VModInfo(mkVModInfo, VName(..), VFieldInfo(..))
 import Type(tString, fn, tName, tAttributes)
@@ -41,7 +42,7 @@ import ISyntaxSubst
 import ISyntaxUtil
 import Undefined
 import Prim
-import Pragma(CSchedulePragma, Pragma(..))
+import Pragma(CSchedulePragma, Pragma(..), foreignImportIds)
 import IConvLet(docycles, reorderDs, unpoly)
 
 -- import Debug.Trace
@@ -57,7 +58,14 @@ iConvPackage :: ErrorHandle -> Flags -> SymTab ->
 iConvPackage errh flags r ctypeATFCache (CPackage pi _ _ _ _ ds _) =
     return (IPackage pi [] ps ds' itypeATFCache)
   where ds' = concatMap (iConvD errh flags pi r env pvs) ds
-        env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds'])
+        -- A definition that imports a foreign function is left out, so
+        -- that a reference to it is converted as a reference to a
+        -- definition in another package is (iConvVar), with its own
+        -- position, where IExpand reports a call of the function;
+        -- FixupDefs gives it the definition.
+        env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds',
+                                                     not (S.member i foreign_is)])
+        foreign_is = S.fromList (foreignImportIds ps)
         pvs = map IVar tmpVarIds
         ps = [ qualP p | CPragma p <- ds ]
         qualP (Pproperties i ps) = Pproperties (qualId pi i) ps
@@ -68,8 +76,11 @@ iConvPackage errh flags r ctypeATFCache (CPackage pi _ _ _ _ ds _) =
 
 
 iConvDef :: ErrorHandle -> Flags -> SymTab -> IPackage a -> CDefn -> IDef a
-iConvDef errh flags r (IPackage pi _ _ ds _) def =
-    let env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds])
+iConvDef errh flags r (IPackage pi _ ps ds _) def =
+    let -- (see iConvPackage)
+        foreign_is = S.fromList (foreignImportIds ps)
+        env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds,
+                                                     not (S.member i foreign_is)])
         pvs = map IVar tmpVarIds
     in  case iConvD errh flags pi r env pvs def of
         [d] -> d
@@ -86,6 +97,7 @@ iConvVar flags r env i =
                 Just (VarInfo VarPrim (_ :>: sc) _ _) -> ICon i (ICPrim (iConvSc flags r sc) (toPrim i))
                 Just (VarInfo (VarForg name mps) (_ :>: sc) _ _) ->
                         let t = iConvSc flags r sc
+                            Forall ks (ps :=> qt) = sc
                             -- inputs are grouped per argument;
                             -- foreign functions have one (unsplit) port per argument,
                             -- so each inner list is a singleton.
@@ -101,7 +113,15 @@ iConvVar flags r env i =
                                 addSizes is ops ([(i, n)]:ins) r
                             addSizes [] ops ins t = (reverse ins, zip ops (bitTupleSizes t))
                             addSizes is ops ins t = internalError ("addSizes mismatch: " ++ ppReadable (is, ops, ins, t))
-                        in  ICon i (ICForeign t name False ops' Nothing)
+                            av_sc | null ps && isNothing mps =
+                                      foreignActionValueType ks qt
+                                  | otherwise = Nothing
+                        in  case av_sc of
+                              Just sc_prim ->
+                                  foreignActionValueRef flags r env i t
+                                      (ICForeign (iConvSc flags r sc_prim)
+                                                 name False ops' Nothing)
+                              Nothing -> ICon i (ICForeign t name False ops' Nothing)
                 Just (VarInfo VarMeth (_ :>: Forall _ ((pp:_) :=> _)) _ _) ->
                     let (IsIn cl _) = removePredPositions pp
                     in iConvField flags r (typeclassId $ name cl) i
@@ -112,6 +132,40 @@ iConvVar flags r env i =
                         -- XXX (see similar code in GenBin)
                         ICon i (ICDef t (icUndetAt (getIdPosition i) t UNoMatch))
                 _ -> IVar i
+
+-- A Classic foreign function whose result is ActionValue (Bit n) or Action
+-- (which MakeSymTab.chkTopDef accepts for a function not bound to a
+-- module) is a call that returns ActionValue_.  Like an imported function
+-- (see TCheck), each reference is wrapped, so that every execution of the
+-- action calls the function (see primMarkForeignCall in the Prelude):
+--   /\ vs . \ xs . bitsFromForeignActionValue_ (f vs xs)
+-- where f, of the type given by foreignActionValueType, returns ActionValue_.
+foreignActionValueType :: [Kind] -> CType -> Maybe Scheme
+foreignActionValueType ks t =
+    let (arg_ts, res_t) = getArrows (expandSyn t)
+        res_t' = TAp tActionValue_ (getActionValueArg res_t)
+    in  if isTypeActionValue res_t
+        then Just (Forall ks ([] :=> foldr fn res_t' arg_ts))
+        else Nothing
+
+foreignActionValueRef :: Flags -> SymTab -> Env a -> Id -> IType ->
+                         IConInfo a -> IExpr a
+foreignActionValueRef flags r env i t fc =
+    let unForAll (ITForAll v k t') = let (vks, t'') = unForAll t'
+                                     in  ((v, k) : vks, t'')
+        unForAll t' = ([], t')
+        (vks, t_mono) = unForAll t
+        (arg_ts, res_t) = itGetArrows t_mono
+        val_t = case res_t of
+                  ITAp _ a -> a
+                  _ -> internalError ("IConv.foreignActionValueRef: " ++
+                                      ppReadable t)
+        xs = take (length arg_ts) tmpVarXIds
+        wrap = iConvVar flags r env
+                   (setIdPosition (getIdPosition i) idBitsFromForeignActionValue_)
+        call = iAps (ICon i fc) (map (ITVar . fst) vks) (map IVar xs)
+        body = iAps wrap [val_t] [call]
+    in  foldr (uncurry ILAM) (foldr (uncurry ILam) body (zip xs arg_ts)) vks
 
 -- XXX is this really worthwhile now?
 iConvTask :: SymTab -> Id -> IType -> IExpr a
