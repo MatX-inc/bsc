@@ -435,6 +435,7 @@ describeFlags showHidden =
 traceflags :: [String]
 traceflags = [
           "debug-eval-free-vars",
+          "hack-no-let-batch",
           "no-use-layout",
           "trace-aopt",
           "trace-apaths",

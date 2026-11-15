@@ -26,6 +26,7 @@ module ISyntaxSubst(
         etSubst,
         tSubstBatch,
         eSubstBatch,
+        eSubstClosed,
         -- Internal types (exposed for testing/debugging)
         SubstContext(..),
         SomeCtx(..),
@@ -454,6 +455,16 @@ eSubstBatch norm exprMap typeMap e
           (_, _) -> let fvx = S.unions $ M.elems $ M.map fVars exprMap
                         ftx = S.unions $ M.elems $ M.map fTVars typeMap
                     in eSubstWith (BatchExpr exprMap fvx) (BatchTypeNorm typeMap ftx norm) (fvx `S.union` ftx `S.union` aVars e) e
+
+-- Public API: batch expression substitution whose payloads are all closed.
+-- The same result as eSubstBatch with no type substitution, without the
+-- O(size of map) free-variable union per call: with closed payloads that
+-- union is empty, so no binder needs renaming.
+eSubstClosed :: forall a. M.Map Id (IExpr a) -> IExpr a -> IExpr a
+eSubstClosed exprMap e
+    | M.null exprMap = e
+    | Changed e' <- eSubstWith (BatchExpr exprMap S.empty) EmptyType S.empty e = e'
+    | otherwise = e
 
 {-# INLINE mapChanged #-}
 mapChanged :: (a -> Changed a) -> [a] -> Changed [a]
