@@ -5,7 +5,7 @@ module AOpt(aOpt,
             -- this is needed only because aOptBoolExpr only applies to Bit1
             aBoolSimp,
             -- used by Bluesim backend
-            aExpandDynSel, aInsertCaseDef
+            aExpandDynSel, aInsertCaseDef, aInsertCaseTopDef
             -- Used by SERI dump
             ,aOptAPackageLite
             ) where
@@ -628,6 +628,14 @@ aExpandDynSel stringOK findFn = mapAExprs expDynSel
 aInsertCaseDef :: Bool -> (AId -> AExpr) -> ADef -> ADef
 aInsertCaseDef stringOK findFn (ADef i t e p) =
     ADef i t (aInsertCase stringOK findFn e) p
+
+-- Like aInsertCaseDef, but only for the if-expression at the top of the
+-- def.  The Bluesim backend generates a case-expression only as a whole def
+-- (SimCCBlock), so an if-chain inside another expression stays an if.
+aInsertCaseTopDef :: Bool -> (AId -> AExpr) -> ADef -> ADef
+aInsertCaseTopDef stringOK findFn (ADef i t (APrim aid ty p es) props) =
+    ADef i t (aPrimInsertCase stringOK findFn aid ty p es) props
+aInsertCaseTopDef _ _ d = d
 
 aInsertCase :: Bool -> (AId -> AExpr) -> AExpr -> AExpr
 aInsertCase stringOK findFn (APrim i t p es) =

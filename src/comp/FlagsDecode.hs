@@ -626,6 +626,7 @@ defaultFlags bluespecdir = Flags {
         showStats = False,
         showUpds = True,
         simplifyCSyntax = False,
+        splitUndetVals = False,
         strictMethodSched = True,
         suppressWarnings = SomeMsgs [],
         synthesize = False,
@@ -1576,6 +1577,13 @@ externalFlags = [
          (Toggle (\f x -> f {simplifyCSyntax=x}) (showIfTrue simplifyCSyntax),
           "simplify Concrete Syntax", Hidden)),
 
+        ("split-undetermined-vals",
+         (Toggle (\f x -> f {splitUndetVals=x}) (showIfTrue splitUndetVals),
+          "split undetermined values into bit ranges and take each range" ++
+          " from the other arm of the if-expression it appears in" ++
+          " (for both backends); bits it cannot fill use -unspecified-to",
+          Visible)),
+
         ("strict-method-scheduling",
          (Toggle (\f x -> f {strictMethodSched=x}) (showIfTrue strictMethodSched),
           "compute method relationships allowing for conditional execution", Hidden)),
@@ -1928,6 +1936,7 @@ showFlagsRaw flags =
           ("showUpds", show (showUpds flags)),
           ("showVersion", show (showVersion flags)),
           ("simplifyCSyntax", show (simplifyCSyntax flags)),
+          ("splitUndetVals", show (splitUndetVals flags)),
           ("strictMethodSched", show (strictMethodSched flags)),
           ("suppressWarnings", show (suppressWarnings flags)),
           ("synthesize", show (synthesize flags)),

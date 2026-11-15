@@ -67,3 +67,134 @@ find_n_strings sysUndet_SubModArg.Z-opt.v \
 
 # -------------------------
 
+# Under -split-undetermined-vals, undetermined bits in an arm of an
+# if-expression take the value of the same bits in the other arm, so those
+# bits leave the mux.  The values are picked once, before the backends
+# split, and Bluesim and Verilog agree on them here, where the other arm is
+# always valid.
+
+test_c_veri_bsv_modules_options Undet_FillMuxBits {mkUndet_FillMuxBits} \
+    {-split-undetermined-vals}
+
+if { $vtest == 1 } {
+move mkUndet_FillMuxBits.v mkUndet_FillMuxBits.split.v
+find_n_strings mkUndet_FillMuxBits.split.v \
+    {assign out1 = { out1_c ? 3'b001 : out1_x[4:2], out1_x[1:0] } ;} 1
+}
+
+# The flag is off by default: the undetermined bits are set by
+# -unspecified-to and stay in the mux, in both backends
+
+touch Undet_FillMuxBits.bsv
+test_c_veri_bsv_modules_options Undet_FillMuxBits {mkUndet_FillMuxBits} {} \
+    sysUndet_FillMuxBits-default.out.expected
+
+if { $vtest == 1 } {
+move mkUndet_FillMuxBits.v mkUndet_FillMuxBits.default.v
+find_n_strings mkUndet_FillMuxBits.default.v \
+    {assign out1 = out1_c ? 5'b00110 : out1_x ;} 1
+}
+
+# The flag also applies under -opt-undetermined-vals with a 2-state
+# -unspecified-to, but not with X or Z, which leave the bits to synthesis
+
+if { $vtest == 1 } {
+
+compile_verilog_pass Undet_FillMuxBits.bsv mkUndet_FillMuxBits \
+    {-split-undetermined-vals -opt-undetermined-vals -unspecified-to 0}
+move mkUndet_FillMuxBits.v mkUndet_FillMuxBits.0-opt.v
+find_n_strings mkUndet_FillMuxBits.0-opt.v \
+    {assign out1 = { out1_c ? 3'b001 : out1_x[4:2], out1_x[1:0] } ;} 1
+
+compile_verilog_pass Undet_FillMuxBits.bsv mkUndet_FillMuxBits \
+    {-split-undetermined-vals -opt-undetermined-vals -unspecified-to X}
+move mkUndet_FillMuxBits.v mkUndet_FillMuxBits.X-opt.v
+find_n_strings mkUndet_FillMuxBits.X-opt.v \
+    {out1_c ? { 3'b001, 2'bxx /* unspecified value */  } : out1_x ;} 1
+
+compile_verilog_pass Undet_FillMuxBits.bsv mkUndet_FillMuxBits \
+    {-split-undetermined-vals -opt-undetermined-vals -unspecified-to Z}
+move mkUndet_FillMuxBits.v mkUndet_FillMuxBits.Z-opt.v
+find_n_strings mkUndet_FillMuxBits.Z-opt.v \
+    {out1_c ? { 3'b001, 2'bzz /* unspecified value */  } : out1_x ;} 1
+
+}
+
+# -------------------------
+# The undetermined bits are not taken from the result of an ActionValue
+# method, unless -opt-undetermined-vals is given (for Verilog)
+
+if { $vtest == 1 } {
+
+compile_verilog_pass Undet_FillActionValue.bsv sysUndet_FillActionValue \
+    {-split-undetermined-vals}
+move sysUndet_FillActionValue.v sysUndet_FillActionValue.noopt.v
+find_n_strings sysUndet_FillActionValue.noopt.v \
+    {assign x$D_IN = cnt[0] ? { 3'b110, s$get } : 8'b00101010 ;} 1
+
+compile_verilog_pass Undet_FillActionValue.bsv sysUndet_FillActionValue \
+    {-split-undetermined-vals -opt-undetermined-vals}
+move sysUndet_FillActionValue.v sysUndet_FillActionValue.opt.v
+find_n_strings sysUndet_FillActionValue.opt.v \
+    {assign x$D_IN = { cnt[0] ? 3'b110 : 3'b001, s$get } ;} 1
+
+}
+
+# -------------------------
+# The fill can leave an if-chain inside a concatenation, which Bluesim
+# converts to a case-expression only at the top of a def.  That choice
+# follows the flags that each .ba was compiled with, so the link can be
+# given different flags.
+
+# Compiled with the flag and linked without it (the gen options are not
+# given to the link)
+test_c_veri_bsv_modules_options Undet_FillCaseChain {} \
+    {-split-undetermined-vals}
+
+# Compiled without the flag and linked with it, which gives the same
+# Bluesim code as a link without it
+touch Undet_FillCaseChain.bsv
+test_c_veri_bsv_modules_options Undet_FillCaseChain {} {} \
+    sysUndet_FillCaseChain-default.out.expected "" "" \
+    {-split-undetermined-vals}
+
+# (an up-to-date Bluesim object is reused, so remove it before each link)
+if { $ctest == 1 } {
+erase sysUndet_FillCaseChain.o
+link_objects_pass {sysUndet_FillCaseChain} sysUndet_FillCaseChain \
+    {-split-undetermined-vals}
+move sysUndet_FillCaseChain.cxx sysUndet_FillCaseChain.linkflag.cxx
+erase sysUndet_FillCaseChain.o
+link_objects_pass {sysUndet_FillCaseChain} sysUndet_FillCaseChain
+compare_file sysUndet_FillCaseChain.linkflag.cxx sysUndet_FillCaseChain.cxx
+}
+
+# -------------------------
+# Under -split-undetermined-vals, a constant arm that the condition selects
+# only when the other arm has the same bits becomes the other arm.  The
+# conditions of the enclosing if-expressions count too, and so do those of
+# a chain of defs where each def is used only as an arm of the next.
+
+test_c_veri_bsv_modules_options Undet_FillReencode {mkUndet_FillReencode} \
+    {-split-undetermined-vals}
+
+if { $vtest == 1 } {
+find_n_strings mkUndet_FillReencode.v {assign cond = cond_x ;} 1
+find_n_strings mkUndet_FillReencode.v \
+    {(nest_x[4:3] == 2'b0) ? nest_x : nest_y ;} 1
+find_n_strings mkUndet_FillReencode.v \
+    {= chain_x[3] ? chain_z : chain_x ;} 1
+}
+
+# -------------------------
+# A dynamic bit selection in the condition of a filled if-expression
+# (checking the implication used to loop)
+
+compile_verilog_pass Undet_FillDynSelCond.bsv mkUndet_FillDynSelCond \
+    {-split-undetermined-vals}
+if { $vtest == 1 } {
+find_n_strings mkUndet_FillDynSelCond.v \
+    {assign out = { out_x[out_i] ? 3'b001 : out_y[4:2], out_y[1:0] } ;} 1
+}
+
+# -------------------------
