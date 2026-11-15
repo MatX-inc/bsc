@@ -4,7 +4,7 @@ import Flags
 import SimPackage
 import ASyntax
 import ASyntaxUtil
-import AOpt(aExpandDynSel, aInsertCaseDef)
+import AOpt(aExpandDynSel, aInsertCaseDef, aInsertCaseTopDef)
 import Prim
 import IntLit
 import IntegerUtil(aaaa)
@@ -273,20 +273,31 @@ expandDynSel pkg =
 -- Note: This can inline defs, causing there to be unused defs;
 --       we rely on "inlineUses" to remove them.
 --
+-- In a package compiled with -split-undetermined-vals, ADropUndet can leave
+-- an if-chain inside a concatenation.  SimCCBlock generates a case-expression
+-- only as a whole def, so then only the if-expression at the top of a def is
+-- converted.  The choice follows the flags that the package's .ba was
+-- compiled with, not the flags of the link, so a package compiled without
+-- the flag gets the full conversion whatever the link flags are.
+--
 insertCase :: SimPackage -> SimPackage
 insertCase pkg =
   let
       defmap0 = sp_local_defs pkg
       findFn i = adef_expr (findDef defmap0 i)
 
-      defmap1 = M.map (aInsertCaseDef True findFn) defmap0
+      insDef = if sp_split_undet_vals pkg
+               then aInsertCaseTopDef
+               else aInsertCaseDef
+
+      defmap1 = M.map (insDef True findFn) defmap0
 
       -- because method return values are not lifted to local defs,
       -- we need to infer case expressions there, too
       aInsertCaseIfc ai@(AIDef { aif_value = d }) =
-          ai { aif_value = aInsertCaseDef True findFn d }
+          ai { aif_value = insDef True findFn d }
       aInsertCaseIfc ai@(AIActionValue { aif_value = d }) =
-          ai { aif_value = aInsertCaseDef True findFn d }
+          ai { aif_value = insDef True findFn d }
       aInsertCaseIfc ai = ai
 
       ifc0 = sp_interface pkg

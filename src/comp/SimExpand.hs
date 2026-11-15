@@ -261,6 +261,7 @@ simExpandABin errh flags (abi,ver) = do
                      sp_is_wrapped = apkg_is_wrapped apkg,
                      sp_version = ver,
                      sp_pps = abmi_pps abi,
+                     sp_split_undet_vals = splitUndetVals (abmi_flags abi),
                      sp_size_params = apkg_size_params apkg,
                      sp_inputs = inputs,
                      sp_clock_domains = apkg_clock_domains apkg,
