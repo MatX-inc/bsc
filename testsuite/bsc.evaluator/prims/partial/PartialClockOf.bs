@@ -1,0 +1,23 @@
+package PartialClockOf where
+
+import Clocks
+
+-- clockOf a partially applied primitive that is never applied.  Its
+-- argument is a static if between registers in two clock domains, whose
+-- value is the register in the gated domain, so that is the clock.
+
+{-# verilog sysPartialClockOf #-}
+sysPartialClockOf :: Module Empty
+sysPartialClockOf =
+  module
+    g :: GatedClockIfc <- mkGatedClockFromCC True
+    r1 :: Reg (Bit 4) <- mkReg 1
+    r2 :: Reg (Bit 4) <- changeSpecialWires (Just g.new_clk) (Just noReset) Nothing (mkReg 1)
+    let sel :: Bool
+        sel = True
+        hb :: Bit 4 -> Bit 8
+        hb = bitconcat (if sel then r2 else r1)
+    rules
+      "show": when True ==> action
+        $display "%b %b" (clockOf hb == clockOf r1) (clockOf hb == g.new_clk)
+        $finish 0

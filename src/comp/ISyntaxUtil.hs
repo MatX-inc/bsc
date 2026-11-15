@@ -640,6 +640,13 @@ icPrimTrunc = ICon idPrimTrunc (ICPrim t PrimTrunc)
         rt = aitBit (ITVar n) `itFun` aitBit (ITVar m)
         (k, m, n) = take3tmpVarIds
 
+-- primSplit without its (Add n m k) dictionary
+icPrimSplit :: IExpr a
+icPrimSplit = ICon idPrimSplit (ICPrim t PrimSplit)
+  where t = ITForAll n IKNum (ITForAll m IKNum (ITForAll k IKNum rt))
+        rt = aitBit (ITVar k) `itFun` itPair (aitBit (ITVar n)) (aitBit (ITVar m))
+        (n, m, k) = take3tmpVarIds
+
 icPrimRel :: Id -> PrimOp -> IExpr a
 icPrimRel id p = ICon id (ICPrim (ITForAll i IKNum (ty `itFun` ty `itFun` itBit1)) p)
   where i = take1tmpVarIds
@@ -974,6 +981,14 @@ itGetArrows :: IType -> ([IType], IType)
 itGetArrows it = itGetArrows' [] it
   where itGetArrows' ts (ITAp (ITAp arr a) r) | arr == itArrow = itGetArrows' (a:ts) r
         itGetArrows' ts r = (reverse ts, r)
+
+-- Expression arguments a primitive takes: the arrows of its type after the
+-- foralls (IConv passes one dictionary per proviso arrow).  Counted
+-- directly, since itGetArrows would allocate on each application.
+primArity :: IType -> Int
+primArity t = arrows (dropForAll t)
+  where arrows (ITAp (ITAp arr _) r) | arr == itArrow = 1 + arrows r
+        arrows _ = 0
 
 -- Is this the type of a (fully applied) typeclass dictionary?
 itIsDictType :: IType -> Bool

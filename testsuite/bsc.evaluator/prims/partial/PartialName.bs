@@ -1,0 +1,25 @@
+package PartialName where
+
+import List
+
+-- A partially applied primitive whose held argument evaluates to a
+-- helper's parameter: the generated Verilog and Bluesim name the value
+-- after the parameter (x), as they do when the argument is evaluated
+-- where the partial application is formed.
+
+checked :: Bit 4 -> Bit 4
+checked x = primSeq (x == 0) x
+
+{-# verilog sysPartialName #-}
+sysPartialName :: Module Empty
+sysPartialName =
+  module
+    r :: Reg (Bit 4) <- mkReg 1
+    let hb :: Bit 4 -> Bit 8
+        hb = bitconcat (checked (r + 1))
+        hs = map hb (cons r (cons (r + 2) nil))
+    rules
+      "show": when True ==> action
+        $display "%h %h" (head hs) (last hs)
+        r := r + 1
+        if r == 3 then $finish 0 else noAction

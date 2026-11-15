@@ -1,0 +1,29 @@
+package PartialHeld where
+
+import List
+
+-- Strict primitives applied to one argument, bound by let and passed to
+-- map: evaluating the let binding gives a function value, which map
+-- applies to each element.  The Prelude exports primJoinNames;
+-- primSameFamilyClock is declared here.
+
+primitive primSameFamilyClock :: Clock -> Clock -> Bit 1
+
+{-# verilog sysPartialHeld #-}
+sysPartialHeld :: Module Empty
+sysPartialHeld =
+  module
+    r :: Reg (Bit 4) <- mkReg 3
+    s :: Reg (Bit 4) <- mkReg 5
+    clk <- exposeCurrentClock
+    let prefix = primJoinNames (primGetName r)
+        names = map prefix (cons (primGetName s) nil)
+        cs = cons clk (cons noClock nil)
+        fam = primSameFamilyClock (head cs)
+        fams :: List (Bit 1)
+        fams = map fam cs
+    rules
+      "show": when True ==> action
+        $display (primGetNameString (head names))
+        $display "%b %b" (head fams) (last fams)
+        $finish 0

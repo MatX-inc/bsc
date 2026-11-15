@@ -1,0 +1,30 @@
+package PartialIf where
+
+import Vector
+
+-- primIf applied to its condition only and passed to zipWith: a function
+-- value until zipWith applies it to both arms.  The condition is a
+-- register (dyn) or a constant (stat); lib does the same with _if.
+
+primitive primIf :: Bit 1 -> a -> a -> a
+
+{-# verilog sysPartialIf #-}
+sysPartialIf :: Module Empty
+sysPartialIf =
+  module
+    c :: Reg Bool <- mkReg False
+    n :: Reg (Bit 2) <- mkReg 0
+    let r :: Vector 2 (Bit 8)
+        r = genWith (\ i -> fromInteger (i + 1))
+        s :: Vector 2 (Bit 8)
+        s = genWith (\ i -> fromInteger (i + 10))
+        dyn = primIf (primOrd c)
+        stat = primIf (primOrd True)
+        lib = _if c
+    rules
+      "step": when True ==> action
+        $display "%h %h %h" (pack (zipWith dyn r s)) (pack (zipWith stat r s))
+                            (pack (zipWith lib r s))
+        c := not c
+        n := n + 1
+        if n == 1 then $finish 0 else noAction

@@ -3429,6 +3429,7 @@ evalHeap (ptr, ref) = do
      HLoop (Nothing)   -> errG (noPosition, EModuleLoop "<unknown>")
      HWHNF { hc_pexpr = e } -> return e
      HNF { hc_pexpr = e } -> return e
+     HUnev { hc_hexpr = e, hc_held = True } -> evalHeldCell (ptr, ref) e
      HUnev { hc_hexpr = e, hc_name = expr_name } -> do
         -- updHeap (ptr, ref) (internalError "blackHole")
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, e))
@@ -3459,7 +3460,9 @@ evalHeap (ptr, ref) = do
             P p (IAps f ts as) -> do
                 let isLazyOp (ICon _ (ICCon {})) = True
                     isLazyOp (ICon _ (ICTuple {})) = True
-                    isLazyOp (ICon _ (ICPrim _ p)) | p == PrimChr ||
+                    -- an unsaturated primitive is a function value
+                    isLazyOp (ICon _ (ICPrim t p)) | length as < primArity t = True
+                                                   | p == PrimChr ||
                                                      realPrimOp p = False
                                                    | strictPrim p = internalError ("evalHeap - prim should be evaluated:" ++ ppReadable (p, pe'))
                                                    | otherwise = True
@@ -3481,6 +3484,22 @@ evalHeap (ptr, ref) = do
                 let new_cell = HWHNF {hc_pexpr = pe', hc_name = expr_name }
                 updHeap "evalHeap" (ptr,ref) new_cell
                 return pe'
+
+-- Evaluate a held argument as evalUH would, naming the cell as main names
+-- the evaluated argument
+evalHeldCell :: (HeapPointer, HeapData) -> HExpr -> G PExpr
+evalHeldCell (ptr, ref) e = do
+  pe@(P p e0) <- eval1 e
+  pe'@(P _ v) <- unheap pe
+  name <- case e0 of
+            IRefT {} | p == pTrue -> inferName e0
+            _ -> inferName v
+  updHeap "evalHeldCell" (ptr, ref) (HWHNF { hc_pexpr = pe', hc_name = name })
+  return pe'
+
+-- A held argument's value, for walks that read it (extractWireSet)
+evalHeldArg :: HExpr -> G HExpr
+evalHeldArg e = fst <$> evalUH e
 
 -- used when IAps expr@(ICon name coninfo) ...
 -- so Id is name, IConInfo is coninfo, IExpr is expr, as are the accumulated arguments
@@ -3579,6 +3598,17 @@ conAp' _ (ICHandle { }) e as = bldApUH' "ICHandle" e as
 conAp' _ (ICName { })   e as = bldAp' "ICName" e as
 conAp' _ (ICAttrib { }) e as = bldAp' "ICAttrib" e as
 conAp' _ (ICPosition { }) e as = bldAp' "ICPosition" e as
+
+-- A primitive applied to too few expression arguments is a function value
+-- whose arguments are held on the heap and evaluated at most once.
+-- Applying it appends the rest, so the clauses below see only saturated
+-- applications.
+conAp' _ (ICPrim t _) f as | fewerExprArgs (primArity t) as = do
+  argTys <- takeArgTypes (length es) <$> instFunType t ts
+  es' <- zipWithM (toHeapHeld "unsaturated-prim") argTys es
+  bldAp' "unsaturated prim" f (map T ts ++ map E es')
+  where ts = [ ty | T ty <- as ]
+        es = [ e | E e <- as ]
 
 -- Actions
 conAp' i (ICPrim _ PrimJoinActions) f [E a1, E a2] = do
@@ -3973,14 +4003,20 @@ conAp' _ (ICPrim _ PrimZeroExt) _ [t2@(T t), t1, t3, e] =
                                            e]
 conAp' i (ICPrim _ PrimTrunc) _   [_, n@(T _), m@(T _), e@(E _)] =
         evalAp "PrimTrunc" (icSelect (getIdPosition i)) [n, T (mkNumConT 0), m, e]
+-- Reached only from IConv's dictionary-only primSplit (icPrimSplit):
+-- build the pair IConv would, sharing the value
+conAp' _ (ICPrim _ PrimSplit) _ [T n, T m, T k, E e] = do
+        e' <- toHeap "split" (aitBit k) e Nothing
+        let sel ts = IAps (icSelect noPosition) ts [e']
+        return $ pExpr $ iMkPairAt noPosition (aitBit n) (aitBit m)
+                             (sel [n, m, k]) (sel [m, mkNumConT 0, k])
 
 -- primPack/primUnpack: the implicit Bits pack/unpack coercions applied by
 -- the Prelude wrappers (see Prelude.bs).  For now, unfold immediately to
 -- the class method picked out of the dictionary argument, evaluating
 -- exactly what a direct call of the class method would have.
--- The payload argument may be absent (a higher-order use such as
--- "map pack xs" can leave the wrapper partially applied); the method
--- applied to no arguments is a legal value in that case.
+-- The payload is always present here: a coercion without it is an
+-- unsaturated primitive (see above).
 --
 -- Fast path first: at type Bit n the Bits instance is the identity (the
 -- Prelude owns that instance, and the class is coherent, so no other can
@@ -4443,7 +4479,7 @@ conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
               -- want to pick up implicit conditions (should be exactly one expression in ees)
               let err = "conAp.PrimClockOf: no argument expression"
                   arg_e = firstE err ees
-              ws <- extractWireSet arg_e
+              ws <- extractWireSet evalHeldArg arg_e
               case (wsGetClocks ws) of
                [c] -> return (P pTrue (icClock prim_id c))
                []  -> return (P pTrue icNoClock)
@@ -4454,7 +4490,7 @@ conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
               -- want to pick up implicit conditions (third expr is the one to extract clocks from)
               case (dropT ees) of
                 es@[E nil, E cons, E e] -> do when doTraceClock $ traceM ("PrimClocksOf:\n" ++ intercalate "\n\n" (map show es))
-                                              ws <- extractWireSet e
+                                              ws <- extractWireSet evalHeldArg e
                                               eval1 (foldr (\c e ->
                                                              IAps cons [] [icClock prim_id c, e])
                                                           nil
@@ -4467,7 +4503,7 @@ conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
               -- want to pick up implicit conditions (should be exactly one expression in ees)
               let err = "conAp.PrimResetOf: no argument expression"
                   arg_e = firstE err ees
-              ws <- extractWireSet arg_e
+              ws <- extractWireSet evalHeldArg arg_e
               case (wsGetResets ws) of
                [r] -> return (P pTrue (icReset prim_id r))
                []  -> return (P pTrue icNoReset)
@@ -4478,7 +4514,7 @@ conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
               -- want to pick up implicit conditions (third expr is the one to extract resets from)
               case (dropT ees) of
                 es@[E nil, E cons, E e] -> do when doTraceClock $ traceM ("PrimResetsOf:\n" ++ intercalate "\n\n" (map show es))
-                                              ws <- extractWireSet e
+                                              ws <- extractWireSet evalHeldArg e
                                               eval1 (foldr (\r e ->
                                                              IAps cons [] [icReset prim_id r, e])
                                                           nil
@@ -4770,6 +4806,13 @@ getBuriedPreds (IAps a@(ICon _ (ICPrim _ PrimBOr)) b [e1, e2]) = do
   p_if <- pIf e1 pTrue p2
   let p = p1 `pConj` p_if
   return p
+-- A partial application's held arguments: a strict primitive evaluates
+-- them when applied, so its condition includes theirs; a non-strict
+-- primitive's are walked as they stand
+getBuriedPreds (IAps (ICon _ (ICPrim t op)) _ es) | length es < primArity t =
+  if strictPrim op
+    then getBuriedPredsForced es
+    else pConjs <$> mapM getBuriedPredsUnev es
 -- the following are followed because they are strict,
 -- and we want to unheap the references in their arguments
 getBuriedPreds (IAps a@(ICon _ p@(ICPrim _ _)) b es) = do
@@ -4849,6 +4892,15 @@ getBuriedPredsForced es = do
                return (pConj p p')
   ps <- mapM f es
   return (pConjs ps)
+
+-- Walk an unevaluated cell as the expression it holds
+getBuriedPredsUnev :: HExpr -> G HPred
+getBuriedPredsUnev e@(IRefT _ _ _ r) = do
+  cell <- getHeap r
+  case cell of
+    HUnev { hc_hexpr = e' } -> getBuriedPreds e'
+    _ -> getBuriedPreds e
+getBuriedPredsUnev e = getBuriedPreds e
 
 {-
 -- Quick utility for printing the refs in an HPred or HExpr,
@@ -5779,6 +5831,13 @@ firstE err ((E e):_)  = e
 firstE err ((T t):as) = firstE err as
 firstE err []         = internalError err
 
+-- Whether fewer than n of the arguments are expressions
+fewerExprArgs :: Int -> [Arg] -> Bool
+fewerExprArgs n _ | n <= 0 = False
+fewerExprArgs n (E _ : as) = fewerExprArgs (n - 1) as
+fewerExprArgs n (T _ : as) = fewerExprArgs n as
+fewerExprArgs _ [] = True
+
 --isUndet (ICon _ (ICUndet { iuKind = UNotUsed })) = True
 --isUndet (ICon _ (ICUndet {  })) = True
 --isUndet _ = False
@@ -6156,7 +6215,7 @@ iArrayInRange arr = Array.inRange (Array.bounds arr)
 
 mkArrayCell :: HExpr -> G (ArrayCell HeapData)
 mkArrayCell e = do
-   let hcell = HUnev e Nothing
+   let hcell = HUnev e Nothing False
    (p, r) <- addHeapCell "mk-array-cell" hcell
    return (ArrayCell p r)
 

@@ -1,0 +1,29 @@
+package PartialCoerce(T(..), sysPartialCoerce) where
+
+import Vector
+
+-- primPack and primUnpack without their payload, passed to map: function
+-- values until map applies them, and then held like a direct coercion,
+-- so the round trip cancels without elaborating the instance methods
+-- (each prints a message when elaborated) and the copy is a wire.
+-- copyLib does the same with pack and unpack.
+
+primitive primPack :: (Bits a n) => a -> Bit n
+primitive primUnpack :: (Bits a n) => Bit n -> a
+
+data T = MkT (Bit 16)
+
+instance Bits T 16 where
+    pack (MkT v) = primSeq (message "ENTERED-PACK" ()) v
+    unpack v = primSeq (message "ENTERED-UNPACK" ()) (MkT v)
+
+{-# verilog sysPartialCoerce #-}
+sysPartialCoerce :: Module Empty
+sysPartialCoerce =
+  module
+    src :: Reg (Vector 2 T) <- mkRegU
+    dst :: Reg (Vector 2 T) <- mkRegU
+    dstLib :: Reg (Vector 2 T) <- mkRegU
+    rules
+        "copy": when True ==> dst := map primUnpack (map primPack src)
+        "copyLib": when True ==> dstLib := map unpack (map pack src)

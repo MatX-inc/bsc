@@ -1,0 +1,23 @@
+package PartialAction where
+
+import List
+
+-- primJoinActions applied to one action and passed to map: a function
+-- value until map applies it to the second action.
+
+{-# verilog sysPartialAction #-}
+sysPartialAction :: Module Empty
+sysPartialAction =
+  module
+    a :: Reg (Bit 4) <- mkReg 0
+    b :: Reg (Bit 4) <- mkReg 0
+    n :: Reg (Bit 2) <- mkReg 0
+    let incA = primJoinActions (toPrimAction (a := a + 1))
+        acts :: List PrimAction
+        acts = map incA (cons (toPrimAction (b := b + 2)) nil)
+    rules
+      "step": when True ==> action
+        fromPrimAction (head acts)
+        $display "%d %d" a b
+        n := n + 1
+        if n == 2 then $finish 0 else noAction

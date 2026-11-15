@@ -1,0 +1,29 @@
+package PartialSplit where
+
+import List
+
+-- primSplit given its dictionary but not its value, passed to map: a
+-- function value until map applies it to the value, which gives the
+-- same pair of selections as a saturated primSplit.  ts does the same
+-- with split.
+
+{-# verilog sysPartialSplit #-}
+sysPartialSplit :: Module Empty
+sysPartialSplit =
+  module
+    r :: Reg (Bit 8) <- mkReg 0xA5
+    n :: Reg (Bit 1) <- mkReg 0
+    let xs :: List (Bit 8)
+        xs = cons r (cons (r + 0x21) nil)
+        ps :: List (PrimPair (Bit 3) (Bit 5))
+        ps = map primSplit xs
+        ts :: List (Bit 3, Bit 5)
+        ts = map split xs
+    rules
+      "step": when True ==> action
+        $display "%h %h %h %h" (head ps).fst (head ps).snd
+                               (head (tail ps)).fst (head (tail ps)).snd
+        $display "%h %h" (tpl_1 (head ts)) (tpl_2 (head ts))
+        r := r + 0x13
+        n := n + 1
+        if n == 1 then $finish 0 else noAction

@@ -1,0 +1,26 @@
+package PartialClock where
+
+import List
+
+-- clockOf, resetOf, clocksOf and resetsOf passed to map: the Prelude
+-- defines each as its primitive without the argument (clocksOf and
+-- resetsOf as the primitive applied to nil and cons), so map applies a
+-- function value to each register.
+
+{-# verilog sysPartialClock #-}
+sysPartialClock :: Module Empty
+sysPartialClock =
+  module
+    r :: Reg (Bit 4) <- mkReg 3
+    s :: Reg (Bit 4) <- mkReg 5
+    let regs = cons r (cons s nil)
+        cs = map clockOf regs
+        rs = map resetOf regs
+        css = map clocksOf regs
+        rss = map resetsOf regs
+    rules
+      "show": when True ==> action
+        $display "%d %d" (head cs == last cs) (head rs == last rs)
+        $display (integerToString (length (head css)))
+        $display (integerToString (length (head rss)))
+        $finish 0

@@ -529,6 +529,11 @@ iConvE errh flags r env pvs (CApply (CTApply (CVar splt) ts@[n, m, k]) es@[d, e]
             ct = TAp (TAp tPrimPair (TAp tBit n)) (TAp tBit m)
             e = CStructT ct [(idPrimFst, fstE), (idPrimSnd, sndE)]
         in  iConvE errh flags r env pvs e
+-- primSplit without its value ("map primSplit xs"): drop the dictionary;
+-- IExpand builds the pair when the value arrives
+iConvE errh flags r env pvs (CApply (CTApply (CVar splt) ts@[_, _, _]) [_])
+    | splt == idPrimSplit =
+        IAps icPrimSplit (map (iConvT flags r) ts) []
 
 iConvE errh flags r env pvs (CApply (CVar gn) [CVar name]) | gn == idPrimGetName =
   ICon gn (ICName { iConType = iConvT flags r tName, iName = name })
