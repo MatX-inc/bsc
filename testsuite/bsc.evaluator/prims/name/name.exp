@@ -31,3 +31,22 @@ find_n_strings mkReaderModuleTestOuter.v {mkReaderModuleTestInner inner(} 1
 
 # -----
 
+# Test that state naming propagates through ModuleContext (and ModuleCollect)
+# in Classic code via primGetParamName/setStateName in ModuleContext's bind.
+
+compile_verilog_pass ModuleContextNames.bs sysModuleContextNames
+compile_verilog_pass ModuleContextNames.bs sysModuleCollectNames
+if { $vtest == 1 } {
+find_n_strings sysModuleContextNames.v {reg [15 : 0] count;} 1
+find_n_strings sysModuleContextNames.v {reg [15 : 0] step;} 1
+find_n_strings sysModuleContextNames.v {reg [15 : 0] inner_count;} 1
+find_n_strings sysModuleCollectNames.v {reg [15 : 0] ec_count;} 1
+find_n_strings sysModuleCollectNames.v {reg ec_flag;} 1
+}
+
+# Nested primBuildModule scopes have empty IStateLoc tails and must not
+# collapse in pushModuleSchedNameScope.
+compile_verilog_pass NestedBuildModule.bs
+
+# -----
+

@@ -1325,10 +1325,41 @@ pushModuleSchedNameScope ns resTy = do
                     Just ifcName -> getIfcFlatMethodNames symt ifcName
       newNameMap = M.fromList [ (m, SNI_Method False) | m <- methNames ]
       newFrame = SchedNameFrame ns 0 newNameMap Nothing
-      -- if this is an "ignore" level, just update the old scope
+      -- Two naming layers can wrap the same module: for example, the
+      -- name wrapper inserted by a module monad's bind (via
+      -- primGetParamName/setStateName) around the setStateName inserted
+      -- by the BSV typechecker or written explicitly.  PrimStateName
+      -- replaces the head of the IStateLoc so the innermost name wins;
+      -- collapse the schedule-name-scope frame in the same situation so
+      -- no stale outer prefix remains on the stack for remIStateLocPrefix.
+      -- A push renames the open top frame iff their non-empty tails and
+      -- head isl_ifc_id match and no rules have been elaborated or saved
+      -- under that frame yet.
+      isSNIMethod (SNI_Method _) = True
+      isSNIMethod (SNI_Rule _) = False
+      isSiblingRename top =
+          case (ns, snf_istateloc top) of
+            (new_h:ns_rest@(_:_), top_h:top_rest) ->
+                ns_rest == top_rest &&
+                isl_ifc_id new_h == isl_ifc_id top_h &&
+                isNothing (snf_elabProgress top) &&
+                all isSNIMethod (snf_nameMap top) &&
+                null (savedRules s)
+            _ -> False
+      -- if this is an "ignore" level, update the parent scope (dropping
+      -- an open sibling-rename frame when an inner layer hides the name)
       newScope = if ign
-                 then incrSNFIgnoreCount oldScope
-                 else (newFrame:oldScope)
+                 then case oldScope of
+                        (top : SchedNameFrame p_ns p_cnt p_map Nothing : frames)
+                          | isSiblingRename top ->
+                            SchedNameFrame p_ns (p_cnt + snf_ignoreCount top + 2)
+                                p_map Nothing : frames
+                        _ -> incrSNFIgnoreCount oldScope
+                 else case oldScope of
+                        (top : frames) | isSiblingRename top ->
+                            SchedNameFrame ns (snf_ignoreCount top + 1)
+                                newNameMap Nothing : frames
+                        _ -> (newFrame : oldScope)
   --traceM("PUSH: " ++ (ppReadable ((toTF ign, toTF (hasIgnore ns)), head newScope)))
   --traceM("PUSH: " ++ ppReadable (M.toList (snf_nameMap (head newScope))))
   put (s { schedNameScope = newScope })
