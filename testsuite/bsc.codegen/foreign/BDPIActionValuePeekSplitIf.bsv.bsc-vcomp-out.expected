@@ -1,0 +1,5 @@
+checking package dependencies
+compiling BDPIActionValuePeekSplitIf.bsv
+code generation for mkBDPIActionValuePeekSplitIf starts
+Verilog file created: mkBDPIActionValuePeekSplitIf.v
+All packages are up to date.

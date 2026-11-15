@@ -11,6 +11,7 @@ import IOUtil(progArgs)
 import Id
 import DefProp(DefProp(..), defPropsDictEvidence)
 import ISyntax
+import Pragma(foreignImportIds)
 import ISyntaxXRef(updateIExprPosition)
 import ISyntaxUtil(iDefsMap, itIsDictType)
 import Util(tracep)
@@ -204,12 +205,13 @@ fixupDefs buckets (IPackage mi _ ps ds own_atf_cache) ipkgs =
         -- with defs created using the map itself
         m = M.fromList [ (i, e) | (IDef i _ e _) <- ads' ]
         ads' = map (redirectDictProps redirects)
-                   (iDefsMap (fixUp redirects m) ads)
+                   (iDefsMap (fixUp redirects foreign_is m) ads)
+        foreign_is = S.fromList (foreignImportIds ps')
 
         -- The new package contents
         ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _ _), s) <- ipkgs ]
         ds' = map (redirectDictProps redirects)
-                  (iDefsMap (fixUp redirects m) ds)
+                  (iDefsMap (fixUp redirects foreign_is m) ds)
         dropDict i t = case M.lookup i redirects of
                          Just _ -> tracep trace_drop_dicts
                                        ("dropDict: " ++ ppReadable (i, t))
@@ -259,14 +261,20 @@ updDef buckets d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
 
 -- ===============
 
-fixUp :: M.Map Id Id -> M.Map Id (IExpr a) -> IExpr a -> IExpr a
-fixUp r m (ILam i t e) = ILam i t (fixUp r m e)
-fixUp r m (ILAM i k e) = ILAM i k (fixUp r m e)
-fixUp r m (IAps f ts es) = IAps (fixUp r m f) ts (map (fixUp r m) es)
-fixUp r m (ICon i (ICDef t _)) =
+-- A reference to a definition that imports a foreign function (one of fs)
+-- is marked, so that it keeps its position where a definition around it
+-- is inlined (see updateIExprPosition): IExpand reports a call of the
+-- function there.
+fixUp :: M.Map Id Id -> S.Set Id -> M.Map Id (IExpr a) -> IExpr a -> IExpr a
+fixUp r fs m (ILam i t e) = ILam i t (fixUp r fs m e)
+fixUp r fs m (ILAM i k e) = ILAM i k (fixUp r fs m e)
+fixUp r fs m (IAps f ts es) = IAps (fixUp r fs m f) ts (map (fixUp r fs m) es)
+fixUp r fs m (ICon i (ICDef t _)) =
     let i' = M.findWithDefault i i r
-    in  ICon i' (ICDef t (get m i'))
-fixUp _ _ e = e
+        i_ref | S.member i' fs = setForeignImportRefId i'
+              | otherwise = i'
+    in  ICon i_ref (ICDef t (get m i'))
+fixUp _ _ _ e = e
 
 get :: M.Map Id (IExpr a) -> Id -> IExpr a
 get m i = let value = get2 m i

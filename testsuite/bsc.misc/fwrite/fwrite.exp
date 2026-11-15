@@ -57,6 +57,9 @@ if { $ctest } {
     compare_file FOpen_MCD2.dat.out 
 }
 
+# each execution of a let-bound one-argument $fopen opens its own channel
+test_c_veri_bsv FOpen_MCD_LetBound
+
 if { $vtest } {
     test_veri_only_bsv FCloseTypes
     compare_file FCloseTypes1.dat.out
@@ -97,6 +100,12 @@ if { $vtest } {
 if { $ctest } {
     test_c_only_bsv  GetC1
     test_c_only_bsv  GetC3
+}
+
+# each execution of a let-bound $ungetc is its own call, with its own result
+test_c_veri_bsv UngetC_LetBound
+if { $vtest } {
+    find_n_strings sysUngetC_LetBound.v {reg [31 : 0] TASK_ungetc} 2
 }
 
 

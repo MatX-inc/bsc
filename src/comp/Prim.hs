@@ -331,6 +331,25 @@ data PrimOp =
         -- (GenBin.header).
         | PrimPack
         | PrimUnpack
+
+        -- primMarkForeignCall :: Name__ -> ActionValue_ a ->
+        --                        ActionWorld -> ActionValue_ a
+        -- marks one execution of a foreign function call that returns
+        -- ActionValue_ (bitsFromForeignActionValue_ in the Prelude): each
+        -- application to ActionWorld is an execution, which the evaluator
+        -- gives its own cookie (fcallNo).  primPeekWorld and primCondWorld
+        -- are the worlds in which __value and primDeepSeqCond read an
+        -- ActionValue without running it.  primForeignCallName gives the
+        -- call in the design, and primWithCallPosition evaluates its
+        -- argument at the call position where it is made (see toHeap and
+        -- withCallSite in IExpandUtils, and callPositionArgs in IExpand),
+        -- for diagnostics.  The evaluator replaces every application of
+        -- these that it reaches, so none of them reaches a .ba.
+        | PrimMarkForeignCall
+        | PrimPeekWorld
+        | PrimCondWorld
+        | PrimForeignCallName
+        | PrimWithCallPosition
         deriving (Eq, Ord, Show, Enum, Bounded, Generic.Data, Generic.Typeable)
 
 -- Just some size, have to be coordinated with Prelude.bs
@@ -578,6 +597,11 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
 
         tp "primPack" = PrimPack
         tp "primUnpack" = PrimUnpack
+        tp "primMarkForeignCall" = PrimMarkForeignCall
+        tp "primPeekWorld" = PrimPeekWorld
+        tp "primCondWorld" = PrimCondWorld
+        tp "primForeignCallName" = PrimForeignCallName
+        tp "primWithCallPosition" = PrimWithCallPosition
         tp s = internalError ("unknown primitive: " ++ s ++ " " ++ prPosition (getIdPosition i))
 
 instance PPrint PrimOp where
@@ -888,6 +912,11 @@ instance NFData PrimOp where
     rnf PrimEQ3 = ()
     rnf PrimPack = ()
     rnf PrimUnpack = ()
+    rnf PrimMarkForeignCall = ()
+    rnf PrimPeekWorld = ()
+    rnf PrimCondWorld = ()
+    rnf PrimForeignCallName = ()
+    rnf PrimWithCallPosition = ()
 
 -----
 

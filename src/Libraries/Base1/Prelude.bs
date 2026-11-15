@@ -79,6 +79,7 @@ package Prelude(
         noAction, (:<-),
         toActionValue_,
         fromActionValue_,
+        fromForeignActionValue_, bitsFromForeignActionValue_,
 
         primDynamicError,
 
@@ -861,6 +862,23 @@ primitive type PrimAction :: *
 
 data ActionWorld = ActionWorld
 
+-- The function inside an ActionValue is applied to ActionWorld where its
+-- action runs (by toPrimAction and bitsToActionValue_; bind passes the
+-- world on).  __value (peekGet, mfix) applies it to primPeekWorld () to
+-- read the value alone, and primDeepSeqCond (impCondOf) to primCondWorld
+-- () to read the implicit condition alone.  In those worlds no action
+-- runs and no foreign function call is made (see primMarkForeignCall).
+-- Each world is an application to (), as the constructor ActionWorld is,
+-- so an ActionValue that makes no foreign call is elaborated the same way
+-- in all three.
+primitive primPeekWorld :: () -> ActionWorld
+primitive primCondWorld :: () -> ActionWorld
+
+-- primWithCallPosition e is e, evaluated at the position in the design of
+-- the call that made it (for the read position in diagnostics about
+-- foreign function calls; see IExpand)
+primitive primWithCallPosition :: a -> a
+
 --@ \begin{libverbatim}
 --@ struct ActionValue #(type a);
 --@ \end{libverbatim}
@@ -874,14 +892,15 @@ data ActionValue a = ActionValue (ActionWorld -> AVStruct a)
 
 instance (PrimDeepSeqCond a) => PrimDeepSeqCond (ActionValue a) where
   primDeepSeqCond (ActionValue av) b =
-    let f = av ActionWorld
+    let f = av (primCondWorld ())
     in primDeepSeqCond f b
 
 __avFunc :: ActionValue a -> ActionWorld -> AVStruct a
 __avFunc (ActionValue f) = f
 
 __value :: ActionValue a -> a
-__value (ActionValue av) = (av ActionWorld).avValue
+__value (ActionValue av) =
+    (av (primWithCallPosition (primPeekWorld ()))).avValue
 
 primitive primNoActions :: PrimAction
 primitive primJoinActions :: PrimAction -> PrimAction -> PrimAction
@@ -971,9 +990,11 @@ instance Applicative ActionValue
 --@ instance Monad #(ActionValue);
 --@ \end{libverbatim}
 -- Sequencing and forcing re-evaluation with ActionWorld works because
--- we don't float expressions past lambda-bindings they don't depend on
--- if that changes, this would have to be revisited
--- (possibly making ActionWorld an argument of foreign-function calls)
+-- we don't float expressions past lambda-bindings they don't depend on;
+-- if that changes, this would have to be revisited.  A foreign function
+-- call that returns ActionValue_ is evaluated once, outside the lambda,
+-- but each execution marks it with the world (primMarkForeignCall in
+-- bitsFromForeignActionValue_), and that mark cannot float.
 instance Monad ActionValue
   where
     bind (ActionValue x) f = ActionValue (\aw ->
@@ -1001,7 +1022,9 @@ instance Monad ActionValue
 --@ \end{libverbatim}
 instance MonadFix ActionValue
   where
-    mfix m = primFix (\ av -> m (__value av))
+    -- m reads the value of its result without running it, where mfix is
+    -- called (primWithCallPosition)
+    mfix m = primFix (\ av -> m (primWithCallPosition (__value av)))
 --    mfix :: (a -> ActionValue a) -> ActionValue a
 --    mfix m =
 --        let av :: ActionValue a
@@ -1012,6 +1035,11 @@ instance MonadFix ActionValue
 --@ \begin{libverbatim}
 --@ function PrimAction toPrimAction(ActionValue#(a) a);
 --@ \end{libverbatim}
+-- A PrimAction has no world: the action runs (ActionWorld) where it is
+-- converted, as a rule body does, and so does a foreign function call in
+-- it, even when the PrimAction is part of an ActionValue that is not run
+-- (as with splitIf and the like, which use toPrimAction; IExpand reports a
+-- use of the result of such a call when its action is dropped).
 toPrimAction :: ActionValue a -> PrimAction
 toPrimAction (ActionValue a) = (a ActionWorld).avAction
 
@@ -1058,17 +1086,42 @@ struct ActionValue_ a
     avValue_  :: a
     avAction_ :: PrimAction
 
+-- An ActionValue_ has no world: the action runs (ActionWorld) where it is
+-- converted, as a method of a synthesized module does (toWrapMethod), and
+-- so does a foreign function call in it (see toPrimAction).
 toActionValue_ :: (Bits a n) => ActionValue a -> ActionValue_ (Bit n)
 toActionValue_ = bitsToActionValue_ ∘ fmap pack
 
+-- fromActionValue_ makes an ActionValue of an ActionValue_ whose value and
+-- action are the same at every execution: a method of an imported Verilog
+-- module (mkBSVMethod in CVParserImperative) or of a Classic Verilog
+-- module; bitsFromActionValue_ does so for a method of a synthesized
+-- module (fromWrapMethod).  A foreign function call is a new call at each
+-- execution and needs fromForeignActionValue_ or fromForeignAction_.
 fromActionValue_ :: (Bits a n) => ActionValue_ (Bit n) -> ActionValue a
 fromActionValue_ = fmap unpack ∘ bitsFromActionValue_
+
+-- TCheck inserts fromForeignActionValue_ around imported functions that
+-- return ActionValue or Action and around the system tasks it checks
+-- ($fopen, $random and the $swriteAV family), and IConv inserts
+-- bitsFromForeignActionValue_ around Classic foreign functions that
+-- return ActionValue or Action; the system tasks defined below use
+-- fromForeignActionValue_ and fromForeignAction_.  Each makes the
+-- ActionValue (see bitsFromForeignActionValue_) when it is evaluated,
+-- which is where the design makes the call.
+fromForeignActionValue_ :: (Bits a n) => ActionValue_ (Bit n) -> ActionValue a
+fromForeignActionValue_ av_ =
+    let av = bitsFromForeignActionValue_ av_
+    in  primSeq av (fmap unpack av)
 
 toAction_ :: Action -> Action_
 toAction_ = bitsToActionValue_
 
 fromAction_ :: Action_ -> Action
 fromAction_ = bitsFromActionValue_
+
+fromForeignAction_ :: Action_ -> Action
+fromForeignAction_ = bitsFromForeignActionValue_
 
 bitsToActionValue_ :: ActionValue a -> ActionValue_ a
 bitsToActionValue_  (ActionValue av) =
@@ -1078,6 +1131,31 @@ bitsToActionValue_  (ActionValue av) =
 bitsFromActionValue_ :: ActionValue_ a -> ActionValue a
 bitsFromActionValue_ av_ = ActionValue (\ aw ->
     AVStruct { avValue = av_.avValue_; avAction = av_.avAction_; avWorld = aw})
+
+-- A foreign function call that returns ActionValue_ (a system task with a
+-- value or an imported C function) is a separate call each time its
+-- ActionValue executes, and the value and the action of one execution
+-- belong to the same call.  bitsFromActionValue_ selects both from av_,
+-- which all executions share.  Here each application of the world lambda
+-- (an execution, by bind, toPrimAction or bitsToActionValue_) applies
+-- primMarkForeignCall to av_ and the world, and the value and the action
+-- select from that one application.  IExpand gives each execution of the
+-- call its own cookie (fcallNo), by which AConv pairs its value with its
+-- action.  In the world of primPeekWorld or primCondWorld the call is not
+-- made: its action is no action, and its value is that of a call that no
+-- action makes.  IExpand reports a use of a result where its call is not
+-- made, naming the call in the design, which primForeignCallName gives
+-- when the ActionValue is made.  Any other ActionValue_ is returned
+-- unchanged.
+primitive primMarkForeignCall :: Name__ -> ActionValue_ a -> ActionWorld -> ActionValue_ a
+primitive primForeignCallName :: ActionValue_ a -> Name__
+
+bitsFromForeignActionValue_ :: ActionValue_ a -> ActionValue a
+bitsFromForeignActionValue_ av_ =
+    let call = primForeignCallName av_
+    in  primSeq call (ActionValue (\ aw ->
+          letseq res = primMarkForeignCall call av_ aw
+          in  AVStruct { avValue = res.avValue_; avAction = res.avAction_; avWorld = aw}))
 
 -- ----------------------------------------------------------------
 
@@ -3388,10 +3466,10 @@ foreign $unsigned :: Bit n -> Bit n = "$unsigned"
 -- XXX extra argument to $time and $stime to
 -- force applications to be saved on the heap
 $time :: ActionValue (Bit 64)
-$time = fromActionValue_ (__time__)
+$time = fromForeignActionValue_ (__time__)
 
 $stime :: ActionValue (Bit 32)
-$stime = fromActionValue_ (__stime__)
+$stime = fromForeignActionValue_ (__stime__)
 
 foreign __time__ :: ActionValue_ (Bit 64) = "$time"
 
@@ -3478,15 +3556,15 @@ foreign $fdisplayh ::  PrimAction = "$fdisplayh"
 foreign $random :: ActionValue_ (Bit 32) = "$random"
 
 $fgetc :: File -> ActionValue (Int 32) -- to allow space for -1
-$fgetc f = fromActionValue_ (__fgetc__ (pack f))
+$fgetc f = fromForeignActionValue_ (__fgetc__ (pack f))
 foreign __fgetc__ :: Bit 32 -> ActionValue_ (Bit 32) = "$fgetc"
 
 $fclose :: File -> Action
-$fclose f = fromAction_ (__fclose__ (pack f))
+$fclose f = fromForeignAction_ (__fclose__ (pack f))
 foreign __fclose__ :: Bit 32 -> Action_ = "$fclose"
 
 $ungetc :: Bit 8 -> File -> ActionValue (Int 32)
-$ungetc c f = fromActionValue_ ( __fungetc__ c (pack f))
+$ungetc c f = fromForeignActionValue_ ( __fungetc__ c (pack f))
 foreign __fungetc__ :: Bit 8 -> Bit 32 -> ActionValue_ (Bit 32) = "$ungetc"
 
 -- "standard" file descriptors
@@ -3501,7 +3579,7 @@ stdout_mcd :: File
 stdout_mcd = MCD 1
 
 $test$plusargs :: String -> ActionValue Bool
-$test$plusargs x = fromActionValue_ (__testplusargs__ x)
+$test$plusargs x = fromForeignActionValue_ (__testplusargs__ x)
 foreign __testplusargs__ :: String -> ActionValue_ (Bit 1) = "$test$plusargs"
 
 ------------------

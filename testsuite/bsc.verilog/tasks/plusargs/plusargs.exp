@@ -35,3 +35,9 @@ test_plusargs sysTestPlusargsTwoUseDiffArg {+He}      test1
 test_plusargs sysTestPlusargsTwoUseDiffArg {+llo}     test2
 test_plusargs sysTestPlusargsTwoUseDiffArg {+He +llo} test3
 
+# each execution of a let-bound $test$plusargs is its own call
+test_c_veri_bsv TestPlusargsLetBound
+if { $vtest == 1 } {
+find_n_strings sysTestPlusargsLetBound.v {reg TASK_testplusargs} 2
+}
+test_plusargs sysTestPlusargsLetBound {+He} test1

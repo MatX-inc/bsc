@@ -1,0 +1,27 @@
+checking package dependencies
+compiling BDPIActionValuePeekDynSel.bsv
+code generation for mkBDPIActionValuePeekDynSel starts
+Error: "BDPIActionValuePeekDynSel.bsv", line 32, column 9: (G0139)
+  The result of the foreign function `my_count' called at
+  "BDPIActionValuePeekDynSel.bsv", line 18, column 42 is used by rule `go',
+  but the call is not made: the ActionValue that makes it is read without
+  running it at "BDPIActionValuePeekDynSel.bsv", line 33, column 12 (for
+  example by peekGet, mfix or impCondOf), so the result does not exist. Use
+  the result only where the call is made, or make the call in a rule that
+  writes its result to a register or FIFO, and read that instead.
+Error: "BDPIActionValuePeekDynSel.bsv", line 32, column 9: (G0139)
+  The result of the foreign function `my_count' called at
+  "BDPIActionValuePeekDynSel.bsv", line 23, column 42 is used by rule `go',
+  but the call is not made: the ActionValue that makes it is read without
+  running it at "BDPIActionValuePeekDynSel.bsv", line 33, column 26 (for
+  example by peekGet, mfix or impCondOf), so the result does not exist. Use
+  the result only where the call is made, or make the call in a rule that
+  writes its result to a register or FIFO, and read that instead.
+Error: "BDPIActionValuePeekDynSel.bsv", line 32, column 9: (G0139)
+  The result of the foreign function `my_count' called at
+  "BDPIActionValuePeekDynSel.bsv", line 28, column 42 is used by rule `go',
+  but the call is not made: the ActionValue that makes it is read without
+  running it at "BDPIActionValuePeekDynSel.bsv", line 33, column 40 (for
+  example by peekGet, mfix or impCondOf), so the result does not exist. Use
+  the result only where the call is made, or make the call in a rule that
+  writes its result to a register or FIFO, and read that instead.

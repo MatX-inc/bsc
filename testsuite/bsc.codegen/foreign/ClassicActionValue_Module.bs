@@ -1,0 +1,19 @@
+package ClassicActionValue_Module(sysClassicActionValue_Module) where
+
+-- T0168 is for foreign functions that are not bound to a module: one
+-- bound to a module (a port list is given) has the checks of such
+-- functions (T0162 here)
+-- XXX The T0162 is MakeSymTab.widthArgs taking the type argument of
+-- ActionValue_ (Bit 8) for a width, so no such function that returns
+-- ActionValue_ (Bit n) compiles
+foreign vav :: Bit 8 -> ActionValue_ (Bit 8) = "VAv",("i","o")
+
+{-# verilog sysClassicActionValue_Module #-}
+sysClassicActionValue_Module :: Module Empty
+sysClassicActionValue_Module =
+  module
+    r :: Reg (Bit 8) <- mkReg 0
+    rules
+      "r": when True ==> do
+        x <- fromActionValue_ (vav r)
+        r := x

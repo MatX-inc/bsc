@@ -1,0 +1,8 @@
+checking package dependencies
+compiling BDPIActionValue_.bsv
+Error: "BDPIActionValue_.bsv", line 1, column 48: (T0168)
+  The foreign function `my_time' has result type `ActionValue_#(Bit#(32))'. A
+  foreign function cannot return ActionValue_: a value of that type is a
+  single call of the function, which every execution of an action made from it
+  would share. Declare the result as ActionValue or Action instead, and the
+  function is called anew at each execution.

@@ -1,0 +1,4 @@
+cond 1 2
+sel 12 22
+same 23 24
+same 125 126

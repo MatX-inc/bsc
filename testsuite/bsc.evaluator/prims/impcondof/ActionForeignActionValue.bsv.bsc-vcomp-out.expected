@@ -1,0 +1,108 @@
+checking package dependencies
+compiling ActionForeignActionValue.bsv
+code generation for sysActionForeignActionValue starts
+Warning: "ActionForeignActionValue.bsv", line 64, column 31: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValue.bsv", line 63, column 9.
+  During elaboration of `sysActionForeignActionValue' at
+  "ActionForeignActionValue.bsv", line 4, column 8.
+Warning: "ActionForeignActionValue.bsv", line 65, column 31: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValue.bsv", line 63, column 9.
+  During elaboration of `sysActionForeignActionValue' at
+  "ActionForeignActionValue.bsv", line 4, column 8.
+Warning: "ActionForeignActionValue.bsv", line 66, column 31: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValue.bsv", line 63, column 9.
+  During elaboration of `sysActionForeignActionValue' at
+  "ActionForeignActionValue.bsv", line 4, column 8.
+Warning: "ActionForeignActionValue.bsv", line 67, column 31: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValue.bsv", line 63, column 9.
+  During elaboration of `sysActionForeignActionValue' at
+  "ActionForeignActionValue.bsv", line 4, column 8.
+Warning: "ActionForeignActionValue.bsv", line 68, column 31: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValue.bsv", line 63, column 9.
+  During elaboration of `sysActionForeignActionValue' at
+  "ActionForeignActionValue.bsv", line 4, column 8.
+Warning: "ActionForeignActionValue.bsv", line 69, column 31: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValue.bsv", line 63, column 9.
+  During elaboration of `sysActionForeignActionValue' at
+  "ActionForeignActionValue.bsv", line 4, column 8.
+Warning: "ActionForeignActionValue.bsv", line 70, column 31: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValue.bsv", line 63, column 9.
+  During elaboration of `sysActionForeignActionValue' at
+  "ActionForeignActionValue.bsv", line 4, column 8.
+Error: "ActionForeignActionValue.bsv", line 63, column 9: (G0139)
+  The result of the system task `$fgetc' called at
+  "ActionForeignActionValue.bsv", line 22, column 19 is used by rule `r', but
+  the call is not made: its action is dropped where an ActionValue that holds
+  it is read without running it (for example by peekGet, mfix or impCondOf),
+  so the result does not exist. Use the result only where the call is made, or
+  make the call in a rule that writes its result to a register or FIFO, and
+  read that instead.
+Error: "ActionForeignActionValue.bsv", line 63, column 9: (G0139)
+  The result of the system task `$fgetc' called at
+  "ActionForeignActionValue.bsv", line 30, column 19 is used by rule `r', but
+  the call is not made: its action is dropped where an ActionValue that holds
+  it is read without running it (for example by peekGet, mfix or impCondOf),
+  so the result does not exist. Use the result only where the call is made, or
+  make the call in a rule that writes its result to a register or FIFO, and
+  read that instead.
+Error: "ActionForeignActionValue.bsv", line 63, column 9: (G0139)
+  The result of the system task `$fgetc' called at
+  "ActionForeignActionValue.bsv", line 36, column 19 is used by rule `r', but
+  the call is not made: its action is dropped where an ActionValue that holds
+  it is read without running it (for example by peekGet, mfix or impCondOf),
+  so the result does not exist. Use the result only where the call is made, or
+  make the call in a rule that writes its result to a register or FIFO, and
+  read that instead.
+Error: "ActionForeignActionValue.bsv", line 63, column 9: (G0139)
+  The result of the system task `$fgetc' called at
+  "ActionForeignActionValue.bsv", line 51, column 19 is used by rule `r', but
+  the call is not made: its action is dropped where an ActionValue that holds
+  it is read without running it (for example by peekGet, mfix or impCondOf),
+  so the result does not exist. Use the result only where the call is made, or
+  make the call in a rule that writes its result to a register or FIFO, and
+  read that instead.
+Error: "ActionForeignActionValue.bsv", line 63, column 9: (G0139)
+  The result of the system task `$fgetc' called at
+  "ActionForeignActionValue.bsv", line 52, column 19 is used by rule `r', but
+  the call is not made: its action is dropped where an ActionValue that holds
+  it is read without running it (for example by peekGet, mfix or impCondOf),
+  so the result does not exist. Use the result only where the call is made, or
+  make the call in a rule that writes its result to a register or FIFO, and
+  read that instead.
+Error: "ActionForeignActionValue.bsv", line 63, column 9: (G0139)
+  The result of the system task `$fgetc' called at
+  "ActionForeignActionValue.bsv", line 58, column 19 is used by rule `r', but
+  the call is not made: its action is dropped where an ActionValue that holds
+  it is read without running it (for example by peekGet, mfix or impCondOf),
+  so the result does not exist. Use the result only where the call is made, or
+  make the call in a rule that writes its result to a register or FIFO, and
+  read that instead.
+Error: "ActionForeignActionValue.bsv", line 63, column 9: (G0139)
+  The result of the system task `$fgetc' called at
+  "ActionForeignActionValue.bsv", line 59, column 19 is used by rule `r', but
+  the call is not made: its action is dropped where an ActionValue that holds
+  it is read without running it (for example by peekGet, mfix or impCondOf),
+  so the result does not exist. Use the result only where the call is made, or
+  make the call in a rule that writes its result to a register or FIFO, and
+  read that instead.

@@ -1,0 +1,17 @@
+package ClassicActionValuePeek(sysClassicActionValuePeek) where
+
+import GetPut
+
+-- a Classic foreign function that returns ActionValue, read by a peek
+-- whose value does not use the result: there is nothing to report
+foreign my_time :: ActionValue (Bit 64) = "$time"
+
+{-# verilog sysClassicActionValuePeek #-}
+sysClassicActionValuePeek :: Module Empty
+sysClassicActionValuePeek =
+  module
+    r :: Reg (Bit 64) <- mkReg 0
+    let g :: Get (Bit 64)
+        g = toGet (do { _ <- my_time; return r })
+    rules
+      "go": when True ==> r := peekGet g

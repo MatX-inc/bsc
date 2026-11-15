@@ -1,0 +1,5 @@
+checking package dependencies
+compiling PeekTask.bsv
+code generation for sysPeekTask starts
+Verilog file created: sysPeekTask.v
+All packages are up to date.
