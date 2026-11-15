@@ -52,6 +52,7 @@ initYState str flags doHardFail ds avis rs = do
   --
   ctx <- Y.mkContext
   return (YState { context = ctx,
+                   exprContext = Nothing,
                    --flags = flags,
                    hardFail = doHardFail,
 
@@ -95,6 +96,11 @@ checkDisjointExpr s e1 e2 = runStateT (checkDisjointExprM True e1 e2) s
 -- that is one condition with itself or with True is satisfiable exactly when
 -- that condition is, so the result is kept per condition (satMap) and the
 -- solver runs once for each.  The conversions are made as for any pair.
+-- Expression queries are checked as assumptions in a context of their own
+-- (exprContext), which has no assertions, so the result is the pair's; its
+-- terms stay internalized from one query to the next until it is emptied.
+-- Rule pairs keep the push/pop context.  An undecided assumption check is
+-- redone the push/pop way.
 checkDisjointExprM :: Bool -> AExpr -> AExpr -> YM (Maybe Bool)
 checkDisjointExprM single e1 e2 = withTraceTest $ do
   when traceTest $ traceM("comparing exprs: " ++ ppString (e1, e2))
@@ -113,20 +119,26 @@ checkDisjointExprM single e1 e2 = withTraceTest $ do
         sat_res <- case mcond of
           Just c | Just r <- M.lookup c sat_memo -> return r
           _ -> do
-            -- push a new ctx so that we can cleanly retract some assertions
-            -- (this is more efficient than retracting them individually)
-            liftIO $ Y.ctxPush ctx
-            liftIO $ Y.assert ctx ye1
-            --when traceTest $ traceM("assert1 done")
-            liftIO $ Y.assert ctx ye2
-            --when traceTest $ traceM("assert2 done")
+            res0 <- if single
+                    then do ectx <- getExprContext
+                            liftIO $ Y.ctxStatusAssuming ectx [ye1, ye2]
+                    else return Y.Unknown
+            res <- if isDecided res0 then return res0 else do
+              -- push a new ctx so that we can cleanly retract some assertions
+              -- (this is more efficient than retracting them individually)
+              liftIO $ Y.ctxPush ctx
+              liftIO $ Y.assert ctx ye1
+              --when traceTest $ traceM("assert1 done")
+              liftIO $ Y.assert ctx ye2
+              --when traceTest $ traceM("assert2 done")
 
-            res <- liftIO $ Y.ctxStatus ctx
+              r <- liftIO $ Y.ctxStatus ctx
 
-            -- retract the assertions
-            liftIO $ Y.ctxPop ctx
+              -- retract the assertions
+              liftIO $ Y.ctxPop ctx
+              return r
             case mcond of
-              Just c | res == Y.Satisfiable || res == Y.Unsatisfiable ->
+              Just c | isDecided res ->
                 modify (\s -> s { satMap = M.insert c res (satMap s) })
               _ -> return ()
             return res
@@ -153,6 +165,39 @@ checkDisjointRulePairM (r1, r2) = do
   c1 <- getRuleCond r1
   c2 <- getRuleCond r2
   checkDisjointExprM False c1 c2
+
+isDecided :: Y.Status -> Bool
+isDecided r = r == Y.Satisfiable || r == Y.Unsatisfiable
+
+-- The expression context, emptied (popped) every exprFlushChecks checks,
+-- since each of its searches assigns every term it holds.
+-- Invariant: its checks answer as the main context's push/pop checks would
+-- only because the main context holds no assertions outside push/pop.  Any
+-- base-level assertion there (such as re-enabling assertDef) would silently
+-- make them differ.
+getExprContext :: YM Y.Context
+getExprContext = do
+  mctx <- gets exprContext
+  case mctx of
+    Just (ctx, n)
+      | n < exprFlushChecks -> do
+          modify (\s -> s { exprContext = Just (ctx, n + 1) })
+          return ctx
+      | otherwise -> do
+          liftIO $ Y.ctxPop ctx
+          liftIO $ Y.ctxPush ctx
+          modify (\s -> s { exprContext = Just (ctx, 1) })
+          return ctx
+    Nothing -> do
+      ctx <- liftIO Y.mkSiblingContext
+      liftIO $ Y.ctxPush ctx
+      modify (\s -> s { exprContext = Just (ctx, 1) })
+      return ctx
+
+-- Long enough to share the terms of a conflict map's queries; ControllerAtomics
+-- gains as much at 64 as at 256, and mkREDMA's queries slow down from 1024.
+exprFlushChecks :: Int
+exprFlushChecks = 64
 
 -- The condition whose satisfiability is that of the pair, if there is one.
 singleCondition :: AExpr -> AExpr -> Maybe AExpr
@@ -335,7 +380,12 @@ cvtStatus res = case (res) of
 
 data YState =
     YState {
+               -- must hold no assertions outside push/pop, or exprContext
+               -- answers differ (see getExprContext)
                context       :: Y.Context,
+               -- for expression queries (checkDisjointExprM), made on first
+               -- use, and the number of checks since it was last emptied
+               exprContext   :: Maybe (Y.Context, Int),
                --flags         :: Flags,
                hardFail      :: Bool,
 

@@ -275,6 +275,8 @@ int32_t yices_assert_formulas(context_t *ctx, uint32_t n, const term_t t[]) { re
 
 smt_status_t yices_check_context(context_t *ctx, const param_t *params) { return STATUS_IDLE; }
 
+smt_status_t yices_check_context_with_assumptions(context_t *ctx, const param_t *params, uint32_t n, const term_t t[]) { return STATUS_IDLE; }
+
 int32_t yices_assert_blocking_clause(context_t *ctx) { return 0; }
 
 void yices_stop_search(context_t *ctx) { }
