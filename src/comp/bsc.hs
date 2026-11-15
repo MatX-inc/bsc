@@ -540,9 +540,14 @@ compilePackage
     start flags DFsympostbinary
     -- XXX The way we construct the symtab is to replace the user-visible
     -- XXX imports with the full imports.
+    -- (and so it is not built when no module is generated)
     let mint = replaceImportedSignatures mctx impsigs'
-    internalSymt <- mkSymTab errh mint
-    t <- dump errh flags t DFsympostbinary dumpnames mint
+    internalSymt <- if null gens
+                    then return (internalError "bsc: internalSymt")
+                    else mkSymTab errh mint
+    t <- if null gens
+         then dumpStr errh flags t DFsympostbinary dumpnames (ppReadable mint)
+         else dump errh flags t DFsympostbinary dumpnames mint
 
     start flags DFfixup
     let (imodf, alldefsList) = fixupDefs dictBuckets imod binmods
