@@ -605,6 +605,7 @@ data ErrMsg =
         | EBadSpecialArgs
         | EBadMethodConflictOp
         | EBadMethodConflictOpList
+        | EUnsupportedMethodConflictOp String
         | WNoSchedulingAnnotation [String] String [String]
         | ENestedModulePragma -- ^ pragmas not allowed in nested modules
         | ETerminalAction -- ^ action ends a block that requires a return value
@@ -1892,6 +1893,10 @@ getErrorText (WUnusedDef i) =
      s2par ("Definition of " ++ quote i ++ " is not used."))
 getErrorText ENotUTF8 =
     (Parse 224, empty, s2par "File encoding is not UTF-8")
+getErrorText (EUnsupportedMethodConflictOp op) =
+    (Parse 225, empty,
+     s2par ("The scheduling operator " ++ quote op ++
+            " is not supported for imported modules"))
 
 -- Type check and elaboration errors
 
