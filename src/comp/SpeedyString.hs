@@ -6,31 +6,36 @@ module SpeedyString(SString, toString, fromString, fromEnumName,
                     foldrChars, isSuffixOfChars, lookupChars,
                     InternSnapshot(..), snapshotInternState, validSnapshot,
                     snapshotProblem, restoreInternState, internCount,
-                    renderInternTable, sstringId) where
+                    allInternedStrings, renderInternTable,
+                    decodeInternTable, readInternTable, restoreInternTable,
+                    sstringId) where
 
 import Prelude hiding((++), concat, filter)
 import qualified Prelude((++), filter)
+import System.Environment(getArgs, lookupEnv)
 import System.IO.Unsafe(unsafePerformIO)
 import Control.DeepSeq(rnf)
-import Control.Exception(evaluate)
-import Control.Monad(forM_, when)
+import Control.Exception(IOException, evaluate, try)
+import Control.Monad(forM_, unless, when)
 import Data.Array(Array, listArray)
 import Data.Array.Base(unsafeAt, unsafeRead, unsafeWrite)
 import Data.Array.IO(IOArray, IOUArray, newArray)
-import Data.Bits((.&.), (.|.), shiftL, shiftR)
+import Data.Bits((.&.), (.|.), shiftL, shiftR, xor)
 import Data.IORef(IORef, newIORef, readIORef, writeIORef)
 import qualified Data.Set as Set
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Unsafe as BSU
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Lazy.Char8 as BLC
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Short as SBS
 import qualified Data.ByteString.Short.Internal as SBS(unsafeIndex)
 import Data.Char(chr, ord, toUpper, isDigit)
-import Data.Word(Word8)
+import Data.Word(Word8, Word64)
 import Data.List(find, foldl', intersperse, isSuffixOf)
 import Data.Maybe(isNothing)
 import Numeric(showHex)
+import Text.Read(readMaybe)
 -- import qualified NotSoSpeedyString
 import ErrorUtil (internalError)
 import qualified Data.Generics as Generic
@@ -46,9 +51,50 @@ sstringId (SString i) = i
 instance Eq SString where
     (SString i) == (SString i') = i == i'
 
--- note that Ord is not the usual string ordering
+data InternOrder
+    = InternNormal
+    | InternReverse
+    | InternRandom !Word64
+
+-- SplitMix64 / Stafford Mix13 finalizer: a bijection on Word64 (every step
+-- is invertible mod 2^64), so distinct dense ids never collide under Ord.
+mixInternId :: Word64 -> Int -> Word64
+mixInternId !seed !i =
+    let !z0 = (fromIntegral i :: Word64) + seed + 0x9e3779b97f4a7c15
+        !z1 = (z0 `xor` (z0 `shiftR` 30)) * 0xbf58476d1ce4e5b9
+        !z2 = (z1 `xor` (z1 `shiftR` 27)) * 0x94d049bb133111eb
+    in  z2 `xor` (z2 `shiftR` 31)
+
+-- Ord compares arrival order, not string contents.  With
+-- -trace-intern-reverse that order is reversed, and with
+-- -trace-intern-random (seeded via $BSC_INTERN_SEED) it is permuted by
+-- mixInternId, while the dense table ids 0 .. internCount - 1 stay unchanged.
 instance Ord SString where
-    compare (SString i) (SString i') = compare i i'
+    compare (SString i) (SString i') =
+        case internOrderMode of
+          InternNormal      -> compare i i'
+          InternReverse     -> compare i' i
+          InternRandom seed -> compare (mixInternId seed i) (mixInternId seed i')
+    SString i < SString i' =
+        case internOrderMode of
+          InternNormal      -> i < i'
+          InternReverse     -> i' < i
+          InternRandom seed -> mixInternId seed i < mixInternId seed i'
+    SString i <= SString i' =
+        case internOrderMode of
+          InternNormal      -> i <= i'
+          InternReverse     -> i' <= i
+          InternRandom seed -> mixInternId seed i <= mixInternId seed i'
+    SString i > SString i' =
+        case internOrderMode of
+          InternNormal      -> i > i'
+          InternReverse     -> i' > i
+          InternRandom seed -> mixInternId seed i > mixInternId seed i'
+    SString i >= SString i' =
+        case internOrderMode of
+          InternNormal      -> i >= i'
+          InternReverse     -> i' >= i
+          InternRandom seed -> mixInternId seed i >= mixInternId seed i'
 
 instance Show SString where
     show = show . toString
@@ -591,6 +637,29 @@ snapshotInternState = do
 internCount :: IO Int
 internCount = fmap tNext (readIORef table)
 
+allInternedStrings :: IO [SString]
+allInternedStrings = do
+    n <- internCount
+    return [SString i | i <- [0 .. n - 1]]
+
+-- Interning begins before FlagsDecode runs, so read -trace-intern-reverse
+-- and -trace-intern-random (plus $BSC_INTERN_SEED) directly from
+-- BSC_OPTIONS and argv.
+internOrderMode :: InternOrder
+internOrderMode = unsafePerformIO $ do
+    args <- getArgs
+    env <- lookupEnv "BSC_OPTIONS"
+    rawSeed <- lookupEnv "BSC_INTERN_SEED"
+    let seed :: Word64
+        seed = maybe 0 (fromInteger :: Integer -> Word64) (rawSeed >>= readMaybe)
+        step _ "-trace-intern-reverse"  = InternReverse
+        step _ "--trace-intern-reverse" = InternReverse
+        step _ "-trace-intern-random"   = InternRandom seed
+        step _ "--trace-intern-random"  = InternRandom seed
+        step a _                        = a
+    return (foldl' step InternNormal (maybe [] words env Prelude.++ args))
+{-# NOINLINE internOrderMode #-}
+
 validSnapshot :: InternSnapshot -> Bool
 validSnapshot = isNothing . snapshotProblem
 
@@ -677,3 +746,126 @@ jsonString s = BB.char7 '"' <> foldMap escape s <> BB.char7 '"'
       where n = ord c
             m = n - 0x10000
     unit u = BB.string7 "\\u" <> BB.word16HexFixed (fromIntegral u)
+
+-- Decode the exact canonical JSON bytes written by renderInternTable.
+decodeInternTable :: BL.ByteString -> Either String InternSnapshot
+decodeInternTable bytes = do
+    snap <- parseDoc (BLC.unpack bytes)
+    case snapshotProblem snap of
+      Just problem -> Left problem
+      Nothing -> do
+        canonical <- renderInternTable snap
+        unless (canonical == bytes) $
+            Left "intern table differs from canonical -trace-intern-table form"
+        return snap
+  where
+    headerPrefix = "{\"internNextId\":"
+    entriesPrefix = ",\"internEntries\":["
+
+    parseDoc :: String -> Either String InternSnapshot
+    parseDoc s0 = do
+        s1 <- expectPrefix 1 headerPrefix s0
+        (n, s2) <- parseNat 1 s1
+        s3 <- expectPrefix 1 entriesPrefix s2
+        entries <- case s3 of
+                     '\n' : ']' : '}' : '\n' : "" -> Right []
+                     '\n' : '[' : s4              -> parseEntries 2 [] s4
+                     _                            -> Left "line 1: malformed internEntries"
+        return (InternSnapshot n entries)
+
+    expectPrefix :: Int -> String -> String -> Either String String
+    expectPrefix _ [] rest = Right rest
+    expectPrefix lineNo (p : ps) (c : cs)
+        | p == c = expectPrefix lineNo ps cs
+    expectPrefix lineNo _ _ =
+        Left ("line " <> show lineNo <> ": malformed intern table")
+
+    parseNat :: Int -> String -> Either String (Int, String)
+    parseNat _ ('0' : cs) =
+        case cs of
+          d : _ | isDigit d -> Left "leading zero in integer"
+          _ -> Right (0, cs)
+    parseNat lineNo (d : cs) | d >= '1' && d <= '9' =
+        let (digits, rest) = span isDigit cs
+            val = foldl' (\acc ch -> acc * 10 + toInteger (ord ch - ord '0'))
+                         (toInteger (ord d - ord '0')) digits
+        in  if val <= toInteger (maxBound :: Int)
+            then Right (fromInteger val, rest)
+            else Left ("line " <> show lineNo <> ": integer out of range")
+    parseNat lineNo _ =
+        Left ("line " <> show lineNo <> ": expected non-negative integer")
+
+    parseEntries :: Int -> [(Int, String)] -> String -> Either String [(Int, String)]
+    parseEntries !lineNo !revAcc s0 = do
+        (idx, s1) <- parseNat lineNo s0
+        s2 <- case s1 of
+                ',' : '"' : r -> Right r
+                _ -> Left ("line " <> show lineNo <> ": malformed entry header")
+        (spellingStr, s3) <- parseJsonString lineNo [] s2
+        case s3 of
+          ']' : ',' : '\n' : '[' : s4 ->
+              parseEntries (lineNo + 1) ((idx, spellingStr) : revAcc) s4
+          ']' : '\n' : ']' : '}' : '\n' : "" ->
+              Right (reverse ((idx, spellingStr) : revAcc))
+          _ -> Left ("line " <> show lineNo <> ": malformed entry terminator")
+
+    parseJsonString :: Int -> String -> String -> Either String (String, String)
+    parseJsonString !lineNo revChars ('"' : r) =
+        Right (reverse revChars, r)
+    parseJsonString !lineNo revChars ('\\' : esc) =
+        case esc of
+          '"'  : r -> parseJsonString lineNo ('"'  : revChars) r
+          '\\' : r -> parseJsonString lineNo ('\\' : revChars) r
+          'n'  : r -> parseJsonString lineNo ('\n' : revChars) r
+          'r'  : r -> parseJsonString lineNo ('\r' : revChars) r
+          't'  : r -> parseJsonString lineNo ('\t' : revChars) r
+          'u' : a : b : c : d : r
+              | Just u <- hex4 a b c d ->
+                  if u >= 0xD800 && u < 0xDC00 then
+                      case r of
+                        '\\' : 'u' : a2 : b2 : c2 : d2 : r2
+                            | Just w <- hex4 a2 b2 c2 d2
+                            , w >= 0xDC00 && w < 0xE000 ->
+                                let cp = 0x10000 + (u - 0xD800) * 0x400 + (w - 0xDC00)
+                                in  parseJsonString lineNo (chr cp : revChars) r2
+                        _ -> Left (loneSurrogate lineNo)
+                  else if u >= 0xDC00 && u < 0xE000 then
+                      Left (loneSurrogate lineNo)
+                  else
+                      parseJsonString lineNo (chr u : revChars) r
+          _ -> Left ("line " <> show lineNo <> ": invalid escape in string")
+    parseJsonString !lineNo revChars (c : r)
+        | c >= ' ' && c < '\DEL' = parseJsonString lineNo (c : revChars) r
+        | otherwise = Left ("line " <> show lineNo <> ": invalid character in string")
+    parseJsonString !lineNo _ [] =
+        Left ("line " <> show lineNo <> ": unterminated string")
+
+    hex4 :: Char -> Char -> Char -> Char -> Maybe Int
+    hex4 a b c d = do
+        va <- hexDigit a
+        vb <- hexDigit b
+        vc <- hexDigit c
+        vd <- hexDigit d
+        return (((va * 16 + vb) * 16 + vc) * 16 + vd)
+
+    hexDigit :: Char -> Maybe Int
+    hexDigit c
+        | c >= '0' && c <= '9' = Just (ord c - ord '0')
+        | c >= 'a' && c <= 'f' = Just (10 + ord c - ord 'a')
+        | otherwise            = Nothing
+
+    loneSurrogate :: Int -> String
+    loneSurrogate lineNo =
+        "line " <> show lineNo <> " escapes a surrogate on its own, which " <>
+        "renderInternTable writes for a surrogate Char and JSON text cannot hold"
+
+readInternTable :: FilePath -> IO (Either String InternSnapshot)
+readInternTable path = do
+    r <- try (BS.readFile path)
+    return $ case r of
+      Left e      -> Left (show (e :: IOException))
+      Right bytes -> decodeInternTable (BL.fromStrict bytes)
+
+restoreInternTable :: FilePath -> IO (Either String ())
+restoreInternTable path =
+    readInternTable path >>= either (return . Left) restoreInternState

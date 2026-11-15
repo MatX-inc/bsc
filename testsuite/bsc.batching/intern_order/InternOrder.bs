@@ -1,0 +1,13 @@
+package InternOrder where
+
+-- Minimal Classic module used to inspect SString Ord order and verify that
+-- -trace-intern-reverse, -trace-intern-random ($BSC_INTERN_SEED), and
+-- -trace-intern-load ($BSC_INTERN_LOAD) leave .bi and .ba flag metadata
+-- unchanged.
+{-# verilog mkInternOrder #-}
+mkInternOrder :: Module Empty
+mkInternOrder =
+  module
+    count :: Reg (UInt 8) <- mkReg 0
+    rules
+      "step": when True ==> count := count + 1

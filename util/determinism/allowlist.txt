@@ -1,0 +1,5 @@
+# bsc determinism gate: known-pending differing files (util/determinism/compare.py).
+#
+# Format: TAB-separated  path<TAB>root_id<TAB>note, sorted by path.
+# Generate or refresh from a full normal vs. -trace-intern-reverse archive pair
+# with `compare.py --allow-stale --write-allowlist util/determinism/allowlist.txt`.
