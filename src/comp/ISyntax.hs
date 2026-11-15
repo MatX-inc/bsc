@@ -16,6 +16,7 @@ module ISyntax(
         IAbstractInput(..),
         IStateVar(..),
         PortTypeMap,
+        SourceTypeInfo,
         IClock(..),
         IReset(..),
         IInout(..),
@@ -164,6 +165,7 @@ data IModule a
                 imod_resets :: [IReset a],              -- resets (internal and external)
                 imod_state_insts :: [(Id, IStateVar a)], -- state elements
                 imod_port_types :: PortTypeMap, -- map from state variable -> port -> source type
+                imod_expr_types :: SourceTypeInfo a, -- source interpretations of packed expressions
                 imod_local_defs :: [IDef a],            -- local definitions
                 imod_rules :: IRules a,                 -- rules
                 imod_interface :: [IEFace a],           -- package interface
@@ -180,6 +182,12 @@ getWireInfo = imod_external_wires
 -- Toplevel ports of the current module are represented in the same map
 -- using the Nothing value in place of an instance name.
 type PortTypeMap = M.Map (Maybe Id) (M.Map VName IType)
+
+-- Source interpretations of a bit-vector expression, rather than its
+-- representation type. Several source types can share the same bits after
+-- repacking, alias elimination or CSE. Expression roots (including ports)
+-- must follow the same substitutions as the module's executable expressions.
+type SourceTypeInfo a = [(IExpr a, S.Set IType)]
 
 data IDef a = IDef Id IType (IExpr a) [DefProp]
         deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
@@ -848,6 +856,22 @@ data IConInfo a =
         | ICInout { iConType :: IType, iInout :: IInout a }
         -- uninit is used to give simpler error messages for completely uninitialized bit vectors / vectors
         | ICLazyArray { iConType :: IType, iArray :: ILazyArray a, uninit :: Maybe (IExpr a, IExpr a)}
+          -- a held pack/unpack coercion (see PrimPack/PrimUnpack in IExpand):
+          -- created only during elaboration; never appears in a .bo or in
+          -- the final IModule (walkNF/evalStaticOp' eliminate it on demand).
+          -- lzOrig is the (heaped) value the coercion was applied to, and
+          -- lzApplied is a (heaped, unevaluated) application of the
+          -- underlying Bits class method to lzOrig -- so forcing evaluates
+          -- the method body at most once no matter how many consumers
+          -- demand the result, while a matching opposite coercion can
+          -- still cancel against lzOrig at any time (Bits is coherent, so
+          -- equal type arguments imply interchangeable dictionaries).
+          -- lzTa/lzTn are the (a, n) type arguments, used for the
+          -- cancellation match.
+        | ICLazyPack { iConType :: IType, lzTa :: IType, lzTn :: IType,
+                       lzOrig :: IExpr a, lzApplied :: IExpr a }
+        | ICLazyUnpack { iConType :: IType, lzTa :: IType, lzTn :: IType,
+                         lzOrig :: IExpr a, lzApplied :: IExpr a }
         | ICName { iConType :: IType, iName :: Id }
         | ICAttrib { iConType :: IType, iAttributes :: [(Position,PProp)] }
           -- This was updated to support a list of positions,
@@ -893,6 +917,8 @@ ordC (ICPosition { }) = 29
 ordC (ICType { }) = 30
 ordC (ICPred { }) = 31
 ordC (ICMethod { }) = 32
+ordC (ICLazyPack { }) = 33
+ordC (ICLazyUnpack { }) = 34
 
 instance Eq (IConInfo a) where
     x == y  =  cmpC x y == EQ
@@ -946,6 +972,14 @@ cmpC c1 c2 =
         ICInout { } -> EQ
         ICLazyArray { iArray = arr } -> compare (map ac_ptr (Array.elems arr))
                                                 (map ac_ptr (Array.elems (iArray c2)))
+        -- lzApplied is deliberately not compared: it is determined by
+        -- lzOrig and the (coherent) dictionary, and two independently
+        -- created coercions of the same value should compare equal even
+        -- though they hold separate applied cells
+        ICLazyPack { lzTa = ta1, lzTn = tn1, lzOrig = o1 } ->
+            compare (ta1, tn1, o1) (lzTa c2, lzTn c2, lzOrig c2)
+        ICLazyUnpack { lzTa = ta1, lzTn = tn1, lzOrig = o1 } ->
+            compare (ta1, tn1, o1) (lzTa c2, lzTn c2, lzOrig c2)
         ICName { iName = n } -> compare n (iName c2)
         ICAttrib { iAttributes = pps } ->
             let pps_no_pos = map snd pps
@@ -1043,7 +1077,7 @@ instance PPrint (IPackage a) where
   where sep a b c = b $+$ a $+$ c
 
 instance PPrint (IModule a) where
- pPrint d p (IModule mi fmod be wi ps ks as clks rsts vs pts ds rs ifc ffcalNo cmap) =
+ pPrint d p (IModule mi fmod be wi ps ks as clks rsts vs pts ets ds rs ifc ffcalNo cmap) =
         (text "IModule" <+> ppId d mi <> if fmod then text " -- function" else text "") $+$
         (case be of
              Nothing -> empty
@@ -1063,6 +1097,8 @@ instance PPrint (IModule a) where
         foldr (($+$) . ppSV) (text "") vs $+$
         text "-- port types" $+$
         foldr (($+$) . ppPT) (text "") (M.toList pts) $+$
+        text "-- expression source types" $+$
+        pPrint d p [(e, S.toList ts) | (e, ts) <- ets] $+$
         text "-- imod local defs" $+$
         foldr (($+$) . ppDef d) (text "") ds $+$
         text "-- imod rules" $+$
@@ -1191,6 +1227,13 @@ instance PPrint (IExpr a) where
     pPrint d@PDReadable _ (ICon i (ICPrim _ p)) = text (show p)
     pPrint d@PDReadable _ (ICon i (ICIFace _ _ is)) = ppId d i <> text"{" <> sep (map (pPrint d 10) is) <> text "}"
     pPrint d@PDReadable _ (ICon i (ICLazyArray {})) = ppId d i <> text "[Array]"
+    -- distinguish held coercions from an application of the bare
+    -- primitive (they only ever print from diagnostics, so show the
+    -- payload ref too)
+    pPrint d@PDReadable _ (ICon i (ICLazyPack { lzOrig = o })) =
+        ppId d i <> text "[Held " <> pPrint d 0 o <> text "]"
+    pPrint d@PDReadable _ (ICon i (ICLazyUnpack { lzOrig = o })) =
+        ppId d i <> text "[Held " <> pPrint d 0 o <> text "]"
 --    pPrint d@PDReadable _ (ICon id con) = ppId d id <> text (": " ++ show con)
     pPrint d p (IVar i) = ppId d i -- <> text ":V"
     pPrint d p (ILAM i k e) = ppQuant "/\\ "  d p i k e
@@ -1213,8 +1256,9 @@ instance NFData (IPackage a) where
     rnf (IPackage i lps ps ds atfCache) = rnf5 i ps lps ds atfCache
 
 instance NFData (IModule a) where
-    rnf (IModule x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16) =
-        rnf16 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16
+    rnf (IModule x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 ets x12 x13 x14 x15 x16) =
+        rnf16 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 `seq`
+        rnf [(e, S.toList ts) | (e, ts) <- ets]
 
 instance NFData (IEFace a) where
     rnf (IEFace x1 x2 x3 x4 x5 x6) = rnf6 x1 x2 x3 x4 x5 x6
@@ -1270,6 +1314,8 @@ instance NFData (IConInfo a) where
     rnf (ICName x1 x2) = rnf2 x1 x2
     rnf (ICAttrib x1 x2) = rnf2 x1 x2
     rnf (ICLazyArray x1 x2 x3) = rnf3 x1 x2 x3
+    rnf (ICLazyPack x1 x2 x3 x4 x5) = rnf5 x1 x2 x3 x4 x5
+    rnf (ICLazyUnpack x1 x2 x3 x4 x5) = rnf5 x1 x2 x3 x4 x5
     rnf (ICPosition x1 x2) = rnf2 x1 x2
     rnf (ICType x1 x2) = rnf2 x1 x2
     rnf (ICPred x1 x2) = rnf2 x1 x2
@@ -1469,6 +1515,8 @@ showTypelessCI (ICIs {iConType = t, conTagInfo = cti}) = "(ICIs _ " ++ (ppReadab
 showTypelessCI (ICOut {iConType = t, conTagInfo = cti}) = "(ICOut _ " ++ (ppReadable cti) ++ ")"
 showTypelessCI (ICTuple {iConType = t, fieldIds = fs}) = "(ICTuple _ " ++ (show fs) ++ ")"
 showTypelessCI (ICSel {iConType = t, selNo = i, numSel = j}) = "(ICSel _ " ++ (show i) ++ " " ++ (show j) ++ ")"
+showTypelessCI (ICLazyPack {lzOrig = o}) = "(ICLazyPack _ [" ++ showTypeless o ++ "])"
+showTypelessCI (ICLazyUnpack {lzOrig = o}) = "(ICLazyUnpack _ [" ++ showTypeless o ++ "])"
 showTypelessCI (ICVerilog {iConType = t, isUserImport = ui, vInfo = v, vMethTs = vts}) = "(ICVerilog _ " ++ {--(show v)--} "<vmodinfo>" ++ " [_])"
 showTypelessCI (ICUndet {iConType = t, iuKind = k, imVal = Nothing}) = "(ICUndet _ _ )"
 showTypelessCI (ICUndet {iConType = t, iuKind = k, imVal = Just v})  = "(ICUndet _ _ [" ++ ppReadable v ++ "])"
