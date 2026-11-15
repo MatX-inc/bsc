@@ -230,7 +230,7 @@ proc bluetcl_opt_pass { source {options {}} {outfile {""}} } {
     incr_stat "bluetcl_opt_pass"
 
     set stat [bluetcl_opt_run $source $options $outfile]
-    if [run_bluetcl $source] then {
+    if {$stat} then {
 	pass "`$source' executes"
     } else {
 	fail "`$source' should execute"
