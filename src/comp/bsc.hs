@@ -565,6 +565,9 @@ compilePackage
                               [ ipkg_atf_cache m | (m, _) <- binmods ]
 
     let orderGens :: IPackage HeapData -> [WrapInfo] -> [WrapInfo]
+        -- nothing to order (and no reason to build the dependency
+        -- graph of the whole package) without synthesized modules
+        orderGens _ [] = []
         orderGens (IPackage pid _ _ ds _) gs =
                 --trace (ppReadable (gis, g, os)) $
                                               map get os
@@ -575,7 +578,9 @@ compilePackage
                 ds' = [ IDef (lookupWithDefault tr i i) t e p
                                 | IDef i t e p <- ds, i `notElem` gis ]
                 is = [ i | IDef i _ _ _ <- ds' ]
-                g  = [ (i, fdVars e `intersect` is) | IDef i _ e _ <- ds' ]
+                is_set = S.fromList is
+                g  = [ (i, filter (`S.member` is_set) (fdVars e))
+                     | IDef i _ e _ <- ds' ]
                 iis = scc g
                 os = concat iis `intersect` gis
                 get i = headOrErr "bsc.orderGens: no WrapInfo"
