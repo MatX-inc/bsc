@@ -51,19 +51,23 @@ module sysMutuallyExclusiveSVA(CLK,
   wire WILL_FIRE_RL_reset;
 
   // inputs to muxes for submodule ports
-  wire [3 : 0] MUX_big_counter$write_1__VAL_1;
-  wire [1 : 0] MUX_small_counter$write_1__VAL_1;
+  wire [3 : 0] MUX_big_counter$write_1__VAL_RL_big_tick_counter;
+  wire [1 : 0] MUX_small_counter$write_1__VAL_RL_small_tick_counter;
 
   // rule RL_reset
   assign WILL_FIRE_RL_reset = small_counter == 2'd0 && flagA && flagB ;
 
   // inputs to muxes for submodule ports
-  assign MUX_big_counter$write_1__VAL_1 = big_counter - 4'd1 ;
-  assign MUX_small_counter$write_1__VAL_1 = small_counter - 2'd1 ;
+  assign MUX_big_counter$write_1__VAL_RL_big_tick_counter =
+	     big_counter - 4'd1 ;
+  assign MUX_small_counter$write_1__VAL_RL_small_tick_counter =
+	     small_counter - 2'd1 ;
 
   // register big_counter
   assign big_counter$D_IN =
-	     (big_counter != 4'd0) ? MUX_big_counter$write_1__VAL_1 : 4'd8 ;
+	     (big_counter != 4'd0) ?
+	       MUX_big_counter$write_1__VAL_RL_big_tick_counter :
+	       4'd8 ;
   assign big_counter$EN = 1'b1 ;
 
   // register flagA
@@ -78,7 +82,7 @@ module sysMutuallyExclusiveSVA(CLK,
   // register small_counter
   assign small_counter$D_IN =
 	     (small_counter != 2'd0) ?
-	       MUX_small_counter$write_1__VAL_1 :
+	       MUX_small_counter$write_1__VAL_RL_small_tick_counter :
 	       2'd3 ;
   assign small_counter$EN = 1'b1 ;
 

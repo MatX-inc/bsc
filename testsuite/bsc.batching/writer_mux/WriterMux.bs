@@ -1,0 +1,167 @@
+package WriterMux where
+
+interface MuxOut =
+  out :: Bit 8
+
+interface GroundedIfc =
+  load :: Bit 8 -> Action
+  out  :: Bit 8
+
+-- 1a. Three non-exclusive priority writers: value wires carry rule names.
+{-# verilog mkThreeWriters #-}
+mkThreeWriters :: Module MuxOut
+mkThreeWriters = module
+  acc :: Reg (Bit 8) <- mkReg 0
+  let rAlpha :: Rules
+      rAlpha = rules { "rAlpha": when (acc < 8'd40) ==> acc := acc + 8'd3 }
+      rBeta :: Rules
+      rBeta  = rules { "rBeta":  when (acc < 8'd80) ==> acc := acc ^ 8'h5A }
+      rGamma :: Rules
+      rGamma = rules { "rGamma": when (acc < 8'd120) ==> acc := acc - 8'd7 }
+  addRules (rAlpha `preempts` (rBeta `preempts` rGamma))
+  interface
+    out = acc
+
+-- 1b. Adding a fourth more-urgent writer leaves existing writers' MUX_ value
+-- wire names (RL_rAlpha, RL_rBeta, RL_rGamma) unchanged.
+{-# verilog mkFourWriters #-}
+mkFourWriters :: Module MuxOut
+mkFourWriters = module
+  acc :: Reg (Bit 8) <- mkReg 0
+  let rUrgent :: Rules
+      rUrgent = rules { "rUrgent": when (acc == 8'd0) ==> acc := acc + 8'd11 }
+      rAlpha :: Rules
+      rAlpha  = rules { "rAlpha":  when (acc < 8'd40) ==> acc := acc + 8'd3 }
+      rBeta :: Rules
+      rBeta   = rules { "rBeta":   when (acc < 8'd80) ==> acc := acc ^ 8'h5A }
+      rGamma :: Rules
+      rGamma  = rules { "rGamma":  when (acc < 8'd120) ==> acc := acc - 8'd7 }
+  addRules (rUrgent `preempts` (rAlpha `preempts` (rBeta `preempts` rGamma)))
+  interface
+    out = acc
+
+interface VSink8 =
+  write :: Bit 8 -> PrimAction
+  read  :: Bit 8
+
+vMkSink8 :: Module VSink8
+vMkSink8 =
+  module verilog "RegN" (("width", 8), ("init", 8'd1)) "CLK" "RST" {
+    read = "Q_OUT"{reg};
+    write[0] = "D_IN"{reg} "EN";
+  } [ read <> read, read < write, write <> write ]
+
+-- 2. Repeated calls within one rule ("step") get _RL_step and _RL_step_3,
+-- skipping _RL_step_2 because another rule is already named "step_2".
+{-# verilog mkSplitRuleMux #-}
+mkSplitRuleMux :: Module MuxOut
+mkSplitRuleMux = module
+  mode :: Reg (Bit 2) <- mkReg 0
+  sink :: VSink8 <- vMkSink8
+  rules
+    "step": when (mode /= 2'd2) ==>
+      action
+        mode := mode + 2'd1
+        if (sink.read & 8'd1) == 8'd1
+          then fromPrimAction (sink.write (sink.read + 8'd3))
+          else noAction
+        if (sink.read & 8'd2) == 8'd2
+          then fromPrimAction (sink.write (sink.read ^ 8'h3C))
+          else noAction
+    "step_2": when (mode == 2'd2) ==>
+      action
+        mode := 2'd0
+        fromPrimAction (sink.write (sink.read - 8'd5))
+  interface
+    out = sink.read
+
+-- 3. Exclusive multi-writer shared arm whose joined name exceeds 60 chars is
+-- shortened to <first40>_ETC_<12digits>.
+{-# verilog mkLongSharedMux #-}
+mkLongSharedMux :: Module MuxOut
+mkLongSharedMux = module
+  phase :: Reg (Bit 2) <- mkReg 0
+  acc   :: Reg (Bit 8) <- mkReg 0
+  rules
+    "alpha_stage_controller_phase_zero": when (phase == 2'd0) ==>
+      action
+        phase := 2'd1
+        acc := acc + 8'd9
+    "beta_stage_controller_phase_one": when (phase == 2'd1) ==>
+      action
+        phase := 2'd2
+        acc := acc + 8'd9
+    "gamma_stage_controller_phase_two": when (phase == 2'd2) ==>
+      action
+        phase := 2'd3
+        acc := acc + 8'd9
+    "idle_reset": when (phase == 2'd3) ==>
+      action
+        phase := 2'd0
+        acc := acc ^ 8'hAA
+  interface
+    out = acc
+
+-- 4. Distinct writer sets whose underscore joins collide (rule "a_RL_b" vs
+-- shared arm of rules "a" and "b") both carry 12-digit hashes of their
+-- space-joined writer names, while non-colliding "other" stays clean.
+{-# verilog mkJoinCollisionMux #-}
+mkJoinCollisionMux :: Module MuxOut
+mkJoinCollisionMux = module
+  sel :: Reg (Bit 2) <- mkReg 0
+  acc :: Reg (Bit 8) <- mkReg 0
+  rules
+    "a": when (sel == 2'd0) ==>
+      action
+        sel := 2'd1
+        acc := acc + 8'd5
+    "b": when (sel == 2'd1) ==>
+      action
+        sel := 2'd2
+        acc := acc + 8'd5
+    "a_RL_b": when (sel == 2'd2) ==>
+      action
+        sel := 2'd3
+        acc := acc ^ 8'h3C
+    "other": when (sel == 2'd3) ==>
+      action
+        sel := 2'd0
+        acc := acc - 8'd1
+  interface
+    out = acc
+
+-- 5. Exclusive PrimMux arm ordering (rules in elaboration order, then methods
+-- in interface declaration order) and AOpt.mergeIdenExpr encounter-order
+-- grouping without two-writer muxOptConst flips.
+{-# verilog mkGroundedMuxOrder #-}
+mkGroundedMuxOrder :: Module GroundedIfc
+mkGroundedMuxOrder = module
+  st :: Reg (Bit 2) <- mkReg 0
+  r1 :: Reg (Bit 8) <- mkReg 0
+  r2 :: Reg (Bit 8) <- mkReg 1
+  r3 :: Reg (Bit 8) <- mkReg 2
+  rules
+    "r_zeta": when (st == 2'd1) ==>
+      action
+        st := 2'd2
+        r1 := r1 + 8'd1
+    "w_first": when (st == 2'd1) ==>
+      r2 := r2 + 8'd7
+    "w_second": when (st == 2'd2) ==>
+      r2 := r2 ^ 8'h1F
+    "w_third": when (st == 2'd3) ==>
+      action
+        st := 2'd0
+        r2 := r2 + 8'd7
+    "u_zeta": when (st == 2'd1) ==>
+      r3 := r3 + 8'd3
+    "u_alpha": when (st == 2'd2) ==>
+      r3 := r3 ^ 8'h77
+    "u_undef": when (st == 2'd3) ==>
+      r3 := _
+  interface
+    load v = action
+      st := 2'd1
+      r1 := v
+     when (st == 2'd0)
+    out = r1 ^ r2 ^ r3

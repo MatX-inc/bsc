@@ -55,6 +55,7 @@ foreach mod {mkParamSurvivor mkParamIfcOnly mkSharedAnchors mkUnnamedVsUserSurvi
     batching_verilog_pair CseSurvivor.bs $mod TopZ.bs mkTopZ {ScrambleZ.bs} {-keep-fires}
 }
 
+reverse_intern_same_verilog CseSurvivor.bs mkMuxFireSurvivor {-keep-fires}
 batching_verilog_pair CseSurvivor.bs mkMuxFireSurvivor TopA.bs mkTopA {ScrambleA.bs} {-keep-fires}
 batching_verilog_pair CseSurvivor.bs mkMuxFireSurvivor TopZ.bs mkTopZ {ScrambleZ.bs} {-keep-fires}
 

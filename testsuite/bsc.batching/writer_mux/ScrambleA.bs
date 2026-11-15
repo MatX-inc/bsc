@@ -1,0 +1,10 @@
+package ScrambleA where
+
+aa_scramble_01 :: Bit 8 -> Bit 8
+aa_scramble_01 x = (x + 8'd1) ^ 8'h11
+
+aa_scramble_02 :: Bit 8 -> Bit 8
+aa_scramble_02 x = (x + 8'd2) ^ 8'h22
+
+aa_scramble_03 :: Bit 8 -> Bit 8
+aa_scramble_03 x = (x + 8'd3) ^ 8'h33

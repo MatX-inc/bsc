@@ -1,0 +1,10 @@
+package ScrambleZ where
+
+zz_scramble_01 :: Bit 8 -> Bit 8
+zz_scramble_01 x = (x + 8'd7) ^ 8'h77
+
+zz_scramble_02 :: Bit 8 -> Bit 8
+zz_scramble_02 x = (x + 8'd8) ^ 8'h88
+
+zz_scramble_03 :: Bit 8 -> Bit 8
+zz_scramble_03 x = (x + 8'd9) ^ 8'h99

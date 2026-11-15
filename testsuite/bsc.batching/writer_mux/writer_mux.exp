@@ -1,0 +1,49 @@
+# Verify writer-named MUX_ wires, isolated writer addition, split-condition
+# ordinals within a single rule, _ETC_ hash abbreviation past 60 characters,
+# underscore-join collision disambiguation, writer-ordered exclusive mux arms,
+# and AOpt.mergeIdenExpr encounter-order grouping without muxOptConst flips.
+
+compile_verilog_pass WriterMux.bs {} {-keep-fires}
+if { $vtest == 1 } {
+    # 1. Adding a fourth more-urgent writer keeps the existing three writers'
+    # MUX_acc$write_1__VAL_RL_* wire names intact.
+    foreach w {rAlpha rBeta rGamma} {
+        find_regexp mkThreeWriters.v "MUX_acc\\\$write_1__VAL_RL_${w}\\M"
+        find_regexp mkFourWriters.v "MUX_acc\\\$write_1__VAL_RL_${w}\\M"
+    }
+    find_regexp mkFourWriters.v {MUX_acc\$write_1__VAL_RL_rUrgent\M}
+
+    # 2. Repeated calls in rule "step" get _RL_step and _RL_step_3,
+    # skipping _RL_step_2 used by rule "step_2".
+    find_regexp mkSplitRuleMux.v {MUX_sink\$write_1__VAL_RL_step\M}
+    find_regexp mkSplitRuleMux.v {MUX_sink\$write_1__VAL_RL_step_3\M}
+    find_regexp mkSplitRuleMux.v {MUX_sink\$write_1__VAL_RL_step_2\M}
+    find_regexp mkSplitRuleMux.v {MUX_sink\$write_1__SEL_RL_step\M}
+    find_regexp mkSplitRuleMux.v {MUX_sink\$write_1__SEL_RL_step_3\M}
+
+    # 3. Long shared writer list (>60 chars) abbreviates with _ETC_ + 12 digits.
+    find_regexp mkLongSharedMux.v {MUX_acc\$write_1__VAL_RL_alpha_stage_controller_phase_zero_ETC_[0-9]{12}\M}
+
+    # 4. Colliding underscore join ("a_RL_b" vs "a" + "b") disambiguates both
+    # colliding arms with 12-digit hashes while leaving "other" unhashed.
+    find_regexp mkJoinCollisionMux.v {MUX_acc\$write_1__VAL_RL_a_RL_b_[0-9]{12}\M}
+    find_regexp mkJoinCollisionMux.v {MUX_acc\$write_1__VAL_RL_other\M}
+    find_regexp_fail mkJoinCollisionMux.v {MUX_acc\$write_1__VAL_RL_a_RL_b\s*[;=,)]}
+
+    # 5. Grounded writer order (rule r_zeta before method load) and
+    # encounter-order mergeIdenExpr grouping without two-writer ?: flips.
+    find_regexp mkGroundedMuxOrder.v {assign r1\$D_IN =\s+WILL_FIRE_RL_r_zeta \?}
+    find_regexp mkGroundedMuxOrder.v {assign r1\$EN = WILL_FIRE_RL_r_zeta \|\| EN_load ;}
+    find_regexp mkGroundedMuxOrder.v {WILL_FIRE_RL_w_first \|\| WILL_FIRE_RL_w_third}
+    find_regexp mkGroundedMuxOrder.v {WILL_FIRE_RL_u_zeta: r3\$D_IN = MUX_r3\$write_1__VAL_RL_u_zeta;\s+WILL_FIRE_RL_u_alpha: r3\$D_IN = MUX_r3\$write_1__VAL_RL_u_alpha;\s+WILL_FIRE_RL_u_undef:}
+    find_regexp mkGroundedMuxOrder.v {WILL_FIRE_RL_r_zeta: st\$D_IN = 2'd2;\s+WILL_FIRE_RL_w_third: st\$D_IN = 2'd0;\s+EN_load: st\$D_IN = 2'd1;}
+}
+
+reverse_intern_same_bo WriterMux.bs
+
+foreach mod {mkThreeWriters mkFourWriters mkSplitRuleMux mkLongSharedMux mkJoinCollisionMux mkGroundedMuxOrder} {
+    reverse_intern_same_verilog WriterMux.bs $mod {-keep-fires}
+}
+
+batching_verilog_pair WriterMux.bs mkGroundedMuxOrder TopA.bs mkTopA {ScrambleA.bs} {-keep-fires}
+batching_verilog_pair WriterMux.bs mkGroundedMuxOrder TopZ.bs mkTopZ {ScrambleZ.bs} {-keep-fires}
