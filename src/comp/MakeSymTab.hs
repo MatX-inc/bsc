@@ -93,8 +93,17 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
                    `addClassesUQ` (preClasses symT) -- pre-defined classes
 
         -- instances from the imported packages
-        iinstqs = nub [ (i, qt) | CImpSign _ _ (CSignature _ _ _ ds) <- impsigs,
+        -- Every signature repeats the instances of its own imports, so
+        -- the list is mostly duplicates.  Equal entries name the same
+        -- package: compare an entry only with the earlier ones of its
+        -- package (a plain nub is quadratic in all visible instances).
+        iinstqs = nubInPkg M.empty
+                      [ (i, qt) | CImpSign _ _ (CSignature _ _ _ ds) <- impsigs,
                                   CIinstance i qt <- ds ]
+        nubInPkg _ [] = []
+        nubInPkg seen (x@(i, qt) : xs)
+            | qt `elem` M.findWithDefault [] i seen = nubInPkg seen xs
+            | otherwise = x : nubInPkg (M.insertWith (++) i [qt] seen) xs
         qconv qt =
                 case convCQType symT qt of
                 Left msg -> bsErrorUnsafe errh [msg]
