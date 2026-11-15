@@ -536,6 +536,7 @@ traceflags = [
           "trace-pcmap",
           "trace-pcmaps",
           "trace-ralloc",
+          "trace-sim-full-subtree",
           "trace-uugraph",
           "trace-scgraph",
           "trace-seqgraph",
