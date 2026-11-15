@@ -167,10 +167,10 @@ decodeArgs prog args cdir =
                            else -- We allow the file names to be omitted if the
                                 -- backend and entry point are both specified
                                 case (entry flags) of
-                                  (Just e) | (backend flags == Just Verilog)
-                                    -> (warnings, DVerLink flags e [] [] [])
-                                  (Just e) | (backend flags == Just Bluesim)
-                                    -> (warnings, DSimLink flags e [] [])
+                                  -- Validate link flags even when input files are omitted.
+                                  (Just _) | (backend flags == Just Verilog) ||
+                                             (backend flags == Just Bluesim)
+                                    -> (warnings, checkLinkFlags flags [])
                                   _ -> if (verbose flags)
                                        then -- handle -v without compilation
                                             (warnings, DNoSrc flags)
