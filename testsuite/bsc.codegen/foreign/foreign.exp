@@ -129,6 +129,15 @@ compile_verilog_pass BDPIActionValueImport.bsv {} {-no-use-dpi}
 # system functions in methods, G0020)
 peek_pass BDPIActionValueCondJoins.bsv
 peek_pass BDPIActionValueCondMethods.bsv 0
+# The evaluator writes a join of a one-bit result with a constant default
+# as a Boolean operation (c && b for a default of False, !c || b for one
+# of True), and selects a bit of a result under the condition: each is
+# the same choice by the same condition as the call
+peek_pass BDPIActionValueBoolJoins.bsv
+peek_pass BDPIActionValueBoolMethod.bsv 0
+# the same for the results of system tasks: $test$plusargs read under a
+# condition, and the end of a file read under one
+peek_pass ActionValueTaskJoins.bsv
 # The same condition written twice is the same condition, whichever
 # expressions the compiler shares (a dynamic selection from an array that
 # each use builds again, two reads of each register)
