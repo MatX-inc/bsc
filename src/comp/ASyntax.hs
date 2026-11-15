@@ -2108,7 +2108,7 @@ defaultAId = mkId noPosition (mkFString "ABC")
 -- name for the wire that tracks a method's calling condition
 -- _rule_EN_o$m
 mkCFCondWireInstId :: Id -> Id -> Id -> Id
-mkCFCondWireInstId object method rule = mkId pos str
+mkCFCondWireInstId object method rule = setInternal (mkId pos str)
   -- method part will be EN_o$m
   where methStr      = mkMethStr object method Nothing MethodEnable
         (_, ruleStr) = getIdFStrings rule

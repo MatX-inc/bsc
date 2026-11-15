@@ -55,6 +55,10 @@ module sysBypassReg(CLK,
   wire [15 : 0] _read;
   wire RDY__read, RDY__write;
 
+  // inlined wires
+  wire [15 : 0] the_r_the_rw$wget;
+  wire the_r_the_rw$whas;
+
   // register the_r_the_r
   reg [15 : 0] the_r_the_r;
   wire [15 : 0] the_r_the_r$D_IN;
@@ -66,6 +70,10 @@ module sysBypassReg(CLK,
   // value method _read
   assign _read = EN__write ? _write_1 : the_r_the_r ;
   assign RDY__read = 1'd1 ;
+
+  // inlined wires
+  assign the_r_the_rw$wget = _write_1 ;
+  assign the_r_the_rw$whas = EN__write ;
 
   // register the_r_the_r
   assign the_r_the_r$D_IN = _write_1 ;

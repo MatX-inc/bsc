@@ -1,0 +1,57 @@
+package KeepInlinedBoundaries where
+
+interface KeepInlinedTwoSet =
+    set1 :: Bit 8 -> Action
+    set2 :: Bit 8 -> Action
+    get  :: Bit 8
+
+{-# verilog sysKeepInlinedBoundaries #-}
+sysKeepInlinedBoundaries :: Module Empty
+sysKeepInlinedBoundaries =
+  module
+    x :: Reg (Bit 8) <- mkRegU
+    y :: Reg (Bit 8) <- mkRegU
+    rw :: RWire (Bit 8) <- mkRWire
+    cr :: Array (Reg (Bit 8)) <- mkCReg 2 0
+    let cr0 = primSelectFn noPosition cr 0
+        cr1 = primSelectFn noPosition cr 1
+
+    rules
+      "produce": when True ==>
+        if x[0:0] == 1 then rw.wset x else noAction
+
+      "consume": when isValid rw.wget ==>
+        action
+          y := validValue rw.wget
+          cr0 := x + 1
+
+      "forward": when True ==>
+        cr1 := cr1 + 2
+
+{-# verilog sysKeepInlinedConflictFree #-}
+sysKeepInlinedConflictFree :: Module Empty
+sysKeepInlinedConflictFree =
+  module
+    r :: Reg (Bit 8) <- mkReg 0
+
+    let r1 =
+          rules
+            "cf_zero": when r == 0 ==>
+              r := 1
+        r2 =
+          rules
+            "cf_one": when r == 1 ==>
+              r := 2
+
+    addRules (rJoinConflictFree r1 r2)
+
+{-# verilog mkKeepInlinedUnusedEn #-}
+mkKeepInlinedUnusedEn :: Module KeepInlinedTwoSet
+mkKeepInlinedUnusedEn =
+  module
+    w :: RWire (Bit 8) <- mkRWire
+
+    interface KeepInlinedTwoSet
+      set1 a = w.wset a
+      set2 a = w.wset (a + 1)
+      get = validValue w.wget when (validValue w.wget >= 4)

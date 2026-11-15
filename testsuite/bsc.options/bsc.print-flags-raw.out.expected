@@ -44,7 +44,7 @@ Flags {
 	inlineSimple = False,
 	keepAddSize = False,
 	keepFires = False,
-	keepInlined = False,
+	keepInlined = True,
 	kill = Nothing,
 	letGen = False,
 	liftDicts = True,

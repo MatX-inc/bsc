@@ -29,6 +29,9 @@ module mkTestENBypassWire(CLK,
   input  CLK;
   input  RST_N;
 
+  // inlined wires
+  wire [31 : 0] testWire$wget;
+
   // register counter
   reg [31 : 0] counter;
   wire [31 : 0] counter$D_IN;
@@ -40,6 +43,9 @@ module mkTestENBypassWire(CLK,
 
   // remaining internal signals
   wire [63 : 0] counter_MUL_counter___d5;
+
+  // inlined wires
+  assign testWire$wget = counter_MUL_counter___d5[31:0] ;
 
   // register counter
   assign counter$D_IN = counter + 32'd1 ;

@@ -3,7 +3,7 @@ module InlineWires(aInlineWires) where
 import ASyntax
 import ASyntaxUtil
 import Data.List(partition)
-import Id(IdProp(IdP_enable), addIdProp, hasIdProp)
+import Id(IdProp(IdP_enable), addIdProp, hasIdProp, isInternal)
 import PFPrint
 import IntLit(IntLit(..))
 import qualified Data.Map as M
@@ -64,7 +64,7 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
     (aSubst rmap (pkg { aspkg_state_instances = nonwire_vs,
                         aspkg_state_outputs = nonwire_svars,
                          aspkg_values = (defs' ++ newdefs),
-                        aspkg_inlined_ports = ws',
+                        aspkg_inlined_ports = kept_ws,
                         aspkg_signal_info = si' }),
      warnings, errors)
   where -- definition map (id -> value)
@@ -86,11 +86,16 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
         rwire_tuples = map mkRW rws ++ map mkRW0 rw0s ++
                        map mkBW bws ++ map mkBW0 bw0s
 
-        -- record the rwire output port names in ws
-        ws' = concatMap (\(a,b,c,d,e,f) -> b) rwire_tuples
+        -- record all rwire output port names for svars/rmap substitution
+        ws' = concatMap (\(_,b,_,_,_,_) -> b) rwire_tuples
+
+        -- exclude compiler-internal scratch wires (such as conflict_free
+        -- runtime check wires) from preserved inlined boundaries
+        user_rwire_tuples = filter (\(a,_,_,_,_,_) -> not (isInternal a)) rwire_tuples
+        kept_ws = concatMap (\(_,b,_,_,_,_) -> b) user_rwire_tuples
 
         -- record the signal info for RTL grouping
-        rwire_signal_info = map (\(a,b,c,d,e,f) -> (a,"RWire",b)) rwire_tuples
+        rwire_signal_info = map (\(a,b,_,_,_,_) -> (a,"RWire",b)) user_rwire_tuples
         si_ips = aspsi_inlined_ports si
         si' = si { aspsi_inlined_ports = rwire_signal_info ++ si_ips }
 
