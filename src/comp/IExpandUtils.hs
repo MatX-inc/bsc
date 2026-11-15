@@ -60,7 +60,7 @@ module IExpandUtils(
         heapCellToHExpr,
         canLiftCond,
         newFFCallNo, nextFFCallNo,
-        getCallSites, getCallPosition, withCallSite, withoutCallSite,
+        getCallSites, getCallPosition, withCallSite,
         CallInfo(..), CallKind(..), noteForeignCall,
         noteNotRunWorld, anyNotRunWorld, isNotRunWorld,
         findMethodDefPosition, noteMethodDefPosition, addMethodPosition,
@@ -586,10 +586,10 @@ data GState = GState {
         -- (imod_ffcallNo)
         ffcallNo       :: !Int,
 
-        -- the calls, in the design rather than in a library, of top-level
-        -- definitions and of fields (methods and class methods) selected
-        -- from structs that are being evaluated, innermost first: the Id
-        -- called, at the position of the call (see withCallSite)
+        -- the calls in the design that a diagnostic about a foreign
+        -- function call can name and that are being evaluated, innermost
+        -- first: the Id called, at the position of the call (see
+        -- withCallSite)
         callSites      :: ![Id],
 
         -- foreign function calls and ActionValues read without running
@@ -2430,9 +2430,10 @@ getsF f = gets (f . foreignState)
 modifyF :: (ForeignState -> ForeignState) -> G ()
 modifyF f = modify (\ s -> s { foreignState = f (foreignState s) })
 
--- The calls in the design (not in a library) whose evaluation is in
--- progress, innermost first: the Id of the function or method called, at
--- the position of the call (callSites in GState; see withCallSite).
+-- The calls in the design whose evaluation is in progress and that a
+-- diagnostic can name, innermost first: the Id of the function or method
+-- called, at the position of the call (callSites in GState; see
+-- withCallSite).
 getCallSites :: G [Id]
 getCallSites = gets callSites
 
@@ -2442,29 +2443,20 @@ getCallPosition = gets (maybe noPosition getIdPosition . listToMaybe . callSites
 
 -- Evaluate a call of i at the position of i: when that is a position in
 -- the design, it is the call site while the call is evaluated, so that a
--- library function reached from the design, such as peekGet, can be
--- reported where the design calls it.  The previous call site is restored
--- afterwards.
+-- library function reached from the design can be reported where the
+-- design calls it.  The previous call site is restored afterwards, so the
+-- call is not a tail call: it is used only for the few calls that a
+-- diagnostic names, none of which recurses (see isCallSiteDef in IExpand),
+-- and for primWithCallPosition.
 withCallSite :: Id -> G a -> G a
 withCallSite i m
     | usablePosition (getIdPosition i) = do
         old <- gets callSites
-        setCallSites (i : old) m
+        modify (\ s -> s { callSites = i : old })
+        res <- m
+        modify (\ s -> s { callSites = old })
+        return res
     | otherwise = m
-
--- Evaluate with no call site: cacheDef heaps the value of a definition
--- whose body is an application (a CAF, or a function defined point-free),
--- which every reference then shares, so no reference is its call.
-withoutCallSite :: G a -> G a
-withoutCallSite = setCallSites []
-
-setCallSites :: [Id] -> G a -> G a
-setCallSites is m = do
-    old <- gets callSites
-    modify (\ s -> s { callSites = is })
-    res <- m
-    modify (\ s -> s { callSites = old })
-    return res
 
 -- Record the execution of a foreign function call with cookie n (see
 -- foreignCalls in ForeignState).
@@ -3046,7 +3038,7 @@ toHeap _   _ e@(ICon _ _)      _ = return e
 toHeap _   _ e@(IRefT _ _ _ _) _ = return e
 -- primWithCallPosition e is evaluated with the call position where it is
 -- made: where it is put on the heap, unless it already has a position in
--- the design (see conAp' and callPositionArgs in IExpand).  __value has it
+-- the design (see conAp' in IExpand).  __value has it
 -- around primPeekWorld (), a world where an ActionValue is not run, as
 -- primCondWorld () is (see noteNotRunWorld).
 toHeap tag t e@(IAps (ICon i ic@(ICPrim _ PrimWithCallPosition)) ts es) cell_name = do
