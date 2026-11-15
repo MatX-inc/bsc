@@ -395,7 +395,10 @@ compilePackage
     -- Rebuild the symbol table because GenWrap added new types
     -- and typeclass instances for those types
     start flags DFsympostgenwrap
-    symt1 <- mkSymTab errh mwrp
+    -- (unless they did not: without modules to wrap the package is as
+    -- it was, and so would be the table)
+    symt1 <- if sameButImports mop mwrp then return symt00
+             else mkSymTab errh mwrp
     t <- dump errh flags t DFsympostgenwrap dumpnames symt1
 
     -- Re-add function definitions for `noinline'
@@ -408,7 +411,8 @@ compilePackage
 
     -- Rebuild the symbol table because Deriving added new instances
     start flags DFsympostderiving
-    symt11 <- mkSymTab errh mder
+    symt11 <- if sameButImports mwrp mder then return symt1
+              else mkSymTab errh mder
     t <- dump errh flags t DFsympostderiving dumpnames symt11
 
     -- Extract packages used in type constructors from the parsed package
@@ -423,7 +427,8 @@ compilePackage
     -- Rebuild the symbol table because CtxReduce has possibly changed
     -- the types of top-level definitions
     start flags DFsympostctxreduce
-    symt <- mkSymTab errh mctx
+    symt <- if sameButImports mder mctx then return symt11
+            else mkSymTab errh mctx
     t <- dump errh flags t DFsympostctxreduce dumpnames symt
 
     -- Turn instance declarations into ordinary definitions
@@ -2350,6 +2355,15 @@ compileCDefToIDef errh flags dumpnames symt ipkg def =
     return (idef, not tcErrors)
 
 -- ===============
+
+-- Whether two versions of a package differ at most in their imported
+-- signatures, which the passes between symbol table builds leave alone
+-- (and which are too large to compare).
+sameButImports :: CPackage -> CPackage -> Bool
+sameButImports (CPackage i1 es1 is1 _ fs1 ds1 incs1)
+               (CPackage i2 es2 is2 _ fs2 ds2 incs2) =
+    i1 == i2 && es1 == es2 && is1 == is2 && fs1 == fs2 && incs1 == incs2 &&
+    ds1 == ds2
 
 iPCheck :: Flags -> SymTab -> IPackage a -> String -> IO ()
 iPCheck flags symt ipkg desc = -- deepseq ipkg $
