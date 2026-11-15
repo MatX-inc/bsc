@@ -19,6 +19,7 @@ import qualified Data.Set as S
 import qualified Data.Map as M
 
 import Data.Either(partitionEithers)
+import Data.Array(Array, listArray, (!))
 import PredTrie
 import FStringCompat(concatFString)
 import PFPrint
@@ -123,8 +124,9 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
 
         -- instances from this package and from the imports
         -- unsorted because we handle this at the class level
-        insts :: QInsts
-        insts = [ QInst mi (qconv qt) | Cinstance qt _ <- ds ] ++
+        insts :: ClsInsts
+        insts = mkClsInsts $
+                [ QInst mi (qconv qt) | Cinstance qt _ <- ds ] ++
                 [ QInst mi (qconv qt) | (mi, qt) <- iinstqs ]
 
         -- a symbol table containing all pre-defined items and all items
@@ -899,7 +901,7 @@ mustConvCQType r _ qt =
     Left msg -> internalError ("mustConvCQType:\n" ++ ppReadable msg)
 
 mkTypeSyms :: ErrorHandle
-           -> (Id -> [Id]) -> Maybe Id -> Maybe Id -> M.Map Id Kind -> [CDefn] -> QInsts
+           -> (Id -> [Id]) -> Maybe Id -> Maybe Id -> M.Map Id Kind -> [CDefn] -> ClsInsts
            -> SymTab -> (SymTab, [EMsg])
 mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
     let importedTypeInfos = concatMap (getTI errh maybePackageName src_pkg r iks) defs
@@ -1069,10 +1071,21 @@ getQInstsLegacy ci bss qts = (cls_qts', errs)
         chk_pairs = uniquePairs cls_qts
         errs = fst $ partitionEithers $ map (uncurry (cmpQInsts bss)) chk_pairs
 
-getQInsts :: Id -> QInsts -> QInsts
--- Filter instances to those belonging to class ci.
+getQInsts :: Id -> ClsInsts -> QInsts
+-- The instances belonging to class ci, in their order in the list.
 -- Overlap checking is integrated into buildInstIndex.
-getQInsts ci qts = [ qi | qi@(QInst _ (_ :=> t)) <- qts, leftCon t == Just ci ]
+getQInsts ci qts = M.findWithDefault [] ci (ciByClass qts)
+
+-- All visible instances, and the same grouped by class: every class of
+-- every imported package asks for its own, and filtering the whole
+-- list for each is quadratic.
+data ClsInsts = ClsInsts { ciAll :: QInsts, ciByClass :: M.Map Id QInsts }
+
+mkClsInsts :: QInsts -> ClsInsts
+mkClsInsts qts =
+    ClsInsts qts
+        (M.fromListWith (\ new old -> old ++ new)
+             [ (c, [qi]) | qi@(QInst _ (_ :=> t)) <- qts, Just c <- [leftCon t] ])
 
 doInst :: Maybe Id -> SymTab -> Class -> QInst -> Inst
 doInst currentPkg r c (QInst mi p@(ps :=> t)) =
@@ -1118,7 +1131,7 @@ getCls :: ErrorHandle -> Maybe Id -> Maybe Id -> M.Map Id Kind -> SymTab ->
           -- sort member list override: for CIclass (fields hidden), the
           -- defining package's list threaded through the signature
           Maybe [Id] ->
-          QInsts -> (Class, [EMsg])
+          ClsInsts -> (Class, [EMsg])
 getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
     let k = getK iks ik
         i = iKName ik
@@ -1179,7 +1192,7 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
             assocTypes = atf_infos
           }
     in if useLegacyInstIndex
-       then let (qinsts, errs) = getQInstsLegacy qi bss qts
+       then let (qinsts, errs) = getQInstsLegacy qi bss (ciAll qts)
                 all_insts = map (doInst mi r c) qinsts
                 c = mkClass (\ _ _ _ -> all_insts) all_insts
             in (c, errs)
@@ -1190,23 +1203,27 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
                 -- identity for the overlap self-check; QInst is needed by
                 -- cmpQInsts; Inst is what genInsts returns.
                 tagged = zip3 [0 :: Int ..] qinsts all_insts
-                -- Pairwise instance comparisons, memoized in a lazy Map
-                -- keyed on the canonical (low, high) index pair, so that
-                -- the overlap check and the leaf sort below each force a
+                -- Pairwise instance comparisons, memoized so that the
+                -- overlap check and the leaf sort below each force a
                 -- given pair's cmpQInsts at most once between them.
+                -- A lazy array per instance, of its comparisons with the
+                -- later ones, made only when one is asked for: a class
+                -- can have a thousand instances, and few pairs of them
+                -- (those sharing a trie leaf) are ever compared.
                 -- (cmpQInsts freshens type variables before comparing, so
                 -- specificity is correctly detected even when instances
                 -- share variable names.)
-                cmpMemo = M.fromList
-                    [ ((i, j), cmpQInsts bss qi qj)
-                      | ((i, qi, _) : rest) <- tails tagged
-                      , (j, qj, _) <- rest ]
+                n_insts = length qinsts
+                cmpRows :: Array Int (Array Int (Either EMsg (Maybe Ordering)))
+                cmpRows = listArray (0, n_insts - 1)
+                    [ listArray (i + 1, n_insts - 1)
+                                [ cmpQInsts bss qi qj | qj <- rest ]
+                      | (i, qi : rest) <- zip [0 :: Int ..] (tails qinsts) ]
                 pairCmp i j
                   | i == j = internalError "MakeSymTab.getCls: pairCmp i i"
                   | i < j = find_cmp (i, j)
                   | otherwise = fmap (fmap flipOrd) (find_cmp (j, i))
-                  where find_cmp k = fromJustOrErr "MakeSymTab.getCls: pairCmp"
-                                         (M.lookup k cmpMemo)
+                  where find_cmp (lo, hi) = cmpRows ! lo ! hi
                         flipOrd LT = GT
                         flipOrd GT = LT
                         flipOrd EQ = EQ
@@ -1408,7 +1425,7 @@ groundT _ _ = internalError "MakeSymTab.groundT"
 -----
 
 addImpSyms :: ErrorHandle ->
-              QInsts -> (SymTab, [EMsg]) -> CImportedSignature -> (SymTab, [EMsg])
+              ClsInsts -> (SymTab, [EMsg]) -> CImportedSignature -> (SymTab, [EMsg])
 addImpSyms errh insts (s, errs0) (CImpSign name qf (CSignature pkgName _ _ ds)) =
 --        trace ("DEBUG: addImpSyms: " ++ name ++ "\n") $
         let mi = Nothing
