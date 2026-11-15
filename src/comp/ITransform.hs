@@ -20,12 +20,11 @@ import Prelude hiding ((<>))
 
 import Control.Monad(foldM, forM)
 import Control.Monad.State.Strict(State, runState, gets, get, put)
-import Data.List((\\))
+import Data.List((\\), sortOn)
 import qualified Data.Map.Strict as M
-import qualified Data.Set as S
 
 import IntegerUtil(mask, integerAnd)
-import Util(log2, itos, appFstM, snd3, makePairs, flattenPairs,
+import Util(log2, itos, appFstM, makePairs, flattenPairs,
             fromJustOrErr)
 import PPrint
 import IntLit
@@ -1491,20 +1490,23 @@ data TState a = TState {
         prefix :: String,
         -- Source of unique numbers to append to generated names
         idNo :: Integer,
+        -- First-sighting serial for package defs
+        defNo :: !Int,
 
         -- A map of package defs.  When ICValue is encountered, the def is
         -- looked up in this map and the assigned expression is inlined.
         -- The defprops are kept to be used in the fixup step that happens
         -- between processing defs and processing the rest of the module.
-        def_map :: M.Map Id (IType, IExpr a, [DefProp]),
+        def_map :: M.Map Id (Int, IType, IExpr a, [DefProp]),
 
         -- A CSE map, from an expr "e" to a tuple of info for the canonical
         -- def ("defname") to represent it:
         --   * an expr to use to refer to the def ("ICValue defname")
         --   * the def ("IDef defname deftype e")
+        --   * the insertion serial from idNo
         -- When the monad is run, because all exprs are inlined and then CSE'd
         -- back up, the defs for the package will come from this map.
-        cse_map :: M.Map (IExpr a) (IExpr a, IDef a),
+        cse_map :: M.Map (IExpr a) (IExpr a, IDef a, Integer),
 
         -- Expansions (expValAndOrCmp) of the and/or/cmp defs in cse_map
         exp_map :: ExpMap a
@@ -1519,16 +1521,20 @@ runT errh flags no prefix xforms =
                            , flags = flags
                            , prefix = prefix
                            , idNo = no
+                           , defNo = 0
                            , def_map = M.empty
                            , cse_map = M.empty
                            , exp_map = M.empty
                            }
     in case runState xforms initState of
          (x, ts) ->
-              let defs_from_cse = map (snd . snd) (M.toList (cse_map ts))
+              let defs_from_cse =
+                      [ d
+                        | (_, d, _) <- sortOn (\(_, _, ord) -> ord) (M.elems (cse_map ts))
+                      ]
                   non_cse_defs =
                       [ IDef i t e props
-                        | (i, (t, e, props)) <- M.toList (def_map ts)
+                        | (i, (_, t, e, props)) <- sortOn (\(_, (ord, _, _, _)) -> ord) (M.toList (def_map ts))
                         , defPropsHasNoCSE props
                       ]
                   defs = defs_from_cse ++ non_cse_defs
@@ -1545,13 +1551,13 @@ newExprT :: IType -> IExpr a -> T (IExpr a) a
 newExprT t e = do
   ts <- get
   case lookupTurns e (cse_map ts) of
-    Found (e', _) -> return e'
+    Found (e', _, _) -> return e'
     Missing turns depth -> do
         let n = idNo ts
             i = setBadId $ mkId noPosition (cseFString (prefix ts) n)
             e' = ICon i (ICValue t e)
             d = IDef i t e []  -- props get lost here, but restored in iTransRenameIdsInDef
-            cmap' = insertTurns turns depth e (e', d) (cse_map ts)
+            cmap' = insertTurns turns depth e (e', d, n) (cse_map ts)
             emap  = exp_map ts
             emap' = case e of
                       IAps (ICon _ (ICPrim _ p)) _ _ | isAndOrCmp p
@@ -1573,11 +1579,18 @@ addDefT :: Id -> IType -> IExpr a -> [DefProp] -> T () a
 addDefT i t e p = do
   -- traceM $ "addDefT " ++ ppString i ++ " " ++ ppString e
   ts <- get
-  let dmap' = M.insert i (t,e,p) (def_map ts)
-  dmap' `seq` put $ ts {def_map = dmap' }
+  case M.lookup i (def_map ts) of
+    Just (ord, _, _, _) -> do
+      let dmap' = M.insert i (ord, t, e, p) (def_map ts)
+      dmap' `seq` put $ ts { def_map = dmap' }
+    Nothing -> do
+      let !n = defNo ts
+          !n' = n + 1
+          dmap' = M.insert i (n, t, e, p) (def_map ts)
+      dmap' `seq` put $ ts { defNo = n', def_map = dmap' }
 
 getDefT :: Id -> T (Maybe (IExpr a)) a
-getDefT i = get >>= (return . fmap snd3 . M.lookup i . def_map)
+getDefT i = gets (fmap (\(_, _, e, _) -> e) . M.lookup i . def_map)
 
 {- we don't need uEq because we use a progress check instead now
 -- the uEq check is tuned to what we need to do to fix
@@ -1788,22 +1801,20 @@ iTransFixupDefNames flags = do
       old_defmap = def_map transform_state
       old_csemap = cse_map transform_state
 
-      -- For each CSE name, the set of CSE-able defs that replaced it,
-      -- stored as a quality-ranked Set so picking the best Id is O(log n).
-      -- DefP_NoCSE defs are excluded at build time; missing keys map to
-      -- the cse_name identity via iTransRenameId's findWithDefault.
-      cse_ids_map :: M.Map Id (S.Set (Int, Id))
+      -- For each CSE name, track the highest-quality CSE-able def that
+      -- replaced it, breaking ties by earliest sighting serial (negate ord)
+      -- rather than Ord Id.
+      cse_ids_map :: M.Map Id ((Int, Int), Id)
       cse_ids_map =
-          M.fromListWith S.union $
+          M.fromListWith max $
                [ ( cse_name
-                 , S.singleton (idQuality (Just def_name), def_name) )
-                 | (def_name, (_, ICon cse_name _value@(ICValue {}), props))
+                 , ((idQuality (Just def_name), negate ord), def_name) )
+                 | (def_name, (ord, _, ICon cse_name _value@(ICValue {}), props))
                        <- M.toList old_defmap
                  , not (defPropsHasNoCSE props) ]
 
-      -- The best Id is the maximum of the quality-ordered set.
       rename_map :: M.Map Id Id
-      rename_map = M.map (snd . S.findMax) cse_ids_map
+      rename_map = M.map snd cse_ids_map
 
       -- function to rename ICValue references (to use the new CSE name)
       rename_expr = iTransRenameIdsInExpr rename_map
@@ -1818,13 +1829,13 @@ iTransFixupDefNames flags = do
       --    * the def name and expr are updated
       new_csemap =
           M.fromList
-               [ (rename_expr e, (rename_expr ref, rename_def def))
-                 | (e, (ref, def)) <- M.toList old_csemap ]
+               [ (rename_expr e, (rename_expr ref, rename_def def, ord))
+                 | (e, (ref, def, ord)) <- M.toList old_csemap ]
 
       -- fix up the defs to refer to new CSE name in their exprs
       -- (the def names themselves are unchanged)
       new_defmap =
-          let mapFn (ty, e, props) = (ty, rename_expr e, props)
+          let mapFn (ord, ty, e, props) = (ord, ty, rename_expr e, props)
           in  M.map mapFn old_defmap
 
       -- The cached expansions name CSE defs by their old names, so
@@ -1833,7 +1844,7 @@ iTransFixupDefNames flags = do
       new_expmap =
           M.fromList
                [ (i, mkCachedExpansion new_expmap e)
-                 | (_, (ICon i (ICValue {}), IDef _ _ e@(IAps (ICon _ (ICPrim _ p)) _ _) _))
+                 | (_, (ICon i (ICValue {}), IDef _ _ e@(IAps (ICon _ (ICPrim _ p)) _ _) _, _))
                        <- M.toList new_csemap
                  , isAndOrCmp p ]
 

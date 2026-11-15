@@ -1,6 +1,6 @@
 module Synthesize(aSynthesize) where
 
-import Data.List(transpose, sort, genericLength, nub)
+import Data.List(transpose, sortBy, genericLength, nub)
 import Control.Monad(when, zipWithM, zipWithM_)
 import Control.Monad.State(State, runState, gets, get, put)
 import Debug.Trace
@@ -247,9 +247,97 @@ aOptPrim aid t PrimBNot [e] = aNot aid e
 aOptPrim aid t p es = APrim aid t p es
 
 sortExpr :: AExpr -> AExpr
-sortExpr (APrim aid t op es) | isGate op = APrim aid t op (sort es)
+sortExpr (APrim aid t op es) | isGate op = APrim aid t op (sortBy cmpGateOperand es)
   where isGate op = op `elem` [PrimBAnd, PrimBOr, PrimXor]
 sortExpr e = e
+
+-- Order commutative gate operands structurally using signal names rather than
+-- Unique-backed Ord Id.
+cmpGateOperand :: AExpr -> AExpr -> Ordering
+cmpGateOperand (APrim _ t1 op1 es1) (APrim _ t2 op2 es2) =
+    cmpAType t1 t2 `mappend` compare op1 op2 `mappend` cmpList cmpGateOperand es1 es2
+cmpGateOperand (AMethCall t1 a1 m1 es1) (AMethCall t2 a2 m2 es2) =
+    cmpAType t1 t2 `mappend` cmpIdByName m1 m2 `mappend`
+    cmpList cmpGateOperand es1 es2 `mappend` cmpIdByName a1 a2
+cmpGateOperand (AMethValue t1 a1 m1) (AMethValue t2 a2 m2) =
+    cmpAType t1 t2 `mappend` cmpIdByName m1 m2 `mappend` cmpIdByName a1 a2
+cmpGateOperand (ATuple t1 es1) (ATuple t2 es2) =
+    cmpAType t1 t2 `mappend` cmpList cmpGateOperand es1 es2
+cmpGateOperand (ATupleSel t1 e1 i1) (ATupleSel t2 e2 i2) =
+    cmpAType t1 t2 `mappend` compare i1 i2 `mappend` cmpGateOperand e1 e2
+cmpGateOperand (ANoInlineFunCall t1 a1 f1 es1) (ANoInlineFunCall t2 a2 f2 es2) =
+    cmpAType t1 t2 `mappend` compare f1 f2 `mappend`
+    cmpList cmpGateOperand es1 es2 `mappend` cmpIdByName a1 a2
+cmpGateOperand (AFunCall t1 a1 f1 c1 es1) (AFunCall t2 a2 f2 c2 es2) =
+    cmpAType t1 t2 `mappend` compare f1 f2 `mappend` compare c1 c2 `mappend`
+    cmpList cmpGateOperand es1 es2 `mappend` cmpIdByName a1 a2
+cmpGateOperand (ATaskValue t1 a1 f1 c1 n1) (ATaskValue t2 a2 f2 c2 n2) =
+    cmpAType t1 t2 `mappend` cmpIdByName a1 a2 `mappend` compare f1 f2 `mappend`
+    compare c1 c2 `mappend` compare n1 n2
+cmpGateOperand (ASPort t1 a1) (ASPort t2 a2) =
+    cmpAType t1 t2 `mappend` cmpIdByName a1 a2
+cmpGateOperand (ASParam t1 a1) (ASParam t2 a2) =
+    cmpAType t1 t2 `mappend` cmpIdByName a1 a2
+cmpGateOperand (ASDef t1 a1) (ASDef t2 a2) =
+    cmpAType t1 t2 `mappend` cmpIdByName a1 a2
+cmpGateOperand (ASInt _ t1 l1) (ASInt _ t2 l2) =
+    cmpAType t1 t2 `mappend` compare l1 l2
+cmpGateOperand (ASReal _ t1 r1) (ASReal _ t2 r2) =
+    cmpAType t1 t2 `mappend` compare r1 r2
+cmpGateOperand (ASStr _ t1 s1) (ASStr _ t2 s2) =
+    cmpAType t1 t2 `mappend` compare s1 s2
+cmpGateOperand (ASAny t1 m1) (ASAny t2 m2) =
+    cmpAType t1 t2 `mappend` cmpMaybe cmpGateOperand m1 m2
+cmpGateOperand (ASClock _ (AClock o1 g1)) (ASClock _ (AClock o2 g2)) =
+    cmpGateOperand o1 o2 `mappend` cmpGateOperand g1 g2
+cmpGateOperand (ASReset _ (AReset r1)) (ASReset _ (AReset r2)) =
+    cmpGateOperand r1 r2
+cmpGateOperand (ASInout _ (AInout i1)) (ASInout _ (AInout i2)) =
+    cmpGateOperand i1 i2
+cmpGateOperand (AMGate t1 o1 c1) (AMGate t2 o2 c2) =
+    cmpAType t1 t2 `mappend` cmpIdByName o1 o2 `mappend` cmpIdByName c1 c2
+cmpGateOperand e1 e2 = compare (gateExprTag e1) (gateExprTag e2)
+  where
+    gateExprTag (APrim {})            = 0 :: Int
+    gateExprTag (AMethCall {})        = 1
+    gateExprTag (AMethValue {})       = 2
+    gateExprTag (ATuple {})           = 3
+    gateExprTag (ATupleSel {})        = 4
+    gateExprTag (ANoInlineFunCall {}) = 5
+    gateExprTag (AFunCall {})         = 6
+    gateExprTag (ATaskValue {})       = 7
+    gateExprTag (ASPort {})           = 8
+    gateExprTag (ASParam {})          = 9
+    gateExprTag (ASDef {})            = 10
+    gateExprTag (ASInt {})            = 11
+    gateExprTag (ASReal {})           = 12
+    gateExprTag (ASStr {})            = 13
+    gateExprTag (ASAny {})            = 14
+    gateExprTag (ASClock {})          = 15
+    gateExprTag (ASReset {})          = 16
+    gateExprTag (ASInout {})          = 17
+    gateExprTag (AMGate {})           = 18
+
+cmpAType :: AType -> AType -> Ordering
+cmpAType (ATAbstract i1 ns1) (ATAbstract i2 ns2) =
+    cmpIdByName i1 i2 `mappend` compare ns1 ns2
+cmpAType (ATArray l1 t1) (ATArray l2 t2) =
+    compare l1 l2 `mappend` cmpAType t1 t2
+cmpAType (ATTuple ts1) (ATTuple ts2) =
+    cmpList cmpAType ts1 ts2
+cmpAType t1 t2 = compare t1 t2
+
+cmpMaybe :: (a -> a -> Ordering) -> Maybe a -> Maybe a -> Ordering
+cmpMaybe _ Nothing Nothing = EQ
+cmpMaybe _ Nothing (Just _) = LT
+cmpMaybe _ (Just _) Nothing = GT
+cmpMaybe f (Just x) (Just y) = f x y
+
+cmpList :: (a -> a -> Ordering) -> [a] -> [a] -> Ordering
+cmpList _ [] [] = EQ
+cmpList _ [] (_:_) = LT
+cmpList _ (_:_) [] = GT
+cmpList f (x:xs) (y:ys) = f x y `mappend` cmpList f xs ys
 
 wireId :: Id -> Int -> Id
 wireId i n = mkIdPre (mkFString (synthPref ++ itos n ++ "_")) i

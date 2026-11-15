@@ -1,0 +1,14 @@
+package MutuallyExclusiveOrderScramble where
+
+-- Declares declaredFirst before namedFirst so a batch creates RL_declaredFirst
+-- before RL_namedFirst in intern order.
+{-# verilog mkMutuallyExclusiveOrderScramble #-}
+mkMutuallyExclusiveOrderScramble :: Module Empty
+mkMutuallyExclusiveOrderScramble =
+    module
+        count :: Reg (UInt 8) <- mkReg 0
+        rules
+            "declaredFirst": when count < 10 ==>
+                count := count + 1
+            "namedFirst": when count > 20 ==>
+                count := count - 1

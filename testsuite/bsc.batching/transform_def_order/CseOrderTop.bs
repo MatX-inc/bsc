@@ -1,0 +1,21 @@
+package CseOrderTop where
+
+import CseOrderScrambleB
+import CseOrderScrambleA
+import CseOrder
+
+-- Batch order B, A, probe: put_zz and put_zy are interned before put_aa and
+-- put_ab.
+{-# verilog mkCseOrderTop #-}
+mkCseOrderTop :: Module Empty
+mkCseOrderTop =
+    module
+        b :: CseOrderScrambleB <- mkCseOrderScrambleB
+        a :: CseOrderScrambleA <- mkCseOrderScrambleA
+        p :: CseOrder <- mkCseOrder
+        x :: Reg (Bit 8) <- mkReg 0
+        rules
+            "drive": when True ==> do
+                b.put x x
+                a.put x x
+                p.put x x x x

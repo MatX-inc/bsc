@@ -5,6 +5,7 @@ module ASourceTypes(SourceTypeInfo, sourceTypeKey, canonicalSourceExpr,
                     sourceTypeLookup, anchorSourceTypes,
                     namedSourceTypes, anchorASPackage) where
 
+import Data.List(sortOn)
 import qualified Data.Map as M
 import qualified Data.Map.Strict as MS
 import qualified Data.Set as S
@@ -71,19 +72,27 @@ sourceTypeLookup defs observations = \e ->
 -- change or their original aliases disappear. These references are excluded
 -- from use-count and reachability analysis. Deduplicate on metadata keys only;
 -- distinct ASDef anchors must survive even when they currently have one RHS.
+-- Preserve first-sighting order so serialized .ba metadata never depends on
+-- Ord AExpr / Ord Id.
 anchorSourceTypes :: [ADef] -> [(AExpr, S.Set IType)] -> [(AExpr, S.Set IType)]
 anchorSourceTypes _ [] = []
-anchorSourceTypes defs observations = M.elems $ MS.fromListWith combine
-    [(sourceTypeKey e, (e, ts)) | (e, ts) <- observations ++ anchors,
-                                 not (S.null ts)]
+anchorSourceTypes defs observations =
+    [ (e, ts)
+    | (_, e, ts) <- sortOn (\(ord, _, _) -> ord) $ M.elems $
+        MS.fromListWith combine
+            [ (sourceTypeKey e, (ord, e, ts))
+            | (ord, (e, ts)) <- zip [0 :: Int ..] (observations ++ anchors)
+            , not (S.null ts)
+            ]
+    ]
   where lookupTypes = sourceTypeLookup defs observations
         anchors = [(e, ts) | ADef i t _ _ <- defs,
                              let e = ASDef t i
                                  ts = lookupTypes e,
                              not (S.null ts)]
-        combine (_, newTypes) (oldExpr, oldTypes) =
+        combine (_, _, newTypes) (ord, oldExpr, oldTypes) =
             let ts = S.union newTypes oldTypes
-            in ts `seq` (oldExpr, ts)
+            in ts `seq` (ord, oldExpr, ts)
 
 -- All named aliases of the final expressions, plus observed input/state
 -- port leaves. The caller restricts this map to actual emitted declarations.

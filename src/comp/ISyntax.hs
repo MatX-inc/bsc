@@ -24,6 +24,9 @@ module ISyntax(
         ArrayCell(..),
         Pred(..),
         PTerm(..),
+        PSet,
+        psEmpty, psSingleton, psNull, psMember, psInsert, psToList, psFromList,
+        psMap, psUnion, psUnions, psIntersection, psDifference,
         getClockMap,
         getResetMap,
         getVModInfo,
@@ -87,6 +90,7 @@ import System.IO(Handle)
 import qualified Data.List as L
 import qualified Data.Map as M
 import Data.List(intercalate)
+import qualified Data.List as L
 
 import qualified Data.Array as Array
 import IntLit
@@ -684,7 +688,7 @@ newtype Pred a = PConj (PSet (PTerm a))
         deriving (Eq, Ord, Show)
 
 instance PPrint (Pred a) where
-    pPrint d p (PConj ps) = pPrint d p (S.toList ps)
+    pPrint d p (PConj ps) = pPrint d p (psToList ps)
 
 instance PPrint (PTerm a) where
     pPrint d p (PAtom e) = pPrint d p e
@@ -697,7 +701,71 @@ instance NFData (Pred a) where
 --       worried about Array/Reset/Clock-like issues
    rnf p = ()
 
-type PSet a = S.Set a
+-- The conjuncts of a Pred.  The Set gives membership and the set
+-- algebra; the list carries the same elements in the order they were
+-- first inserted, which is the order the evaluator met them, so that
+-- the conjunction built from a Pred (predToIExpr, evalPred) comes out
+-- in that order and not in Ord order, which for terms that mention Ids
+-- is string-intern order.  Eq and Ord look at the Set only: two PSets
+-- with the same terms are the same predicate whatever their order.
+data PSet a = PSet !(S.Set a) [a]
+        deriving (Show)
+
+instance (Eq a) => Eq (PSet a) where
+    (PSet s1 _) == (PSet s2 _) = s1 == s2
+
+instance (Ord a) => Ord (PSet a) where
+    compare (PSet s1 _) (PSet s2 _) = compare s1 s2
+
+psEmpty :: PSet a
+psEmpty = PSet S.empty []
+
+psSingleton :: a -> PSet a
+psSingleton x = PSet (S.singleton x) [x]
+
+psNull :: PSet a -> Bool
+psNull (PSet s _) = S.null s
+
+psMember :: (Ord a) => a -> PSet a -> Bool
+psMember x (PSet s _) = S.member x s
+
+psToList :: PSet a -> [a]
+psToList (PSet _ xs) = xs
+
+psFromList :: (Ord a) => [a] -> PSet a
+psFromList xs = PSet (S.fromList xs) (firstOccurrences S.empty xs)
+  where firstOccurrences _ [] = []
+        firstOccurrences seen (y:ys)
+            | S.member y seen = firstOccurrences seen ys
+            | otherwise = y : firstOccurrences (S.insert y seen) ys
+
+psMap :: (Ord b) => (a -> b) -> PSet a -> PSet b
+psMap f (PSet _ xs) = psFromList (map f xs)
+
+psInsert :: (Ord a) => a -> PSet a -> PSet a
+psInsert x ps@(PSet s xs)
+    | S.member x s = ps
+    | otherwise = PSet (S.insert x s) (xs ++ [x])
+
+psUnion :: (Ord a) => PSet a -> PSet a -> PSet a
+psUnion ps1@(PSet s1 xs1) ps2@(PSet s2 xs2)
+    | S.null s2 = ps1
+    | S.null s1 = ps2
+    | S.size u == S.size s1 = ps1
+    | otherwise = PSet u (xs1 ++ filter (\x -> not (S.member x s1)) xs2)
+  where u = S.union s1 s2
+
+psUnions :: (Ord a) => [PSet a] -> PSet a
+psUnions = L.foldl' psUnion psEmpty
+
+psIntersection :: (Ord a) => PSet a -> PSet a -> PSet a
+psIntersection (PSet s1 xs1) (PSet s2 _) =
+    PSet (S.intersection s1 s2) (filter (\x -> S.member x s2) xs1)
+
+psDifference :: (Ord a) => PSet a -> PSet a -> PSet a
+psDifference ps1@(PSet s1 xs1) (PSet s2 _)
+    | S.null s2 = ps1
+    | otherwise = PSet (S.difference s1 s2) (filter (\x -> not (S.member x s2)) xs1)
 data PTerm a = PAtom (IExpr a)
              | PIf (IExpr a) (Pred a) (Pred a)
              | PSel (IExpr a) Integer [Pred a]

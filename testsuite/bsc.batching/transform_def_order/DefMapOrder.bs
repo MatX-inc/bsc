@@ -1,0 +1,49 @@
+package DefMapOrder where
+
+import FIFO
+
+interface DefMapOrder =
+    put :: Bit 8 -> Action {-# arg_names = [b] #-}
+
+-- Exercises NoCSE def ordering in ITransform's def_map (via -keep-method-conds
+-- COND_RL_rone_* defs) and equal-quality CSE survivor selection in both
+-- IExpand.eqPtrs (first vs second) and ITransform (alpha vs beta).
+{-# verilog mkDefMapOrder #-}
+mkDefMapOrder :: Module DefMapOrder
+mkDefMapOrder =
+    module
+        fa :: FIFO (Bit 8) <- mkFIFO
+        fb :: FIFO (Bit 8) <- mkFIFO
+        fc :: FIFO (Bit 8) <- mkFIFO
+        s :: Reg (Bit 2) <- mkReg 0
+        x :: Reg (Bit 8) <- mkReg 0
+        r1 :: Reg (Bit 8) <- mkReg 0
+        r2 :: Reg (Bit 8) <- mkReg 0
+        r3 :: Reg (Bit 8) <- mkReg 0
+        r4 :: Reg (Bit 8) <- mkReg 0
+        r5 :: Reg (Bit 8) <- mkReg 0
+        r6 :: Reg (Bit 8) <- mkReg 0
+        r7 :: Reg (Bit 8) <- mkReg 0
+        r8 :: Reg (Bit 8) <- mkReg 0
+
+        rules
+            "rone": when True ==> do
+                if s == 0 then fa.enq x else noAction
+                if s == 1 then fb.enq x else noAction
+                if s == 2 then fc.enq x else noAction
+
+        interface
+            put b = do
+                letseq first :: Bit 8 = b & 0x0f
+                       second :: Bit 8 = (b & 0x3f) & 0x0f
+                       alpha :: Bit 8 = if b == 0 then 0x12 else b
+                       beta :: Bit 8 =
+                           if b == 0 then (if b == 0 then 0x12 else 0x34) else b
+                r1 := first
+                r3 := first ^ 0x5a
+                r2 := second
+                r4 := second ^ 0x5a
+                r5 := alpha
+                r7 := alpha ^ 0x3c
+                r6 := beta
+                r8 := beta ^ 0x3c

@@ -1,0 +1,18 @@
+package DefMapOrderTop where
+
+import DefMapOrderScrambleC
+import DefMapOrderScrambleA
+import DefMapOrder
+
+-- Batch order C, A, probe so COND_RL_rone_fc_enq_3 and COND_RL_rone_fa_enq_1
+-- are interned before the probe's three COND_ names.
+{-# verilog mkDefMapOrderTop #-}
+mkDefMapOrderTop :: Module Empty
+mkDefMapOrderTop =
+    module
+        _ :: Empty <- mkDefMapOrderScrambleC
+        _ :: Empty <- mkDefMapOrderScrambleA
+        p :: DefMapOrder <- mkDefMapOrder
+        x :: Reg (Bit 8) <- mkReg 0
+        rules
+            "drive": when True ==> p.put x

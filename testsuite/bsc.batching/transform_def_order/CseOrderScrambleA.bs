@@ -1,0 +1,12 @@
+package CseOrderScrambleA where
+
+interface CseOrderScrambleA =
+    put :: Bit 8 -> Bit 8 -> Action {-# arg_names = [aa, ab] #-}
+
+{-# verilog mkCseOrderScrambleA #-}
+mkCseOrderScrambleA :: Module CseOrderScrambleA
+mkCseOrderScrambleA =
+    module
+        r1 :: Reg (Bit 8) <- mkReg 0
+        interface
+            put aa ab = r1 := aa + ab

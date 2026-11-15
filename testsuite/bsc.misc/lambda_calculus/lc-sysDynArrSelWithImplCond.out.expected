@@ -45,14 +45,14 @@ meth_RDY_get_sysDynArrSelWithImplCond :: MOD_sysDynArrSelWithImplCond -> Bool;
 meth_RDY_get_sysDynArrSelWithImplCond =
     (\ (state0 :: MOD_sysDynArrSelWithImplCond) ->
      let { (def_idx__h428 :: Bit #2) = meth_read_RegN (inst_idx__sysDynArrSelWithImplCond state0)
-	 ; (def_fs_3_i_notEmpty____d10 :: Bit #1) =
-	       meth_i_notEmpty_FIFO2 (inst_fs_3__sysDynArrSelWithImplCond state0)
-	 ; (def_fs_2_i_notEmpty____d9 :: Bit #1) =
-	       meth_i_notEmpty_FIFO2 (inst_fs_2__sysDynArrSelWithImplCond state0)
-	 ; (def_fs_1_i_notEmpty____d8 :: Bit #1) =
-	       meth_i_notEmpty_FIFO2 (inst_fs_1__sysDynArrSelWithImplCond state0)
 	 ; (def_fs_0_i_notEmpty____d7 :: Bit #1) =
 	       meth_i_notEmpty_FIFO2 (inst_fs_0__sysDynArrSelWithImplCond state0)
+	 ; (def_fs_1_i_notEmpty____d8 :: Bit #1) =
+	       meth_i_notEmpty_FIFO2 (inst_fs_1__sysDynArrSelWithImplCond state0)
+	 ; (def_fs_2_i_notEmpty____d9 :: Bit #1) =
+	       meth_i_notEmpty_FIFO2 (inst_fs_2__sysDynArrSelWithImplCond state0)
+	 ; (def_fs_3_i_notEmpty____d10 :: Bit #1) =
+	       meth_i_notEmpty_FIFO2 (inst_fs_3__sysDynArrSelWithImplCond state0)
 	 }
      in bitToBool
 	    (if (primEQ def_idx__h428 (0 :: Bit #2))

@@ -1,0 +1,13 @@
+package ImplicitConditionOrderTop where
+
+import ImplicitConditionOrderScramble
+import ImplicitConditionOrder
+
+-- Batch order: the scrambler, then the probe.
+{-# verilog mkImplicitConditionOrderTop #-}
+mkImplicitConditionOrderTop :: Module Empty
+mkImplicitConditionOrderTop =
+    module
+        _ :: Empty <- mkImplicitConditionOrderScramble
+        _ :: Peek <- sysImplicitConditionOrder
+        interface {}

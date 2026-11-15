@@ -1,0 +1,25 @@
+package MutuallyExclusiveOrder where
+
+-- Two rules joined with rJoinMutuallyExclusive so namedFirst is the first
+-- group in SPMutuallyExclusive.  Compiled behind MutuallyExclusiveOrderScramble
+-- or under -trace-intern-reverse, RL_declaredFirst sorts before RL_namedFirst
+-- in Ord Id; extractMEPairsSP must preserve the pragma's own group order.
+{-# verilog sysMutuallyExclusiveOrder #-}
+sysMutuallyExclusiveOrder :: Module Empty
+sysMutuallyExclusiveOrder =
+    module
+        goDeclaredFirst :: Reg Bool <- mkReg False
+        goNamedFirst :: Reg Bool <- mkReg False
+        countA :: Reg (UInt 8) <- mkReg 0
+        countB :: Reg (UInt 8) <- mkReg 0
+
+        let rNamed =
+                rules
+                    "namedFirst": when goNamedFirst ==>
+                        countB := countB + 2
+            rDecl =
+                rules
+                    "declaredFirst": when goDeclaredFirst ==>
+                        countA := countA + 1
+
+        addRules (rJoinMutuallyExclusive rNamed rDecl)

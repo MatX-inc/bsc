@@ -1,0 +1,50 @@
+package ImplicitConditionOrder where
+
+import FIFO
+
+-- A synthesized submodule whose ActionValue method carries an implicit
+-- condition; two instances give the rule below two RDY_pop conjuncts.
+interface Popper =
+    pop :: ActionValue (Bit 8)
+
+{-# verilog mkPopper #-}
+mkPopper :: Module Popper
+mkPopper =
+    module
+        f :: FIFO (Bit 8) <- mkFIFO
+        interface
+            pop = do
+                f.deq
+                return f.first
+
+interface Peek =
+    peek :: Bit 8
+
+{-# verilog sysImplicitConditionOrder #-}
+sysImplicitConditionOrder :: Module Peek
+sysImplicitConditionOrder =
+    module
+        p1 :: Popper <- mkPopper
+        p2 :: Popper <- mkPopper
+        inQ :: FIFO (Bit 8) <- mkFIFO
+        outQ :: FIFO (Bit 8) <- mkFIFO
+        sideQ :: FIFO (Bit 8) <- mkFIFO
+        count :: Reg (Bit 8) <- mkReg 0
+        enable :: Reg Bool <- mkReg True
+
+        -- One rule: an explicit condition, then implicit conditions from five
+        -- submodules met in this order: inQ.first/deq, p1.pop, p2.pop,
+        -- outQ.enq, sideQ.enq.
+        rules
+            "transfer": when enable && count < 200 ==> do
+                let x = inQ.first
+                inQ.deq
+                a <- p1.pop
+                b <- p2.pop
+                outQ.enq (x + a)
+                sideQ.enq (x ^ b)
+                count := count + 1
+
+        -- A method whose RDY is two implicit conditions: outQ.first, sideQ.first.
+        interface
+            peek = outQ.first + sideQ.first

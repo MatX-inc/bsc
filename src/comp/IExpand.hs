@@ -20,6 +20,7 @@ import Prelude hiding ((<>))
 
 import Data.List
 import Data.Maybe
+import Data.Ord(Down(..))
 import Data.Foldable(foldrM)
 import Numeric(showIntAtBase)
 import Data.Char(intToDigit, ord, chr)
@@ -314,8 +315,8 @@ iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
       -- collect a map of the heap pointers reachable from insts, rules, and ifc
       -- these will become defs in the resulting IModule
       -- Position information has been clobbered in iheap
-      (heap_info, _, root_types) = collPtrs (insts, rules, ifc)
-          (IM.empty, M.fromList (go_source_leaf_types go), M.empty)
+      (heap_info, _, (_, root_types_rev)) = collPtrs (insts, rules, ifc)
+          (IM.empty, M.fromListWith S.union (go_source_leaf_types go), (S.empty, []))
       iheap = IM.map fst heap_info
       -- a list of just the pointers
       ptrs0 = IM.keys iheap
@@ -393,13 +394,21 @@ iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
       m = IM.fromList [(p, mget (ptran p)) | p <- ptrs0 ]
 
       -- Union every source interpretation in a CSE class, including the
-      -- noncanonical cells. The expression can be a port or another simple
-      -- leaf that pDef inlines rather than assigning an IDef.
+      -- noncanonical cells, in first-sighting order (heap allocation order
+      -- followed by root walk order) rather than Ord IExpr / Ord Id order.
+      mergeExprTypes kvs =
+          let mp = M.fromListWith (flip S.union) kvs
+              goSeen _ [] = []
+              goSeen seen ((k, _) : rest)
+                  | S.member k seen = goSeen seen rest
+                  | Just ts <- M.lookup k mp = (k, ts) : goSeen (S.insert k seen) rest
+                  | otherwise = goSeen seen rest
+          in goSeen S.empty kvs
       expr_types = if genABin flags
-                   then M.toList $ M.fromListWith S.union $
+                   then mergeExprTypes $
                         [ (mget (ptran p), ts)
                           | (p, (_, ts)) <- IM.toList heap_info, not (S.null ts) ] ++
-                        [ (hToDef m e, ts) | (e, ts) <- M.toList root_types ]
+                        [ (hToDef m e, ts) | (e, ts) <- reverse root_types_rev ]
                    else []
 
       -- replaces pointers in the insts, rules, and ifcs
@@ -697,7 +706,7 @@ removeInlinedPositions flags imod0 =
              isv_resets = [ (i, rmReset r) | (i, r) <- isv_resets sv ] }
 
     rmPred :: HPred -> HPred
-    rmPred (PConj ps) = PConj (S.map rmPTerm ps)
+    rmPred (PConj ps) = PConj (psMap rmPTerm ps)
 
     rmPTerm :: PTerm HeapData -> PTerm HeapData
     rmPTerm (PAtom e) = PAtom (rmExpr e)
@@ -825,15 +834,16 @@ eqPtrs heap ptrs =
         -- see first.  Uses the same Id-quality preference as
         -- ITransform.rename_map (see Id.idQuality).
         --
-        -- The class is stored as a Set of (quality, ptr) so S.findMax
-        -- returns the best canonical in O(log n).
+        -- The class is stored as a Set of (quality, Down ptr) so S.findMax
+        -- returns the highest-quality canonical and breaks equal-quality ties
+        -- toward the earliest-allocated pointer (matching ITransform).
         rankOf p = idQuality (hc_name (getHeapCell p))
 
-        -- Reverse ptrm0: canonical -> set of (rank, redirected pointer)
-        revPtrm :: IM.IntMap (S.Set (Int, HeapPointer))
+        -- Reverse ptrm0: canonical -> set of (rank, Down redirected pointer)
+        revPtrm :: IM.IntMap (S.Set (Int, Down HeapPointer))
         revPtrm = IM.foldlWithKey'
                     (\m src dst ->
-                       let !cls = S.insert (rankOf src, src)
+                       let !cls = S.insert (rankOf src, Down src)
                                     (IM.findWithDefault S.empty dst m)
                        in  IM.insert dst cls m)
                     IM.empty ptrm0
@@ -847,23 +857,26 @@ eqPtrs heap ptrs =
         -- is used, never create a newly-visible def.
         improve e c0 (!dsm, !ptrm) | rankOf c0 < 1 = (dsm, ptrm)
         improve e c0 (!dsm, !ptrm) =
-            let cls    = S.insert (rankOf c0, c0)
-                           (IM.findWithDefault S.empty c0 revPtrm)
-                (_, c) = S.findMax cls
+            let cls         = S.insert (rankOf c0, Down c0)
+                                (IM.findWithDefault S.empty c0 revPtrm)
+                (_, Down c) = S.findMax cls
             in  if c == c0
                 then (dsm, ptrm)
                 else ( M.insert e c dsm
                      , IM.delete c $
-                       S.foldl' (\m (_, p) -> IM.insert p c m) ptrm cls )
+                       S.foldl' (\m (_, Down p) -> IM.insert p c m) ptrm cls )
 
         (dsm, ptrm) = M.foldlWithKey'
                         (\acc e c0 -> improve e c0 acc)
                         (dsm0, ptrm0)
                         dsm0
-    in  --traces (show (length ptrs, length (M.elems dsm))) $
+        -- Emit the canonical cells in heap allocation order (elaboration
+        -- order), not M.elems order (Ord HExpr -> Ord Id intern order).
+        cse_ptrs = sort (M.elems dsm)
+    in  --traces (show (length ptrs, length cse_ptrs)) $
         --traces (show (IM.toList ptrm)) $
-        --traces (show (M.elems dsm)) $
-        (M.elems dsm, ptrm)
+        --traces (show cse_ptrs) $
+        (cse_ptrs, ptrm)
 
 
 -----------------------------------------------------------------------------
@@ -1482,7 +1495,10 @@ iExpandMethod' implicitCond curClk (i, bi, outs, e0) p0 = do
                                 isActionType methType ->
                              do (P p1 e1', ws_a) <- evalUHNF e1
                                 (P p2 e2', ws_b) <- evalUHNF e2
-                                return (P (pConjs [p0, p1, p2]) (IAps f ts [e1', e2']),
+                                -- the pair is (value, action); the action's
+                                -- conditions go first, as the method body
+                                -- meets them (its return comes last)
+                                return (P (pConjs [p0, p2, p1]) (IAps f ts [e1', e2']),
                                         wsJoin ws_a ws_b)
                          _ -> do (P p' e', ws1) <- walkNF e0
                                  return (P (pConj p0 p') e', ws1)
@@ -2441,7 +2457,7 @@ evalPred' :: PMap -> HPred -> G ((HExpr, HWireSet), PMap)
 evalPred' m (PConj ps) = do
   let f (rs, m) p = do (r, m') <- evalPTerm m p
                        return (r:rs, m')
-  (ress, m') <- foldM f ([], m) (S.toList ps)
+  (ress, m') <- foldM f ([], m) (psToList ps)
   let (es, wss) = unzip (reverse ress)
       res = (foldr ieAnd iTrue es, wsJoinMany wss)
   --traceM ("evalPred " ++ ppReadable es)
@@ -2810,19 +2826,21 @@ nfError str e = do
     e' <- unheapAll e
     eNoNF e'
 
+-- As in walkNF's recurse, the conditions the walk finds inside the
+-- expression go before the ones its evaluation to WHNF lifted (p0).
 evalNF :: HExpr -> G (PExpr, HWireSet)
 evalNF e = do
   (P p0 e') <- eval1 e
   (P p e'', ws) <- walkNF e'
   saveEvaluatedSourceTypes e' e''
-  return (P (pConj p0 p) e'', ws)
+  return (P (pConj p p0) e'', ws)
 
 evalUHNF :: HExpr -> G (PExpr, HWireSet)
 evalUHNF e = do
   (ee, P p0 e') <- evalUHSrc e
   (P p e'', ws) <- walkNF e'
   saveEvaluatedSourceTypes ee e''
-  return (P (pConj p0 p) e'', ws)
+  return (P (pConj p p0) e'', ws)
 
 -- Compute an expression to NF.
 -- NF can involve suspended primitives.
@@ -2859,6 +2877,12 @@ walkNF e =
                       else (P p o, ws)) -- (mapIExprPositionConservative cross (n,o)), ws))
             _ -> return (pn, ws)
 
+        -- p0 is the predicate already on the cell for u: the conditions
+        -- lifted while it was evaluated to WHNF (from its head and from the
+        -- sub-expressions that were not shared) go after the ones this walk
+        -- finds inside it, which belong to the shared sub-expressions met
+        -- earlier in the source: an action's earlier statements, a call's
+        -- arguments.
         recurse p0 u =
             case u of
                 -- remove PrimSetSelPosition
@@ -2874,7 +2898,7 @@ walkNF e =
                     (P pe e', ws_e) <- walkNF e
                     p_if <- pIf c' pt pe
                     let p = pc `pConj` p_if
-                    upd (pConj p0 p) (ieIfx ty c' t' e') (wsJoinMany [ws_c, ws_t, ws_e])
+                    upd (pConj p p0) (ieIfx ty c' t' e') (wsJoinMany [ws_c, ws_t, ws_e])
 
                 IAps f@(ICon _ (ICPrim _ PrimCase))
                          [sz_idx, elem_ty]
@@ -2911,7 +2935,7 @@ walkNF e =
                         (ps, wss) <- mapAndUnzipM mapFn cells
                         let e' = IAps f ts [arr_e, idx_e']
                         let p = pConjs [pidx, pSel idx_e' idx_sz ps]
-                        upd (pConj p0 p) e' (wsJoinMany (ws_idx:wss))
+                        upd (pConj p p0) e' (wsJoinMany (ws_idx:wss))
                       _ -> internalError ("walkNF: dynsel: arr = " ++
                                           ppReadable arr_e)
 
@@ -2920,18 +2944,18 @@ walkNF e =
                     (P pe2 e2', ws2) <- walkNF e2
                     p_if <- pIf e1' pe2 pTrue
                     let p = pe1 `pConj` p_if
-                    upd (pConj p0 p) (ieAnd e1' e2') (wsJoin ws1 ws2)
+                    upd (pConj p p0) (ieAnd e1' e2') (wsJoin ws1 ws2)
 
                 IAps f@(ICon _ (ICPrim _ PrimBOr)) _ [e1, e2] -> do
                     (P pe1 e1', ws1) <- walkNF e1
                     (P pe2 e2', ws2) <- walkNF e2
                     p_if <- pIf e1' pTrue pe2
                     let p = pe1 `pConj` p_if
-                    upd (pConj p0 p) (ieOr e1' e2') (wsJoin ws1 ws2)
+                    upd (pConj p p0) (ieOr e1' e2') (wsJoin ws1 ws2)
 
                 IAps f@(ICon _ (ICPrim _ p)) ts es | realPrimOp p -> do
                     (p, es', ws) <- walkList walkNF es
-                    upd (pConj p0 p) (IAps f ts es') ws -- (map (mapIExprPosition cross) (zip es es'))) ws
+                    upd (pConj p p0) (IAps f ts es') ws -- (map (mapIExprPosition cross) (zip es es'))) ws
 
                 IAps f@(ICon i_sel (ICSel { })) ts es -> do
                     (p, es', ws) <- walkList walkNF es
@@ -2953,7 +2977,7 @@ walkNF e =
                                                         "Reset: " ++ ppReadable r ++
                                                         "Clock gate: " ++ ppReadable p_gate)
                             when uIsAction $ addClkGateUse c
-                            upd (pConjs [p0, p, p_gate]) (IAps f ts es') (wsAddReset r (wsAddClock c ws))
+                            upd (pConjs [p, p0, p_gate]) (IAps f ts es') (wsAddReset r (wsAddClock c ws))
 
                     case es' of
                         st@(ICon i (ICStateVar { iVar = v })) : _ ->
@@ -2961,11 +2985,11 @@ walkNF e =
 
                         -- foreign function has no additional clocks
                         ff@(ICon i (ICForeign { })) : _ ->
-                            upd (pConj p0 p) (IAps f ts es') ws
+                            upd (pConj p p0) (IAps f ts es') ws
 
                         -- This is for the preservation of the clock-gating signal
                         -- XXX is adding the clock to the wire set redundant?
-                        clk@(ICon i (ICClock { iClock = c })) : _  -> upd (pConj p0 p) (IAps f ts es') (wsAddClock c ws)
+                        clk@(ICon i (ICClock { iClock = c })) : _  -> upd (pConj p p0) (IAps f ts es') (wsAddClock c ws)
 
                         -- We can be selecting the avValue or avAction from an ActionValue method,
                         -- or a tuple member out of the result of calling a method with multiple outputs,
@@ -2975,7 +2999,7 @@ walkNF e =
                                i_sel == idPrimFst ||
                                i_sel == idPrimSnd) -> do
                           do (P p' e', ws) <- walkNF e
-                             upd (pConj p0 p') (IAps f ts [e']) ws
+                             upd (pConj p' p0) (IAps f ts [e']) ws
 
                         _ ->    do when doDebug $ traceM "not stvar or foreign\n"
                                    when doDebug $ traceM (show u ++ "\n")
@@ -2984,12 +3008,12 @@ walkNF e =
 
                 IAps f@(ICon i (ICForeign { })) ts es -> do
                     (p, es', ws) <- walkList walkNF es
-                    upd (pConj p0 p) (IAps f ts es') ws
+                    upd (pConj p p0) (IAps f ts es') ws
 
                 IAps f@(ICon i (ICPrim _ PrimWhenPred)) _ [(ICon _ (ICPred _ p)), e] -> do
                    _ <- internalError ("PrimWhenPred" ++ ppReadable e)
                    (P p' e', ws) <- walkNF e
-                   upd (pConjs [p0, p, p']) e' ws
+                   upd (pConjs [p, p', p0]) e' ws
 
                 IAps f@(ICon _ (ICTuple {})) ts [e1, e2] -> do
                     (P pe1 e1', ws1) <- walkNF e1
@@ -3005,7 +3029,7 @@ walkNF e =
                     (p, es', ws) <- walkList walkNF es
                     -- XXX A hack to allow polymorphic methods
                     case f' of
-                        IAps (ICon _ (ICSel { })) _ _ -> upd (pConjs [p0, pf, p]) (IAps f' ts es') (wsJoin ws ws')
+                        IAps (ICon _ (ICSel { })) _ _ -> upd (pConjs [pf, p, p0]) (IAps f' ts es') (wsJoin ws ws')
                         _ ->
                                 do when doDebug $ traceM ("ap:\n" ++ show f' ++ "\n" ++ show ts ++ "\n" ++ show es')
                                    nfError "walkNF ap" u
@@ -3055,11 +3079,11 @@ walkNF e =
                 (ICon _ (ICLazyPack { lzApplied = a })) -> do
                     _ <- evalUHV a  -- force the applied cell to WHNF
                     (P pa a', ws) <- walkNF a
-                    upd (pConj p0 pa) a' ws
+                    upd (pConj pa p0) a' ws
                 (ICon _ (ICLazyUnpack { lzApplied = a })) -> do
                     _ <- evalUHV a
                     (P pa a', ws) <- walkNF a
-                    upd (pConj p0 pa) a' ws
+                    upd (pConj pa p0) a' ws
 
                 -- any remaining constants, etc. cannot have a HWireSet attached
                 _ -> upd p0 e wsEmpty
@@ -4126,7 +4150,10 @@ conAp' i (ICPrim _ PrimWhen) _ (T t : E p : E e : as) = do
         -- XXX This will also check compiler-generated PrimWhen for rules/methods
         canLift <- canLiftCond p'
         when (not canLift) $ deferErrors [(getIdPosition i, EInvalidWhen)]
-        addPredG p'' $ evalAp "PrimWhen" e as
+        -- Conditions met inside the guarded expression go before this guard
+        -- (arguments before the call, earlier statements before later ones).
+        (P p_e e') <- evalAp "PrimWhen" e as
+        return (P (pConj p_e p'') e')
 conAp' _ (ICPrim _ PrimWhen) _ as = internalError ("compAp' PrimWhen: " ++ ppReadable as)
 
 -- When (represents implicit conditions)
@@ -4150,7 +4177,7 @@ conAp' _ (ICPrim _ PrimSeqCond) _ as0@(T t1 : T _ : E e1 : E e2 : as) = do
    -- forcing bit-arrays is a nice side effect
    P p e <- evalUHV e1
    p_buried <- getBuriedPreds e
-   let p_tot = pConj p p_buried
+   let p_tot = pConj p_buried p
    addPredG p_tot $ evalAp "PrimSeqCond" e2 as
 
 conAp' _ (ICPrim _ PrimImpCondOf) fe (T t : E e : as) = do
@@ -4164,7 +4191,7 @@ conAp' _ (ICPrim _ PrimImpCondOf) fe (T t : E e : as) = do
   p_buried <- getBuriedPreds e'
   -- This line is needed to simplify away if-exprs so that we return the
   -- simplest expression (so it won't pick up unnecessary implicit conditions)
-  pFinal <- normPConj $ pConj p (pConj p' p_buried)
+  pFinal <- normPConj $ pConjs [p, p_buried, p']
   -- XXX This conversion produces the aggressive form
   -- XXX we should get the choice of aggressive vs conservative from the
   -- XXX context, or at least via an argument to impCondOf?
@@ -5105,11 +5132,13 @@ conAp' _ c e as = internalError ("conAp':\n" ++ show c ++ "\n" ++ ppReadable (mk
 -- impCondOf, which can be called on expressions of non-primitive type.
 --
 getBuriedPreds :: HExpr -> G HPred
+-- As in walkNF, conditions found inside an expression go before ones
+-- already lifted to its cell or PrimWhenPred.
 getBuriedPreds r@(IRefT {}) = do
   --traceM("getBuriedPreds: following ref")
   (P p' e') <- unheap (pExpr r)
   p'' <- getBuriedPreds e'
-  return (pConj p' p'')
+  return (pConj p'' p')
 getBuriedPreds (IAps (ICon _ (ICPrim _ PrimIf)) _ [cnd,thn,els]) = do
   --traceM("getBuriedPreds: pIf")
   pthn <- getBuriedPreds thn
@@ -5130,7 +5159,7 @@ getBuriedPreds (IAps ic@(ICon _ (ICPrim _ PrimArrayDynSelect)) tys
   --traceM("getBuriedPreds: arr-sel ref")
   (P p' arr') <- unheap (pExpr arr)
   p'' <- getBuriedPreds (IAps ic tys [arr', idx])
-  return (pConj p' p'')
+  return (pConj p'' p')
 getBuriedPreds (IAps ic@(ICon _ (ICPrim _ PrimArrayDynSelect))
                   [elem_ty, ITNum idx_sz]
                   [(ICon _ (ICLazyArray _ arr u)), idx]) = do
@@ -5149,7 +5178,7 @@ getBuriedPreds (IAps ic@(ICon _ (ICPrim _ PrimArrayDynSelect)) tys args) = do
 getBuriedPreds (IAps (ICon _ (ICPrim _ PrimWhenPred)) _ [(ICon _ (ICPred _ p')), e']) = do
   --traceM("getBuriedPreds: when")
   p'' <- getBuriedPreds e'
-  return (pConj p' p'')
+  return (pConj p'' p')
 getBuriedPreds (IAps a@(ICon _ (ICPrim _ PrimBAnd)) b [e1, e2]) = do
   --traceM("getBuriedPreds: AND")
   p1 <- getBuriedPreds e1
@@ -5240,7 +5269,7 @@ getBuriedPredsForced :: [HExpr] -> G HPred
 getBuriedPredsForced es = do
   let f e = do P p e' <- evalUHV e
                p' <- getBuriedPreds e'
-               return (pConj p p')
+               return (pConj p' p)
   ps <- mapM f es
   return (pConjs ps)
 
@@ -5250,7 +5279,7 @@ getBuriedPredsForced es = do
 -- XXX Would be obsoleted by a PPrint version that follows heap refs
 
 ppPConjRefs :: HPred -> G ()
-ppPConjRefs (PConj ps) = mapM_ ppPTermRefs (S.toList ps)
+ppPConjRefs (PConj ps) = mapM_ ppPTermRefs (psToList ps)
 
 ppPTermRefs :: PTerm HeapData -> G ()
 ppPTermRefs (PAtom e) = ppExprRefs e
@@ -6310,7 +6339,8 @@ doSetSelPosition icon ty poss ee (p, e) = do
 -- and to inline the defs in place of the heap pointers (with hToDef).
 
 type HeapSnapshot = (IM.IntMap (HeapCell, S.Set IType),
-                     M.Map HExpr (S.Set IType), M.Map HExpr (S.Set IType))
+                     M.Map HExpr (S.Set IType),
+                     (S.Set HExpr, [(HExpr, S.Set IType)]))
 
 class HeapToDef a where
     collPtrs :: a -> HeapSnapshot -> HeapSnapshot
@@ -6393,10 +6423,12 @@ collHeapExpr (IRefT _ p _ r) m@(heap, observations, found) =
 collHeapExpr e m = internalError ("collPtrs: " ++ ppReadable e)
 
 instance HeapToDef HExpr where
-    collPtrs e (heap, observations, found) =
-        let found' = case M.lookup e observations of
-                       Nothing -> found
-                       Just ts -> M.insertWith S.union e ts found
+    collPtrs e (heap, observations, found@(seen, acc)) =
+        let found' = if S.member e seen
+                     then found
+                     else case M.lookup e observations of
+                            Nothing -> found
+                            Just ts -> (S.insert e seen, (e, ts) : acc)
         in collHeapExpr e (heap, observations, found')
 
     hToDef m (IAps f ts es) = IAps f ts (hToDef m es)

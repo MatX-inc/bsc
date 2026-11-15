@@ -43,8 +43,8 @@ rule_RL_sub_sysMethods =
 	 ; (def_y_EQ_0___d5 :: Bool) = primEQ def_y___d2 (0 :: Bit #51)
 	 ; (def_x___d1 :: Bit #51) = meth_read_RegN (inst_x__sysMethods state0)
 	 ; (def_x_ULE_y___d3 :: Bool) = primULE def_x___d1 def_y___d2
-	 ; (def_y_MINUS_x___d9 :: Bit #51) = primSub def_y___d2 def_x___d1
 	 ; (def_x_ULE_y_AND_NOT_y_EQ_0___d8 :: Bool) = def_x_ULE_y___d3 && (not def_y_EQ_0___d5)
+	 ; (def_y_MINUS_x___d9 :: Bit #51) = primSub def_y___d2 def_x___d1
 	 ; (act1 :: (Bool, MOD_RegN #51, ())) =
 	       meth_write_RegN def_y_MINUS_x___d9 (inst_y__sysMethods state0)
 	 ; (guard1 :: Bool) = fst3 act1

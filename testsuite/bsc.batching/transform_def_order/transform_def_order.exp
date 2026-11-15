@@ -1,0 +1,152 @@
+# Verify that eqPtrs, iSortDs, and ITransform emit local defs in first-sighting
+# order and break equal-quality CSE survivor ties by earliest sighting rather
+# than Ord IExpr / Ord Id.
+
+proc imod_local_defs { dump out } {
+    global srcdir
+    global subdir
+    set dir [file join [absolute $srcdir] $subdir]
+    set in [open [file join $dir $dump]]
+    set fh [open [file join $dir $out] w]
+    set keep 0
+    while { [gets $in line] >= 0 } {
+        if { [string match "-- imod local defs*" $line] } { set keep 1 }
+        if { [string match "-- imod rules*" $line] } { set keep 0 }
+        if { $keep } { puts $fh $line }
+    }
+    close $in
+    close $fh
+}
+
+proc def_names { defs } {
+    global srcdir
+    global subdir
+    set fh [open [file join [absolute $srcdir] $subdir $defs]]
+    set names [list]
+    while { [gets $fh line] >= 0 } {
+        if { [string match "-- imod local defs*" $line] } {
+            set names [list]
+        } elseif { [regexp {^(\S+) ::} $line -> name] } {
+            lappend names $name
+        }
+    }
+    close $fh
+    return $names
+}
+
+proc first_matches { defs patterns } {
+    global srcdir
+    global subdir
+    set fh [open [file join [absolute $srcdir] $subdir $defs]]
+    set text [read $fh]
+    close $fh
+    set found [list]
+    foreach pat $patterns {
+        if { [regexp -indices -- $pat $text idx] } {
+            lappend found [list [lindex $idx 0] $pat]
+        }
+    }
+    set order [list]
+    foreach f [lsort -integer -index 0 $found] {
+        lappend order [lindex $f 1]
+    }
+    return $order
+}
+
+proc expect_sums_in_write_order { defs } {
+    set expected [list {put_aa put_ab} {put_zz put_zy}]
+    set order [first_matches $defs $expected]
+    if { $order eq $expected } {
+        pass "the sums in `$defs' are in the order the method writes them"
+    } else {
+        fail "the sums in `$defs' are in the order `$order'"
+    }
+}
+
+proc expect_conds_in_call_order { defs } {
+    set expected [list COND_RL_rone_fa_enq_1 COND_RL_rone_fb_enq_2 COND_RL_rone_fc_enq_3]
+    set conds [lsearch -all -inline -glob [def_names $defs] COND_RL_*]
+    if { $conds eq $expected } {
+        pass "the COND_ defs in `$defs' are in the order the rule makes the calls"
+    } else {
+        fail "the COND_ defs in `$defs' are in the order `$conds'"
+    }
+}
+
+proc expect_first_sighted_survivor { defs win_stem lose_stem } {
+    set names [def_names $defs]
+    set win [lsearch -regexp $names "^${win_stem}(__h\[0-9a-zA-Z\]+)?$"]
+    set lose [lsearch -regexp $names "^${lose_stem}(__h\[0-9a-zA-Z\]+)?$"]
+    if { $win >= 0 && $lose < 0 } {
+        pass "the merged def in `$defs' carries `$win_stem' over `$lose_stem'"
+    } elseif { $lose >= 0 } {
+        fail "the merged def in `$defs' carries `$lose_stem' instead of `$win_stem'"
+    } else {
+        fail "no merged def named `$win_stem' or `$lose_stem' in `$defs'"
+    }
+}
+
+set dumps "-dexpanded=expanded_%m.out -dtransform=transform_%m.out"
+
+erase CseOrder.bo
+with_normal_intern_order {
+    compile_verilog_pass CseOrder.bs mkCseOrder $dumps
+}
+imod_local_defs expanded_mkCseOrder.out mkCseOrder.oneshot.expanded-defs.out
+imod_local_defs transform_mkCseOrder.out mkCseOrder.oneshot.transform-defs.out
+
+erase CseOrder.bo
+erase CseOrderScrambleA.bo
+erase CseOrderScrambleB.bo
+with_normal_intern_order {
+    compile_verilog_pass CseOrderTop.bs mkCseOrderTop $dumps
+}
+imod_local_defs expanded_mkCseOrder.out mkCseOrder.batch.expanded-defs.out
+imod_local_defs transform_mkCseOrder.out mkCseOrder.batch.transform-defs.out
+compare_file mkCseOrder.batch.expanded-defs.out mkCseOrder.oneshot.expanded-defs.out
+compare_file mkCseOrder.batch.transform-defs.out mkCseOrder.oneshot.transform-defs.out
+
+erase CseOrder.bo
+compile_verilog_pass CseOrder.bs mkCseOrder "$dumps -trace-intern-reverse"
+imod_local_defs expanded_mkCseOrder.out mkCseOrder.reversed.expanded-defs.out
+imod_local_defs transform_mkCseOrder.out mkCseOrder.reversed.transform-defs.out
+compare_file mkCseOrder.reversed.expanded-defs.out mkCseOrder.oneshot.expanded-defs.out
+compare_file mkCseOrder.reversed.transform-defs.out mkCseOrder.oneshot.transform-defs.out
+
+foreach shape [list oneshot batch reversed] {
+    expect_sums_in_write_order mkCseOrder.$shape.expanded-defs.out
+    expect_sums_in_write_order mkCseOrder.$shape.transform-defs.out
+}
+
+set conds "-keep-method-conds"
+
+erase DefMapOrder.bo
+with_normal_intern_order {
+    compile_verilog_pass DefMapOrder.bs mkDefMapOrder "$dumps $conds"
+}
+imod_local_defs expanded_mkDefMapOrder.out mkDefMapOrder.oneshot.expanded-defs.out
+imod_local_defs transform_mkDefMapOrder.out mkDefMapOrder.oneshot.transform-defs.out
+
+erase DefMapOrder.bo
+erase DefMapOrderScrambleA.bo
+erase DefMapOrderScrambleC.bo
+with_normal_intern_order {
+    compile_verilog_pass DefMapOrderTop.bs mkDefMapOrderTop "$dumps $conds"
+}
+imod_local_defs expanded_mkDefMapOrder.out mkDefMapOrder.batch.expanded-defs.out
+imod_local_defs transform_mkDefMapOrder.out mkDefMapOrder.batch.transform-defs.out
+compare_file mkDefMapOrder.batch.expanded-defs.out mkDefMapOrder.oneshot.expanded-defs.out
+compare_file mkDefMapOrder.batch.transform-defs.out mkDefMapOrder.oneshot.transform-defs.out
+
+erase DefMapOrder.bo
+compile_verilog_pass DefMapOrder.bs mkDefMapOrder "$dumps $conds -trace-intern-reverse"
+imod_local_defs expanded_mkDefMapOrder.out mkDefMapOrder.reversed.expanded-defs.out
+imod_local_defs transform_mkDefMapOrder.out mkDefMapOrder.reversed.transform-defs.out
+compare_file mkDefMapOrder.reversed.expanded-defs.out mkDefMapOrder.oneshot.expanded-defs.out
+compare_file mkDefMapOrder.reversed.transform-defs.out mkDefMapOrder.oneshot.transform-defs.out
+
+foreach shape [list oneshot batch reversed] {
+    expect_conds_in_call_order mkDefMapOrder.$shape.transform-defs.out
+    expect_first_sighted_survivor mkDefMapOrder.$shape.transform-defs.out first second
+    expect_first_sighted_survivor mkDefMapOrder.$shape.transform-defs.out alpha beta
+}

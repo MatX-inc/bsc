@@ -1,6 +1,6 @@
 module AVeriQuirks (aVeriQuirks) where
 
-import Data.List( tails, partition)
+import Data.List(tails, partition, sortOn)
 import Data.Maybe(catMaybes)
 import IntegerUtil(integerAnd, integerOr)
 import Util(itos, makePairs)
@@ -62,7 +62,7 @@ data QState = QState {
     -- or create hardware on its behalf.
     sourceTypes :: AExpr -> S.Set IType,
     hasSourceTypes :: Bool,
-    rewrittenTypes :: M.Map AExpr (S.Set IType),
+    rewrittenTypes :: M.Map AExpr (Int, S.Set IType),
     rewriteSerial :: !Int
   }
 
@@ -138,12 +138,16 @@ aVeriQuirks flags pkg =
                 fs' <- mapM aQForeignBlock (aspkg_foreign_calls pkg)
                 ds' <- gets defs
                 ts' <- gets rewrittenTypes
+                let rewrittenList =
+                        [ (e, ts)
+                        | (e, (_, ts)) <- sortOn (fst . snd) (M.toList ts')
+                        ]
                 return (pkg { aspkg_values = (reverse ds'),
                               aspkg_state_instances = is',
                               aspkg_foreign_calls = fs',
                               aspkg_expr_types = anchorSourceTypes
                                   (reverse ds' ++ aspkg_inout_values pkg)
-                                  (aspkg_expr_types pkg ++ M.toList ts') })
+                                  (aspkg_expr_types pkg ++ rewrittenList) })
 
 
 aQDef :: ADef -> QQState ()
@@ -202,14 +206,24 @@ retainSourceTypes old new = do
         lookupTypes <- gets sourceTypes
         extra <- gets rewrittenTypes
         let ts = S.union (lookupTypes old)
-                         (M.findWithDefault S.empty (sourceTypeKey old) extra)
+                         (maybe S.empty snd (M.lookup (sourceTypeKey old) extra))
         -- Most visited expressions have no observation. Check the index
         -- before walking subtrees to exclude anonymous unknowns/literals.
         when (not (S.null ts) && shareableSourceExpr old &&
               shareableSourceExpr new) $ do
             state <- get
-            let extra' = MS.insertWith S.union (sourceTypeKey new) ts extra
-            extra' `seq` put state { rewrittenTypes = extra' }
+            let key = sourceTypeKey new
+            case M.lookup key extra of
+              Just (ord, oldTs) ->
+                  let ts' = S.union ts oldTs
+                      extra' = ts' `seq` MS.insert key (ord, ts') extra
+                  in extra' `seq` put state { rewrittenTypes = extra' }
+              Nothing ->
+                  let ord = rewriteSerial state
+                      ord' = ord + 1
+                      extra' = ord `seq` MS.insert key (ord, ts) extra
+                  in ord' `seq` extra' `seq`
+                     put state { rewrittenTypes = extra', rewriteSerial = ord' }
 
 -- Anonymous unknowns are independent choices, including when nested in an
 -- expression. Literal occurrences must not relay interpretations to unrelated

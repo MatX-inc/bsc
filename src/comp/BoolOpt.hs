@@ -1,6 +1,8 @@
+{-# LANGUAGE BangPatterns #-}
 module BoolOpt(optBoolExprQM) where
 
-import Data.List(union, sort, nub, (\\))
+import Data.List(nub, (\\))
+import qualified Data.Set as S
 
 import ErrorUtil
 import BoolExp(BoolExp(..))
@@ -8,14 +10,20 @@ import BoolExp(BoolExp(..))
 -- import Debug.Trace
 
 
-getVars :: (Eq a) => BoolExp a -> [a]
-getVars (And e1 e2) = getVars e1 `union` getVars e2
-getVars (Or e1 e2) = getVars e1 `union` getVars e2
-getVars (Not e1) = getVars e1
-getVars (If e1 e2 e3) = getVars e1 `union` getVars e2 `union` getVars e3
-getVars (Var a) = [a]
-getVars TT = []
-getVars FF = []
+-- Collect distinct variables in left-to-right walk order so Quine-McCluskey
+-- minimization never depends on Ord a (e.g. Ord Id).
+getVars :: (Ord a) => BoolExp a -> [a]
+getVars e0 = reverse (snd (go (S.empty, []) e0))
+  where
+    go (!seen, !acc) (And e1 e2) = go (go (seen, acc) e1) e2
+    go (!seen, !acc) (Or e1 e2) = go (go (seen, acc) e1) e2
+    go (!seen, !acc) (Not e1) = go (seen, acc) e1
+    go (!seen, !acc) (If e1 e2 e3) = go (go (go (seen, acc) e1) e2) e3
+    go (!seen, !acc) (Var a)
+      | S.member a seen = (seen, acc)
+      | otherwise = (S.insert a seen, a : acc)
+    go (!seen, !acc) TT = (seen, acc)
+    go (!seen, !acc) FF = (seen, acc)
 
 eval :: (Eq a) => [(a, Bool)] -> BoolExp a -> Bool
 eval r (And e1 e2) = eval r e1 && eval r e2
@@ -68,7 +76,7 @@ genEnvs (x:xs) =
 -- Give up if too many variables.
 optBoolExprQM :: Ord a => Int -> BoolExp a -> Maybe (BoolExp a)
 optBoolExprQM n e =
-        let vs = sort (getVars e)
+        let vs = getVars e
             nvs = length vs
             rs = genEnvs vs
             rows = map (map (to3 . snd)) (filter (`eval` e) rs)
