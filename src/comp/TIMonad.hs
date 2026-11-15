@@ -93,11 +93,21 @@ type CATFCache = M.Map (Id, [Type]) Type
 mergeCATFCaches :: CATFCache -> CATFCache -> CATFCache
 mergeCATFCaches = M.union
 
+-- One level of the bound-tyvar stack.  Each level also carries the
+-- concatenation and the set of all vars bound at it and below, so that
+-- getBoundTVs and the freshness check in newTVar need not rebuild them
+-- (they are consulted for every instance tried by reducePred).
+data BoundTyVars = BoundTyVars {
+  btvLevel :: [TyVar],
+  btvAll :: [TyVar],
+  btvAllSet :: S.Set TyVar
+  }
+
 -- typechecking state that is restored in case of error
 data TStateRecover = TStateRecover {
   tsCurSubst :: !Subst, -- current substitution
   -- stack of bound tyvars (list of lists for stuff bound at each level)
-  tsBoundTyVarStack :: [[TyVar]],
+  tsBoundTyVarStack :: [BoundTyVars],
   tsExplPreds :: [[EPred]],
   tsSatStack :: TSSuperSatStack,
   -- numeric predicates already decided by the proviso SAT solver in
@@ -335,15 +345,25 @@ updSubst :: (Subst -> Subst) -> TI ()
 updSubst f = modify (transSubst f)
 
 getBoundTVs :: TI [TyVar]
-getBoundTVs = gets tsBoundTyVarStack >>= (return . concat)
+getBoundTVs = gets (boundAll . tsBoundTyVarStack)
+  where boundAll [] = []
+        boundAll (b:_) = btvAll b
+
+isBoundTV :: TI (TyVar -> Bool)
+isBoundTV = gets (isBound . tsBoundTyVarStack)
+  where isBound [] = const False
+        isBound (b:_) = \ v -> S.member v (btvAllSet b)
 
 -- get just the most recently bound tvars
 getTopBoundTVs :: TI [TyVar]
-getTopBoundTVs = gets tsBoundTyVarStack >>= (return . headOrErr "getTopBoundTVs")
+getTopBoundTVs = gets tsBoundTyVarStack >>= (return . btvLevel . headOrErr "getTopBoundTVs")
 
 addBoundTVs :: [TyVar] -> TI ()
 addBoundTVs is = modify addVars
-  where addVars s = s { tsBoundTyVarStack = is:(tsBoundTyVarStack s) }
+  where addVars s = s { tsBoundTyVarStack = push (tsBoundTyVarStack s) }
+        push [] = [BoundTyVars is is (S.fromList is)]
+        push bs@(b:_) = BoundTyVars is (is ++ btvAll b)
+                                    (foldr S.insert (btvAllSet b) is) : bs
 
 popBoundTVs :: TI ()
 popBoundTVs = modify dropVars
@@ -407,11 +427,11 @@ getTyVarNum = lift $ do
 newTVar :: HasPosition a => String -> Kind -> a -> TI Type
 newTVar msg k x = do
   let pos = getPosition x
-  bvs <- getBoundTVs
+  isBound <- isBoundTV
   let loopVar = do
         n <- getTyVarNum
         let v = TyVar (enumId "tctyvar" pos n) n k
-        if (v `elem` bvs) then loopVar
+        if isBound v then loopVar
          else do
            when doVarTrace $ traceM ("newTVar: " ++ show n ++ " " ++ msg);
            return (TVar v)
