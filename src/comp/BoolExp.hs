@@ -10,6 +10,8 @@ import Util(toMaybe)
 import PPrint
 import BDD
 import qualified Data.Set as S
+import qualified Data.Map as M
+import qualified Data.IntMap as IM
 
 --import Util(traces)
 
@@ -176,35 +178,78 @@ rrNot :: BoolExp a -> BoolExp a
 rrNot (Not e) = e
 rrNot e = Not e
 
+-- Simplification does repeated comparisons of subterms (set membership
+-- in redAnd/redOr, equality guards in reduce, BDD variables), each a
+-- structural walk of whatever the Var leaves hold.  Interning the
+-- leaves first makes every comparison an Int comparison, for one map
+-- lookup per leaf.  Results are unchanged: the sets are used only for
+-- membership, term order comes from encounter-ordered accumulators,
+-- and BDD implication answers are canonical.
+withInternedVars :: (Ord a) =>
+                    (BoolExp Int -> BoolExp Int) -> BoolExp a -> BoolExp a
+withInternedVars f e0 =
+    let intern (And e1 e2) s = let (e1', s1) = intern e1 s
+                                   (e2', s2) = intern e2 s1
+                               in  (And e1' e2', s2)
+        intern (Or e1 e2) s  = let (e1', s1) = intern e1 s
+                                   (e2', s2) = intern e2 s1
+                               in  (Or e1' e2', s2)
+        intern (Not e) s     = let (e', s') = intern e s
+                               in  (Not e', s')
+        intern (If e1 e2 e3) s = let (e1', s1) = intern e1 s
+                                     (e2', s2) = intern e2 s1
+                                     (e3', s3) = intern e3 s2
+                                 in  (If e1' e2' e3', s3)
+        intern (Var v) s@(fwd, n, bwd) =
+            case M.lookup v fwd of
+              Just i  -> (Var i, s)
+              Nothing -> (Var n, (M.insert v n fwd, n+1, IM.insert n v bwd))
+        intern TT s = (TT, s)
+        intern FF s = (FF, s)
+
+        (e_i, (_, _, back)) = intern e0 (M.empty, 0, IM.empty)
+
+        unintern (And e1 e2) = And (unintern e1) (unintern e2)
+        unintern (Or e1 e2)  = Or (unintern e1) (unintern e2)
+        unintern (Not e)     = Not (unintern e)
+        unintern (If e1 e2 e3) = If (unintern e1) (unintern e2) (unintern e3)
+        unintern (Var i)     = Var (back IM.! i)
+        unintern TT = TT
+        unintern FF = FF
+    in  unintern (f e_i)
+
 -- simple simplify
 sSimplify :: (Ord a) => BoolExp a -> BoolExp a
-sSimplify (And e1 e2) =
-        let e' = And (sSimplify e1) (sSimplify e2) in
+sSimplify = withInternedVars sSimp
+
+sSimp :: (Ord a) => BoolExp a -> BoolExp a
+sSimp (And e1 e2) =
+        let e' = And (sSimp e1) (sSimp e2) in
         case reduce e' of
-        Just e -> sSimplify e
+        Just e -> sSimp e
         Nothing -> e'
-sSimplify (Or e1 e2) =
-        let e' = Or (sSimplify e1) (sSimplify e2) in
+sSimp (Or e1 e2) =
+        let e' = Or (sSimp e1) (sSimp e2) in
         case reduce e' of
-        Just e -> sSimplify e
+        Just e -> sSimp e
         Nothing -> e'
-sSimplify (If e1 e2 e3) =
-        let e' = If (sSimplify e1) (sSimplify e2) (sSimplify e3) in
+sSimp (If e1 e2 e3) =
+        let e' = If (sSimp e1) (sSimp e2) (sSimp e3) in
         case reduce e' of
-        Just e -> sSimplify e
+        Just e -> sSimp e
         Nothing -> e'
-sSimplify (Not e) =
-        let e' = Not (sSimplify e) in
+sSimp (Not e) =
+        let e' = Not (sSimp e) in
         case reduce e' of
-        Just e -> sSimplify e
+        Just e -> sSimp e
         Nothing -> e'
-sSimplify e@(Var _) = e
-sSimplify TT = TT
-sSimplify FF = FF
+sSimp e@(Var _) = e
+sSimp TT = TT
+sSimp FF = FF
 
 -- Do some further simplification with Not
 nSimplify :: (Ord a) => BoolExp a -> BoolExp a
-nSimplify = sSimplify . nSimp . sSimplify
+nSimplify = withInternedVars (sSimp . nSimp . sSimp)
   where nSimp (And e1 e2) =
             -- (x || y || z) && !y  -->  (x || z) && !y
             simpAO collAnd collOr rrAnds rrOrs e1 e2
@@ -226,7 +271,7 @@ nSimplify = sSimplify . nSimp . sSimplify
 
 -- "Advanced" simplify
 aSimplify :: (Ord a) => BoolExp a -> BoolExp a
-aSimplify = sSimplify . simp bddTrue . sSimplify
+aSimplify = withInternedVars (sSimp . simp bddTrue . sSimp)
 
 red :: (Ord a) => BoolExp a -> BoolExp a
 red e =
