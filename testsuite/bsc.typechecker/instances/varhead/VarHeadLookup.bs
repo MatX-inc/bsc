@@ -1,0 +1,119 @@
+package VarHeadLookup where
+
+-- The instance lookup for a predicate whose head is a type variable.
+--
+-- Payload is an associated type function of Encoding.  While the derived
+-- instances of Frame are typechecked, s is a type variable, so the stuck
+-- application Payload s is replaced by a fresh type variable and the
+-- Bits and DefaultValue provisos on the Payload fields are asked as
+-- `Bits _v _n` and `DefaultValue _v`: a type variable at the position
+-- the instance index is keyed on.  Such a predicate can match an instance
+-- only one-way, by binding the instance's variables, so an instance with
+-- a constructor head there (every Bits instance in scope, the K* ones
+-- below among them) can never be selected for it: the lookup returns the
+-- variable-headed instances alone (none for Bits; the Literal catch-all
+-- for DefaultValue) without trying the others, and the match of the
+-- catch-all is still marked incoherent by the instances it did not try.
+-- The .exp pins the untried instances through the reducePred trace and
+-- the resolution through the simulation output.
+
+import Vector
+
+class Encoding s p | s -> p where
+  type Payload s = p
+  tag :: s -> UInt 8
+
+data Narrow = Narrow
+data Wide = Wide
+
+instance Encoding Narrow (UInt 4) where
+  tag _ = 1
+
+instance Encoding Wide (UInt 12) where
+  tag _ = 2
+
+-- Polymorphic over the encoding: the derived instances carry
+-- variable-headed provisos for the Payload fields.
+struct Frame s =
+  valid :: Bool
+  body  :: Payload s
+  spare :: Vector 3 (Payload s)
+ deriving (Bits, Eq, DefaultValue)
+
+-- Constructor-headed instances in scope beside the Prelude's.
+struct K0 =
+  k0 :: UInt 1
+ deriving (Bits, Eq, DefaultValue)
+
+struct K1 =
+  k1 :: UInt 2
+ deriving (Bits, Eq, DefaultValue)
+
+struct K2 =
+  k2 :: UInt 3
+ deriving (Bits, Eq, DefaultValue)
+
+struct K3 =
+  k3 :: UInt 4
+ deriving (Bits, Eq, DefaultValue)
+
+struct K4 =
+  k4 :: UInt 5
+ deriving (Bits, Eq, DefaultValue)
+
+struct K5 =
+  k5 :: UInt 6
+ deriving (Bits, Eq, DefaultValue)
+
+struct K6 =
+  k6 :: UInt 7
+ deriving (Bits, Eq, DefaultValue)
+
+struct K7 =
+  k7 :: UInt 8
+ deriving (Bits, Eq, DefaultValue)
+
+struct K8 =
+  k8 :: UInt 9
+ deriving (Bits, Eq, DefaultValue)
+
+struct K9 =
+  k9 :: UInt 10
+ deriving (Bits, Eq, DefaultValue)
+
+struct K10 =
+  k10 :: UInt 11
+ deriving (Bits, Eq, DefaultValue)
+
+struct K11 =
+  k11 :: UInt 12
+ deriving (Bits, Eq, DefaultValue)
+
+struct K12 =
+  k12 :: UInt 13
+ deriving (Bits, Eq, DefaultValue)
+
+struct K13 =
+  k13 :: UInt 14
+ deriving (Bits, Eq, DefaultValue)
+
+struct K14 =
+  k14 :: UInt 15
+ deriving (Bits, Eq, DefaultValue)
+
+struct K15 =
+  k15 :: UInt 16
+ deriving (Bits, Eq, DefaultValue)
+
+{-# verilog sysVarHeadLookup #-}
+sysVarHeadLookup :: Module Empty
+sysVarHeadLookup = module
+  n :: Reg (Frame Narrow) <- mkReg defaultValue
+  w :: Reg (Frame Wide) <- mkReg (Frame { valid = True; body = 5; spare = replicate 7 })
+  rules
+    "show": when True ==> action
+      $display "%0d %0d %b" (tag Narrow) (valueOf (SizeOf (Frame Narrow))) (pack n)
+      $display "%0d %0d %b" (tag Wide) (valueOf (SizeOf (Frame Wide))) (pack w)
+      let w' :: Frame Wide = unpack (pack w)
+      $display "%0d %0d" (if w' == w then 1 else 0) (if (defaultValue :: Frame Wide) == w then 1 else 0)
+      $finish
