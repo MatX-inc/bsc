@@ -15,7 +15,7 @@ import Position
 import Id
 import PreIds
 import ISyntax
-import ISyntaxSubst(tSubst)
+import ISyntaxSubst(tSubst, tSubstBatch)
 import ISyntaxUtil
 import Changed(changedOrId)
 import IExpandUtils
@@ -186,8 +186,24 @@ tCheck flags symt cache r eqTy ec@(IAps e [t] []) =
                               ++ " k=" ++ ppReadable k ++ " kt=" ++ ppReadable kt) $
                 assert (k == kt) "IAP" (ec, (i,k,rt), kt) (k, kt) rt'
         tt -> internalError ("tCheck IAP: " ++ ppReadable (ec, tt))
-tCheck flags symt cache r eqTy (IAps f (t:ts) []) =
-    tCheck flags symt cache r eqTy (IAps (IAps f [t] []) ts [])
+-- Several type arguments are substituted simultaneously: one at a
+-- time rebuilds the remaining quantified type per argument, which is
+-- quadratic in the number of type parameters (hundreds, for the
+-- dictionaries of derived instances over large types).
+tCheck flags symt cache r eqTy ec@(IAps f ts@(_:_:_) []) =
+    inst M.empty (tCheck flags symt cache r eqTy f) ts
+  where
+    inst m ft [] = tSubstBatch m ft
+    inst m (ITForAll i k rt) (t:ts') =
+        let kt = kCheckErr r t
+        in  assert (k == kt) "IAP" (ec, (i,k,rt), kt) (k, kt) $
+            -- an inner binder shadows an outer one of the same name
+            inst (M.insert i t m) rt ts'
+    inst m ft ts'
+        -- a quantifier may only appear once the arguments so far are
+        -- substituted
+        | not (M.null m) = inst M.empty (tSubstBatch m ft) ts'
+        | otherwise = internalError ("tCheck IAP: " ++ ppReadable (ec, ft))
 tCheck _ _ _ _ _ (ICon c ic) = iConType ic
 tCheck flags symt cache r eqTy (IAps f [] []) =
     trace_icheck ("tCheck IAps []: " ++ show f) $
