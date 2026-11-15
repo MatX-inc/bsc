@@ -473,7 +473,7 @@ iExpandTL tl_file errh flags symt alldefs atf_cache is_noinlined_func pps def@(I
   let tl_end = when (tlOn tl_log) $
                    iExpandTypeLinks tl_log iheap ptr_map ptr_info insts rules
                                     rules_cleanup ifc (go_port_types go)
-                                    pps vresetinfo
+                                    pps is_noinlined_func vresetinfo
                                     (case tl_file of
                                        Just (_, user_mod) ->
                                            tlParamTypes flags symt (changedOrId norm)
@@ -989,19 +989,20 @@ iExpandCapture iheap ptr_map ptrm0 ptr_info args caplog =
 -- forced, so every cell, name and type read here is already evaluated.
 -- norm is the type normalizer with the cache of the end of elaboration;
 -- field_types, con_encodings and has_bits read the symbol table
--- (TypeLinksDecl); pps are the module's pragmas, own_resets its reset
--- ports and param_types the declared types of its parameters, by name.
+-- (TypeLinksDecl); pps are the module's pragmas, is_func whether the
+-- module is a function compiled as a module, own_resets its reset ports
+-- and param_types the declared types of its parameters, by name.
 iExpandTypeLinks :: TLog -> IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
                     [(HeapPointer, (HExpr, Maybe HDef))] ->
                     [(Id, HStateVar)] -> HRules -> HRules -> [HEFace] ->
-                    PortTypeMap -> [PProp] -> VResetInfo -> [(String, IType)] ->
+                    PortTypeMap -> [PProp] -> Bool -> VResetInfo -> [(String, IType)] ->
                     (IType -> IType) ->
                     (IType -> Maybe [(Int, Int, String, Maybe IType)]) ->
                     (IType -> Maybe [(Integer, Integer, Integer)]) ->
                     (IType -> Maybe Bool) -> IO ()
 iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules_clean)
-                 ifc port_types pps own_resets param_types norm field_types con_encodings
-                 has_bits = do
+                 ifc port_types pps is_func own_resets param_types norm field_types
+                 con_encodings has_bits = do
     tlFinalBegin l norm
     let cellExpr p = case IM.lookup p iheap of
                        Just (HNF { hc_pexpr = P _ e }) -> Just e
@@ -1234,7 +1235,9 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
     -- the module's methods (a method's ready method is the field after
     -- it, and is told with it; output clocks, resets and inouts are no
     -- methods), told here because every record that can name a method
-    -- argument has been written
+    -- argument has been written.  A ready has no port when a pragma
+    -- makes its method always ready, and never in a function compiled as
+    -- a module.
     let always = tlAlwaysMethod pps
         fields = catMaybes meth_ends
     mapM_ (\ ((ief, t, (root, value, ports)), next) ->
@@ -1253,7 +1256,8 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
                                Just (rief, _, (rroot, _, _)) | isRdyId (ief_name rief) ->
                                    (Just rroot,
                                     case ief_fieldinfo rief of
-                                      Method { vf_outputs = [(vn, _)] } | not always_rdy ->
+                                      Method { vf_outputs = [(vn, _)] }
+                                        | not always_rdy, not is_func ->
                                           Just (getVNameString vn)
                                       _ -> Nothing)
                                _ -> (Nothing, Nothing)
