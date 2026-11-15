@@ -401,7 +401,8 @@ namespace eval ::portUtil {
                     
                     # TODO: assert args = "args"
                     # move result from line2 into args of line1
-                    lappend line1 [list ready [getElem "result" $line2]]
+                    set results [take [getElem "results" $line2]]
+                    lappend line1 [list ready [getElem "port" [take $results]]]
                     incr i
                 }
             }
@@ -416,7 +417,7 @@ namespace eval ::portUtil {
     # take these two lines and merge the type stuff info theport stuff
     #   methods => {members {method {Test1a::TS method2 {Int#(32) Int#(32)}}}}
     #   ports   => method method2 {clock no_clock} {reset no_reset} {args {{method2_in1 {port method2_in1} {size 32}} {method2_in2 {port method2_in2} {size 32}}}} {result method2} {ready amIready}
-    proc mergeTypesPorts { meth portInfo } {
+    proc mergeTypesPorts { meth portInfo portTypes } {
         dbg "mergeTypesPorts"
         
         dbg "arg1 => $meth"
@@ -440,17 +441,16 @@ namespace eval ::portUtil {
         
         set outtype  [lindex $mInfo    0]
         set mname    [lindex $mInfo    1]
-        set intypes  [lindex $mInfo    2]
         
         ########################################
         # update each argument to add the proper type information
         set arglist [list]
         foreach arg $args {
             if {$arg != {} } {
-                # only one type per args, there should be one type per individual arg
-                lappend arg [list type [take $intypes]]   ;# get first entry onto arglist
+                # Physical arguments may be split, or zero-width arguments omitted.
+                set pin [take [getElem "port" $arg]]
+                lappend arg [list type [take [getElem $pin $portTypes]]]
                 lappend arglist $arg
-                set intypes [tail $intypes]               ;# shift that entry off
             }
         }
         lappend res [list args $arglist]
@@ -462,26 +462,22 @@ namespace eval ::portUtil {
         }
         
         ########################################
-        set result  [getElem "result" $portInfo]
-        if { $result != "" } {
-            # arg1 => method {ActionValue#(Bit#(4)) method9 Bit#(4)}
-            # arg2 => method ifcB_method9 ........{args} {result ifcB_method9}
-            
-            # let's add a size parameter here to make this more complete at this level
-            # make sure both exist... if no type then make it void
-            # parse out ActionValues
-            if {[regexp {ActionValue\#\((.+)\)} $outtype match datatype]} {
-                set ft [typeFullAnalysis $datatype]
-                set size [getWidth $ft]
-            } elseif {$outtype == "" } {
-                set outtype "void"
-                set size 0
-            } else {
-                set ft [typeFullAnalysis $outtype]
-                set size [getWidth $ft]
+        set results [list]
+        foreach result [take [getElem "results" $portInfo]] {
+            set pin [take [getElem "port" $result]]
+            set size [take [getElem "size" $result]]
+            set type [take [getElem $pin $portTypes]]
+            # Keep the ActionValue annotation in the generated method comments.
+            if {[regexp {^ActionValue\#\(} $outtype]} {
+                set type "ActionValue\#($type)"
             }
-            
-            lappend res [list result $result [list type $outtype] [list size $size]]
+            lappend results [list $pin [list type $type] [list size $size]]
+        }
+        if {[llength $results] == 1} {
+            # Preserve the existing merged representation for a single result.
+            lappend res [linsert [take $results] 0 result]
+        } elseif {[llength $results] > 1} {
+            lappend res [list results $results]
         }
         
         ########################################
@@ -554,7 +550,11 @@ namespace eval ::portUtil {
             showError "unexpected methods / ports array length mismatch! [llength $methods] [llength $ports]"
         }
 
-        set portInfo [zipWith portUtil::mergeTypesPorts $methods $ports]
+        set portTypes [module porttypes $module]
+        set portInfo [list]
+        foreach meth $methods port $ports {
+            lappend portInfo [mergeTypesPorts $meth $port $portTypes]
+        }
         
         # add extra pins onto the end (parameters that are not part of methods, etc)
         # these are wires, treated as inputs only ?  what about interface parameters ?
@@ -563,6 +563,16 @@ namespace eval ::portUtil {
     }
     
     ######################################################################
+    # The merged representation retains the historical scalar result when
+    # possible, and uses a list for methods with multiple physical results.
+    proc methodResults { item } {
+        set result [getElem "result" $item]
+        if {$result != ""} {
+            return [list $result]
+        }
+        return [take [getElem "results" $item]]
+    }
+
     proc createExpandedPins { item } {
         proc renamePin { pin } {
             global renameList
@@ -576,7 +586,6 @@ namespace eval ::portUtil {
 
         set enable [getElem "enable" $item]
         set ready  [getElem "ready"  $item]
-        set result [getElem "result" $item]
         set args   [take [getElem "args" $item]]
         
         set res [list]
@@ -597,7 +606,7 @@ namespace eval ::portUtil {
             lappend res [list "input" [list $pin 1]  [list [list $outpin 1]]]
         }
         
-        if {$result != ""} {
+        foreach result [methodResults $item] {
             # {result ifcA_method2 {type Int#(32)} {size 32}}
 	    # join is needed because type may or may not be a list
 	    # (Maybe#(Bool) vs. {Vector#(32, Bool)}).  We want to pass
@@ -648,7 +657,6 @@ namespace eval ::portUtil {
         set meth   [takeAt $item 1]
         set enable [getElem "enable" $item]
         set ready  [getElem "ready"  $item]
-        set result [getElem "result" $item]
         
         set res [list]
         
@@ -667,7 +675,7 @@ namespace eval ::portUtil {
         }
         
         ########################################
-        if {$result != ""} {
+        foreach result [methodResults $item] {
             set type [getElem "type" $result]
             # puts [type full $type]
             set size [getElem "size" $result]

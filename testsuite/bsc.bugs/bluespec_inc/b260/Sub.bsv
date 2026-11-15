@@ -5,8 +5,6 @@ export ArithIO(..);
 export msub;
 export Sub_t;
 
-import UInt::*;
-
 typedef  UInt#(32) Sub_t;
 
 // Interface for general arith operation
