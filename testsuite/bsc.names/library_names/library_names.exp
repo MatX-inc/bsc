@@ -1,0 +1,30 @@
+# A name written in a bsc library (here the parameters x and y of Prelude's
+# max and of the Bit instance's (^)) ranks below the design's own names,
+# and still names a value that nothing else names.
+
+compile_verilog_pass LibraryNames.bs
+if { $vtest == 1 } {
+    # the user's total names a + b, not max's parameter x
+    find_regexp sysUserName.v {assign total__h\d+ = a \+ b ;}
+    find_regexp_fail sysUserName.v {x__h\d+}
+    # nothing else names the arguments of max
+    find_regexp sysLibraryName.v {assign x__h\d+ = a \+ b ;}
+    find_regexp sysLibraryName.v {assign y__h\d+ = a - b ;}
+    # the parameters of (^) keep fold's reduction tree
+    find_regexp sysFoldTree.v {assign o = x__h\d+ \^ y__h\d+ ;}
+    find_regexp sysFoldTree.v {assign x__h\d+ = rs_0 \^ rs_1 ;}
+    find_regexp sysFoldTree.v {assign y__h\d+ = rs_2 \^ rs_3 ;}
+}
+
+compile_object_pass LibraryNames.bs
+link_objects_pass {} sysUserName
+link_objects_pass {} sysLibraryName
+link_objects_pass {} sysFoldTree
+if { $ctest == 1 } {
+    find_regexp sysUserName.cxx {DEF_total__h\d+ = 65535u & \(DEF_a___d\d+ \+ DEF_b___d\d+\);}
+    find_regexp_fail sysUserName.cxx {DEF_x__h\d+}
+    find_regexp sysLibraryName.cxx {DEF_x__h\d+ = 65535u & \(DEF_a___d\d+ \+ DEF_b___d\d+\);}
+    find_regexp sysLibraryName.cxx {DEF_y__h\d+ = 65535u & \(DEF_a___d\d+ - DEF_b___d\d+\);}
+    find_regexp sysFoldTree.cxx {DEF_x__h\d+ = DEF_x__h\d+ \^ DEF_y__h\d+;}
+    find_regexp sysFoldTree.cxx {PORT_o = DEF_x__h\d+ \^ DEF_y__h\d+;}
+}

@@ -1,0 +1,67 @@
+# Verify the unified 5-level CSE survivor rank, Param (noCSE) inline expansion
+# without suppressing user binders, dead bypassed MUX_*__SEL_ alias filtering,
+# inlined RWire $whas non-winner enable preservation, shared-anchor alias
+# preservation, and invariance under `bsc -u` batching and -trace-intern-reverse.
+
+compile_verilog_pass CseSurvivor.bs {} {-keep-fires -aggressive-conditions}
+compile_verilog_pass WhasSurvivor.bs {} {-keep-fires -aggressive-conditions}
+if { $vtest == 1 } {
+    # Param (noCSE) + rule + interface: userStride survives as a wire while
+    # RegN's .init parameter expands inline without referencing the wire.
+    find_regexp mkParamSurvivor.v {assign userStride(__h\d+)?\s*=}
+    find_regexp_fail mkParamSurvivor.v {\.init\(userStride}
+
+    # Param (noCSE) + interface only (converted after state instantiations):
+    # userMask still survives in the interface expression.
+    find_regexp mkParamIfcOnly.v {assign userMask(__h\d+)?\s*=}
+    find_regexp_fail mkParamIfcOnly.v {\.init\(userMask}
+
+    # Unconditional rule writes bypass MUX_*__SEL_ aliases: WILL_FIRE_RL_*
+    # survives and no dead MUX_r$write_1__SEL_ wire is emitted.
+    find_regexp mkMuxFireSurvivor.v {WILL_FIRE_RL_step_low}
+    find_regexp mkMuxFireSurvivor.v {WILL_FIRE_RL_step_mid}
+    find_regexp mkMuxFireSurvivor.v {WILL_FIRE_RL_step_high}
+    find_regexp_fail mkMuxFireSurvivor.v {MUX_r\$write_1__SEL_}
+
+    # Inlined RWire $whas keeps its non-winner enable role and $wget ranks
+    # below user binders: payload survives and neither $whas nor $wget hijacks
+    # the user binders or firing signal.
+    find_regexp mkWhasSurvivor.v {assign payload(__h\d+)?\s*=}
+    find_regexp mkWhasSurvivor.v {WILL_FIRE_RL_drive_rw}
+    find_regexp_fail mkWhasSurvivor.v {rw\$wget}
+    find_regexp_fail mkWhasSurvivor.v {rw\$whas}
+
+    # Two distinct RDY_ anchors sharing a non-trivial RHS both survive, two
+    # distinct CAN_FIRE_RL_ anchors sharing an RHS keep an explicit alias
+    # with first-sighted fire_z_first winning, and equal-rank user binders
+    # break ties by first-sighting order (zetaVal beats alphaVal).
+    find_regexp mkSharedAnchors.v {assign RDY_m1\s*=}
+    find_regexp mkSharedAnchors.v {assign RDY_m2\s*=}
+    find_n_strings mkSharedAnchors.v {assign CAN_FIRE_RL_fire_a_second = CAN_FIRE_RL_fire_z_first ;} 1
+    find_regexp mkSharedAnchors.v {assign zetaVal(__h\d+)?\s*=}
+    find_regexp_fail mkSharedAnchors.v {alphaVal}
+
+    # Tier-3 user binder beats an earlier-visited unnamed heap cell in
+    # IExpand.eqPtrs.
+    find_regexp mkUnnamedVsUserSurvivor.v {assign userXor(__h\d+)?\s*=}
+}
+
+reverse_intern_same_bo CseSurvivor.bs
+reverse_intern_same_bo WhasSurvivor.bs
+
+foreach mod {mkParamSurvivor mkParamIfcOnly mkSharedAnchors mkUnnamedVsUserSurvivor} {
+    reverse_intern_same_verilog CseSurvivor.bs $mod {-keep-fires}
+    batching_verilog_pair CseSurvivor.bs $mod TopA.bs mkTopA {ScrambleA.bs} {-keep-fires}
+    batching_verilog_pair CseSurvivor.bs $mod TopZ.bs mkTopZ {ScrambleZ.bs} {-keep-fires}
+}
+
+batching_verilog_pair CseSurvivor.bs mkMuxFireSurvivor TopA.bs mkTopA {ScrambleA.bs} {-keep-fires}
+batching_verilog_pair CseSurvivor.bs mkMuxFireSurvivor TopZ.bs mkTopZ {ScrambleZ.bs} {-keep-fires}
+
+reverse_intern_same_verilog WhasSurvivor.bs mkWhasSurvivor {-keep-fires}
+batching_verilog_pair WhasSurvivor.bs mkWhasSurvivor TopA.bs mkTopA {ScrambleA.bs} {-keep-fires}
+batching_verilog_pair WhasSurvivor.bs mkWhasSurvivor TopZ.bs mkTopZ {ScrambleZ.bs} {-keep-fires}
+
+check_verilog_regen CseSurvivor.bs mkParamSurvivor {-keep-fires}
+check_verilog_regen WhasSurvivor.bs mkWhasSurvivor {-keep-fires}
+check_verilog_regen CseSurvivor.bs mkSharedAnchors {-keep-fires}

@@ -1,0 +1,13 @@
+package ScrambleZ where
+
+-- Pre-intern competing survivor candidates in zeta-first order before
+-- CseSurvivor is compiled in a `bsc -u` batch.
+zetaPreIntern :: Bit 8 -> (Bit 8, Bool)
+zetaPreIntern x =
+  let zetaVal = x + 8'd3
+      userStride = x + 8'd4
+      userMask = x + 8'd5
+      payload = x + 8'd6
+      wantSend = x == 8'd0
+      alphaVal = x + 8'd1
+  in  (zetaVal ^ userStride ^ userMask ^ payload ^ alphaVal, wantSend)

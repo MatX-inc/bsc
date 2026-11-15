@@ -2732,10 +2732,34 @@ extendHeap = do s <- get
                 mapM_ copycell ((uncurry enumFromTo) (bounds oldheap))
 -}
 
+-- Select the initial name of a heap cell using the 5-level quality rank
+-- (Id.idQuality).  User binders and anchors (score >= 3) win immediately.
+-- A library binder still at its library position names nothing and falls
+-- back to inferName; a moved library binder (IdPNonUserBinder) yields to
+-- any higher-ranked inferred name and otherwise keeps its name so pDef
+-- retains the def (for example, fold's reduction tree).
 improveCellName :: HExpr -> Maybe Id -> G (Maybe Id)
-improveCellName _ mi@(Just i)
-  | not $ isPreludePosition $ getPosition i = return mi
-improveCellName e _ = inferName e
+improveCellName e mi@(Just i)
+  | idQuality mi >= 3 = return mi
+  | isPreludePosition (getPosition i) = inferName e
+  | otherwise = do
+      mn <- inferName e
+      return $ if idQuality mn > idQuality mi then mn else mi
+improveCellName e Nothing = inferName e
+
+-- When an existing heap cell carries a library or inferred name and reaches
+-- a strictly higher-ranked name, upgrade the cell's name; otherwise preserve
+-- the first-sighted name (and leave unnamed cells unnamed so hidden
+-- temporaries and state-read thunks are not hijacked by downstream function
+-- parameters).
+nameHeapRef :: HeapPointer -> HeapData -> Id -> G ()
+nameHeapRef p r i = do
+  cell <- getHeap r
+  case hc_name cell of
+    Just old | (isLibraryId old || isInferredId old)
+            && idQuality (Just i) > idQuality (Just old) ->
+      updHeap "name-ref" (p, r) (cell { hc_name = Just i })
+    _ -> return ()
 
 -- Cells enter the heap only here and in updHeap, so forcing the name at
 -- both places ensures that the heap never stores a name thunk.  Names can
@@ -3121,6 +3145,9 @@ toHeap tag t (ICon i (ICDef t' e)) cell_name = do
   e' <- cacheDef i t' e
   toHeap tag t e' cell_name
 toHeap _   _ e@(ICon _ _)      _ = return e
+toHeap _   _ e@(IRefT _ p _ r) (Just i) | idQuality (Just i) > 1 = do
+  nameHeapRef p r i
+  return e
 toHeap _   _ e@(IRefT _ _ _ _) _ = return e
 toHeap tag t e cell_name = do
         -- these errors have never happened, disable checks for now.
@@ -3146,6 +3173,10 @@ toHeapCon tag t e cell_name = toHeap tag t e cell_name
 {-# INLINE toHeapWHNF #-}
 toHeapWHNF :: String -> IType -> PExpr -> Maybe Id -> G HExpr
 toHeapWHNF _  _ (P p e@(ICon _ _)) _ | p == pTrue = return e
+toHeapWHNF _  _ (P p e@(IRefT _ ptr _ r)) (Just i)
+  | p == pTrue, idQuality (Just i) > 1 = do
+      nameHeapRef ptr r i
+      return e
 toHeapWHNF _  _ (P p e@(IRefT _ _ _ _)) _ | p == pTrue = return e
 toHeapWHNF tag _ (P p e) cell_name
   | IAps (ICon _ (ICPrim _ PrimWhenPred)) [t] [ICon _ (ICPred _ p'), e'] <- e =
@@ -3181,13 +3212,13 @@ inferName expr@(IAps (ICon _ (ICPrim { primOp = PrimSelect })) [ITNum bit_size, 
                         mkFString ("_BITS_" ++ show highest_bit ++ "_TO_" ++
                                    show lowest_bit ++ "_")
        case selected_object_name of
-         Just name -> return (Just (mkIdPost name suffix))
+         Just name -> return (Just (setInferredId (mkIdPost name suffix)))
          Nothing -> return Nothing
 -- register read sugar
 inferName expr@(IAps (ICon con_name (ICSel {})) [_] [object])
     | con_name == idPreludeRead = inferName object
 -- state instances
-inferName expr@(ICon inst_name (ICStateVar {})) = return (Just inst_name)
+inferName expr@(ICon inst_name (ICStateVar {})) = return (Just (setInferredId inst_name))
 inferName _ = return Nothing
 
 unCacheableType :: IType -> Bool

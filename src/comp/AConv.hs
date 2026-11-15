@@ -2,6 +2,8 @@ module AConv (aConv, aTypeConv, isLocalAId) where
 
 import Util(itos, headOrErr, initOrErr, lastOrErr, log2, concatMapM, makePairs)
 import qualified Data.Map as M
+import qualified Data.Map.Strict as MS
+import Data.Ord(Down(..))
 import Control.Monad(when, liftM, forM, zipWithM)
 import Control.Monad.Except(throwError)
 import Control.Monad.State(StateT, runStateT, gets, get, put)
@@ -72,6 +74,7 @@ data AState = AState {
         cseMap :: CSEMap, -- for CSE
         stVarMap :: IdMap, -- I-expr names to A-expr names
         ieDefMap :: IEDefMap, -- accumulated definitions
+        noCseDefMap :: M.Map Id AExpr, -- inline expansions for Param (noCSE)
         flags :: Flags, -- to hold the flags on the Monad
         wmsgs :: [WMsg] -- to hold accumulated warnings
         }
@@ -90,6 +93,7 @@ aInitState errh svm flags =
              cseMap = M.empty,
              stVarMap = svm,
              ieDefMap = M.empty,
+             noCseDefMap = M.empty,
              flags = flags,
              wmsgs = []
            }
@@ -269,9 +273,11 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ idefs rs ifc ffc
         let orderedCse m =
                 [ (i, t, e)
                   | (_, i, t, e) <- sortOn (\(ord, _, _, _) -> ord) (M.elems m) ]
+            orderedDefsWithOrd m =
+                sortOn (\(_, (ord, _, _)) -> ord) (M.toList m)
             orderedDefs m =
                 [ (i, e, props)
-                  | (i, (_, e, props)) <- sortOn (\(_, (ord, _, _)) -> ord) (M.toList m) ]
+                  | (i, (_, e, props)) <- orderedDefsWithOrd m ]
             stateDefs s = [ADef i t e [] | (i, t, e) <- orderedCse (cseMap s)] ++
                           [ADef i (aType e) e props |
                            (i, e, props) <- orderedDefs (ieDefMap s),
@@ -283,40 +289,26 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ idefs rs ifc ffc
         -- traceM $ "defMap = " ++ ppReadable defMap
         -- traceM $ "cseMap = " ++ ppReadable cseMap
 
-        -- Restore original names to CSEd definitions, when possible.
-        -- But prevent non-CSE defs from becoming CSE'd into other expressions.
-        -- Similar to what is being done in ITransform, in iTransFixupDefNames.
-        --
+        -- Restore original names to CSEd definitions using the 5-level
+        -- survivor rank (Id.idQuality), breaking equal-rank ties by
+        -- first-sighting order (Down ord, never Ord Id).  If every
+        -- candidate is bad (idQuality < 1), keep newAIdFromAExpr's
+        -- expression-derived cse_name.
         let defsInOrder = orderedDefs defMap
             cseInOrder = orderedCse cseMap
-            -- because we use "aSubst" to perform the substitution,
-            -- we are doing an Id-to-Expr subst (not Id-to-Id) so we need to
-            -- know the type in order to create the ASDef expr.
-            -- Feed reverse defsInOrder so combineFn prepends in O(1) and yields
-            -- def_ips in exact first-sighting order.
-            cse_ids_map :: M.Map AId (AType, [(AId, [DefProp])])
+            bestByRank a@(k1, _) b@(k2, _) = if k1 >= k2 then a else b
+            cse_ids_map :: M.Map AId ((Int, Down Int), (AType, AId))
             cse_ids_map =
-                let combineFn (t1, ips1) (_, ips2) = (t1, ips1 ++ ips2)
-                in  M.fromListWith combineFn
-                        [ (cse_name, (ty, [(def_name, props)]))
-                          | (def_name, ASDef ty cse_name, props)
-                                <- reverse defsInOrder ]
-
+                MS.fromListWith bestByRank
+                    [ ( cse_name
+                      , ((idQuality (Just def_name), Down ord), (ty, def_name)) )
+                      | (def_name, (ord, ASDef ty cse_name, props))
+                            <- orderedDefsWithOrd defMap
+                      , not (defPropsHasNoCSE props) ]
             rename_map :: M.Map AId (AType, AId)
             rename_map =
-                let -- the CSE name was generated with "newAIdFromAExpr"
-                    pickId cse_id (ty, def_ips) =
-                        -- filter out the non-CSE defs
-                        case (filter (not . defPropsHasNoCSE . snd) def_ips) of
-                          -- if they're all non-CSE, keep the CSE name
-                          [] -> (ty, cse_id)
-                          -- otherwise, filter out the bad names
-                          names -> case (filter (not . isBadId . fst) names) of
-                                     -- if they're all bad, use the CSE name
-                                     [] -> (ty, cse_id)
-                                     -- otherwise, take the first def name
-                                     ((def_id, _):_) -> (ty, def_id)
-                in  M.mapWithKey pickId cse_ids_map
+                M.mapMaybe (\((q, _), v) -> if q >= 1 then Just v else Nothing)
+                           cse_ids_map
 
             rename_id name = case (M.lookup name rename_map) of
                                Just (_, new_name) -> new_name
@@ -338,9 +330,13 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ idefs rs ifc ffc
                         [ ADef (rename_id i) t (aSubst subst_map e) []
                           | (i, t, e) <- cseInOrder ]
                     non_cse_defs =
-                        [ ADef i (ae_type e) (aSubst subst_map e) props
-                          | (i, e, props) <- defsInOrder,
-                            defPropsHasNoCSE props ]
+                        [ ADef i (ae_type e') e' props
+                          | (i, e, props) <- defsInOrder
+                          , let e' = aSubst subst_map e
+                          , defPropsHasNoCSE props
+                            || (isAnchorId i && case e' of
+                                                  ASDef _ ref_i -> ref_i /= i
+                                                  _ -> False) ]
                 in  defs_from_cse ++ non_cse_defs
 
         reset_list <- mapM (\ir -> do ar <- aReset ir
@@ -783,16 +779,31 @@ aSelExpr sels base = internalError
 
 aEDef :: Id -> IExpr a -> [DefProp] -> M AExpr
 aEDef i e ps = do
-        da <- getDA
-        -- traceM $ "aEDef " ++ ppReadable (i,e,ps)
-        case M.lookup i da of
-         Just (_, a, _) -> do
-           return a
-         Nothing -> do
-            -- traceM $ "not found"
-            a <- aSExpr e
-            addDA i a ps
-            return a
+        noCSE <- ask
+        if noCSE
+          then do
+            -- Module instantiation Params expand inline without CSE: neither
+            -- reuse a wire ASDef from ieDefMap nor cache un-CSE'd expressions
+            -- into ieDefMap where they would suppress normal CSE and user
+            -- binder preservation in rule/method expressions.
+            s <- get
+            case M.lookup i (noCseDefMap s) of
+              Just a -> return a
+              Nothing -> do
+                a <- aSExpr e
+                s' <- get
+                put (s' { noCseDefMap = M.insert i a (noCseDefMap s') })
+                return a
+          else do
+            da <- getDA
+            -- traceM $ "aEDef " ++ ppReadable (i,e,ps)
+            case M.lookup i da of
+              Just (_, a, _) -> return a
+              Nothing -> do
+                -- traceM $ "not found"
+                a <- aSExpr e
+                addDA i a ps
+                return a
 
 aTypeConv :: Id -> IType -> AType
 aTypeConv _ (ITAp (ITCon b _ _) (ITNum n)) | b == idBit = ATBit n

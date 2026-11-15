@@ -19,6 +19,7 @@ import Prelude hiding ((<>))
 #endif
 
 import Data.List
+import qualified Data.List as L
 import Data.Maybe
 import Data.Ord(Down(..))
 import Data.Foldable(foldrM)
@@ -826,53 +827,60 @@ eqPtrs heap ptrs =
                     sub e = e
                 in  case M.lookup e dsm of
                     Nothing -> (M.insert e p dsm, ptrm)
-                    Just h -> (dsm, IM.insert p h ptrm)
-        (dsm0, ptrm0) = foldl' (flip step) (M.empty, IM.empty) ptrs'
+                    Just h
+                      | p == h -> (dsm, ptrm)
+                      | Just i1 <- hc_name (getHeapCell h)
+                      , Just i2 <- hc_name (getHeapCell p)
+                      , isAnchorId i1 && isAnchorId i2 && i1 /= i2
+                      -> (dsm, ptrm)
+                      | otherwise -> (dsm, IM.insert p h ptrm)
+        (dsm0, ptrm0) = L.foldl' (flip step) (M.empty, IM.empty) ptrs'
 
         -- Pass 2: pick the best-named pointer per equivalence class as
         -- the canonical, instead of whichever pointer pass-1 happened to
-        -- see first.  Uses the same Id-quality preference as
-        -- ITransform.rename_map (see Id.idQuality).
-        --
-        -- The class is stored as a Set of (quality, Down ptr) so S.findMax
-        -- returns the highest-quality canonical and breaks equal-quality ties
-        -- toward the earliest-allocated pointer (matching ITransform).
+        -- see first.  Uses the 5-level Id-quality rank (see Id.idQuality),
+        -- breaking equal-rank ties by first-sighting order (smallest
+        -- HeapPointer, via Down).  Distinct Tier-4 anchors that entered
+        -- the same class via an unnamed pass-1 canonical stay unmerged,
+        -- matching pass-1's distinct-anchor guard.
         rankOf p = idQuality (hc_name (getHeapCell p))
+        keyOf p = (rankOf p, Down p)
+        distinctAnchors p1 p2
+          | Just i1 <- hc_name (getHeapCell p1)
+          , Just i2 <- hc_name (getHeapCell p2)
+          = isAnchorId i1 && isAnchorId i2 && i1 /= i2
+          | otherwise = False
 
         -- Reverse ptrm0: canonical -> set of (rank, Down redirected pointer)
         revPtrm :: IM.IntMap (S.Set (Int, Down HeapPointer))
         revPtrm = IM.foldlWithKey'
                     (\m src dst ->
-                       let !cls = S.insert (rankOf src, Down src)
+                       let !cls = S.insert (keyOf src)
                                     (IM.findWithDefault S.empty dst m)
                        in  IM.insert dst cls m)
                     IM.empty ptrm0
 
-        -- Visibility guard: only re-pick among visibly-named pointers.
-        -- pDef hides nameless and bad-named defs but keeps well-named
-        -- ones, so promoting a well-named pointer over a hidden pass-1
-        -- canonical would flip the def from hidden to visible in the
-        -- Bluesim symbol table and VCD.  A hidden canonical therefore
-        -- stays canonical; pass 2 may only improve WHICH visible name
-        -- is used, never create a newly-visible def.
-        improve e c0 (!dsm, !ptrm) | rankOf c0 < 1 = (dsm, ptrm)
         improve e c0 (!dsm, !ptrm) =
-            let cls         = S.insert (rankOf c0, Down c0)
+            let cls         = S.insert (keyOf c0)
                                 (IM.findWithDefault S.empty c0 revPtrm)
                 (_, Down c) = S.findMax cls
+                redirect m (_, Down p)
+                  | p == c || distinctAnchors p c = IM.delete p m
+                  | otherwise                     = IM.insert p c m
             in  if c == c0
                 then (dsm, ptrm)
                 else ( M.insert e c dsm
-                     , IM.delete c $
-                       S.foldl' (\m (_, Down p) -> IM.insert p c m) ptrm cls )
+                     , S.foldl' redirect ptrm cls )
 
         (dsm, ptrm) = M.foldlWithKey'
                         (\acc e c0 -> improve e c0 acc)
                         (dsm0, ptrm0)
                         dsm0
-        -- Emit the canonical cells in heap allocation order (elaboration
-        -- order), not M.elems order (Ord HExpr -> Ord Id intern order).
-        cse_ptrs = sort (M.elems dsm)
+        -- Emit all unredirected cells in heap allocation order (elaboration
+        -- order), not M.elems order (Ord HExpr -> Ord Id intern order),
+        -- including any distinct Tier-4 anchors kept separate from dsm.
+        cse_ptrs = IS.toAscList $
+                   IS.fromList [ p | p <- ptrs', not (p `IM.member` ptrm) ]
     in  --traces (show (length ptrs, length cse_ptrs)) $
         --traces (show (IM.toList ptrm)) $
         --traces (show cse_ptrs) $
@@ -3810,7 +3818,10 @@ evalHeap (ptr, ref) = do
             P _ (IAps (ICon _ (ICUndet { })) _ _) -> internalError ("evalHeap: " ++ ppReadable (ptr, pe'))
             -- create IRefs for ICTuple fields to prevent repeat evaluation after selection
             P p (IAps f@(ICon con_name (ICTuple { fieldIds = field_names })) ts as) -> do
-                let prefix | Just pfx <- expr_name = mkUSId (unQualId pfx)
+                -- prefix field names with the struct cell's name unless it is
+                -- a library or bad name
+                let prefix | Just pfx <- expr_name, not (isLibraryId pfx || isBadId pfx) =
+                               mkUSId (unQualId pfx)
                            | otherwise = id
                     struct_field_names =
                          [Just (prefix (unQualId name)) | name <- field_names]

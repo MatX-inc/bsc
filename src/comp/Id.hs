@@ -48,6 +48,9 @@ module Id(
         isHideId, setHideId, rmHideId,
         isHideAllId, setHideAllId, rmHideAllId,
         isBadId, setBadId,
+        isLibraryId,
+        isInferredId, setInferredId,
+        isMuxId, isAnchorId,
         idQuality,
         isFromRHSId, setFromRHSId,
         isSignedId, setSignedId,
@@ -175,6 +178,12 @@ data IdProp = IdPCanFire
                                         -- (introduced by LiftDicts)
               -- desugared from '0 or '1, so errors can mention the literal
               | IdPUnbasedUnsized
+              -- a binder written in a bsc library, moved to a use site in
+              -- the design (ISyntaxXRef.moveBinder)
+              | IdPNonUserBinder
+              -- a name inferred from an expression rather than written as a
+              -- binder (IExpandUtils.inferName)
+              | IdPInferredName
         deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
 
 -- #############################################################################
@@ -579,15 +588,53 @@ isRuleId idx = hasIdProp idx IdPRule
 isBadId :: Id -> Bool
 isBadId idx = hasIdProp idx IdP_bad_name
 
--- Quality score for an optional Id: higher = preferred as canonical.
--- Used wherever we pick the "best" Id from a group of equivalent ones
--- (e.g. ITransform.runCSE's pickId, IExpand.eqPtrs's pass-2).
--- An IdP_keep'd Id beats a non-bad Id beats a bad Id beats no name at all.
+-- Written in a bsc library: the Id has a library position, or it is a
+-- library binder that FixupDefs or ISimplify moved to a use site in the
+-- design (IdPNonUserBinder).
+isLibraryId :: Id -> Bool
+isLibraryId idx = isPreludePosition (getIdPosition idx) ||
+                  hasIdProp idx IdPNonUserBinder
+
+isInferredId :: Id -> Bool
+isInferredId idx = hasIdProp idx IdPInferredName
+
+setInferredId :: Id -> Id
+setInferredId idx = addIdProp idx IdPInferredName
+
+-- AState MUX_* helper wires inherit IdPMeth from their target method port
+-- via mkIdPre; exclude them from port anchors and rank them with compiler
+-- temporaries below library, inferred, user, and anchor names.
+isMuxId :: Id -> Bool
+isMuxId idx = isPrefixOf "MUX_" (getIdBaseString idx)
+
+-- Module, schedule, probe, and keep-preserved signal anchors.
+-- (Module output/inout port anchors on ASyntax defs are additionally checked
+-- via APackage interface ports in AOpt.joinDefs.)
+isAnchorId :: Id -> Bool
+isAnchorId idx =
+    isFire idx ||
+    isRdyId idx ||
+    hasIdProp idx IdPProbe ||
+    hasIdProp idx IdPMethodPredicate ||
+    hasIdProp idx IdP_keepEvenUnused
+
+-- 5-level CSE survivor quality score (higher = preferred as canonical):
+--   4: Anchors (ports, EN_*, RDY_*, WILL_FIRE_*, CAN_FIRE_*,
+--      state/instance ports, keep-preserved signals)
+--   3: User binders
+--   2: Inferred names (inferName, or compiler-derived non-bad names
+--      without a source binder position)
+--   1: Library binders (isLibraryId)
+--   0: Bad IDs / compiler-minted temporaries (isBadId, isFromRHSId, MUX_*)
+--  -1: Nothing (unnamed heap cell)
 idQuality :: Maybe Id -> Int
-idQuality (Just i) | isKeepId i      = 2
-                   | not (isBadId i) = 1
-                   | otherwise       = 0
-idQuality Nothing                    = -1
+idQuality Nothing = -1
+idQuality (Just idx)
+  | isAnchorId idx                                     = 4
+  | isBadId idx || isFromRHSId idx || isMuxId idx      = 0
+  | isLibraryId idx                                    = 1
+  | isInferredId idx || getIdPosition idx == noPosition = 2
+  | otherwise                                          = 3
 
 isFromRHSId :: Id -> Bool
 isFromRHSId idx = hasIdProp idx IdP_from_rhs

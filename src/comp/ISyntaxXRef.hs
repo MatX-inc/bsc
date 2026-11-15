@@ -9,14 +9,14 @@ import qualified Data.Set as S
 
 import ISyntax
 import Id
-import Position(Position, noPosition, isUsefulPosition)
+import Position(Position, noPosition, isUsefulPosition, isPreludePosition)
 
 -- #############################################################################
 -- #
 -- #############################################################################
 
 updateIExprPosition :: Position -> IExpr a -> IExpr a
-updateIExprPosition pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition pos e))
+updateIExprPosition pos (ILam i t e) = (ILam (moveBinder pos i) t (updateIExprPosition pos e))
 updateIExprPosition pos (IAps e ts [e0]) = (IAps (updateIExprPosition pos e) ts [(updateIExprPosition pos e0)])
 updateIExprPosition pos (IAps e ts es) = (IAps (updateIExprPosition pos e) ts es)
 updateIExprPosition pos (IVar i) = (IVar (setIdPosition pos i))
@@ -31,9 +31,18 @@ updateIExprPosition pos (ICon i info) = (ICon (setIdPosition pos i) info)
 updateIExprPosition pos (IRefT t p poss r) = (IRefT t p poss' r)
   where poss' = S.insert pos poss
 
+-- A binder moved from a bsc library to a use site in the design keeps its
+-- library origin as IdPNonUserBinder so heap and CSE name selection still
+-- rank it below design names.
+moveBinder :: Position -> Id -> Id
+moveBinder pos i
+  | isPreludePosition (getIdPosition i) && not (isPreludePosition pos) =
+      addIdProp i' IdPNonUserBinder
+  | otherwise = i'
+  where i' = setIdPosition pos i
 
 updateIExprPosition2 :: Position -> IExpr a -> IExpr a
-updateIExprPosition2 pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition pos e))
+updateIExprPosition2 pos (ILam i t e) = (ILam (moveBinder pos i) t (updateIExprPosition pos e))
 updateIExprPosition2 pos iexpr@(IAps e@(ICon i (ICCon _ _)) ts [e0]) =
     if (not (isUsefulPosition (getIdPosition i)))
     then updateIExprPosition pos iexpr

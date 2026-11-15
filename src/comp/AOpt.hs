@@ -15,8 +15,10 @@ import Control.Monad(when, foldM, zipWithM)
 import Control.Monad.State.Strict(State, StateT, evalState, evalStateT, liftIO,
                                   gets, get, put)
 import Data.List(sortBy, genericLength, sort, transpose, partition, groupBy, nub)
+import Data.Ord(Down(..))
 import Util(mapFst)
 import qualified Data.Map as M
+import qualified Data.Map.Strict as MS
 import qualified Data.Set as S
 import Util(allSame, flattenPairs, makePairs, remOrdDup, integerToBits,
             itos, eqSnd, cmpSnd, nubByFst, map_insertManyWith,
@@ -182,7 +184,22 @@ aOptWithTypes errh flags pkg0 = do
 
     -- CSE defs
     --
-    let ds3 = joinDefs optjoin ds2
+    let groundedAnchors =
+            map fst (aspkg_outputs pkg0) ++
+            map fst (aspkg_inouts pkg0) ++
+            [ sigId
+            | rId <- concatMap aspm_assocrules
+                         (aspsi_methods (aspkg_signal_info pkg0)) ++
+                     map fst (aspci_rules (aspkg_comment_info pkg0))
+            , sigId <- [mkIdCanFire rId, mkIdWillFire rId] ]
+        origDefOrder =
+            M.fromListWith (\_ firstPos -> firstPos)
+                (zip (groundedAnchors ++ map adef_objid (aspkg_values pkg0))
+                     [0..])
+        portAnchors = S.fromList (map fst (aspkg_outputs pkg5) ++
+                                  map fst (aspkg_inouts pkg5))
+        inlinedPorts = S.fromList (aspkg_inlined_ports pkg5)
+        ds3 = joinDefs optjoin origDefOrder portAnchors inlinedPorts ds2
     when debug $
       traceM ("trace defs, post joinDefs (ds3): " ++ ppReadable ds3)
     let pkg5A = (anchorASPackage pkg5) { aspkg_values = ds2 }
@@ -435,33 +452,55 @@ aOptInstArg bflgs _ = aExp bflgs
 -- If any local id has the same definition (expr) as a previously
 -- encountered id, then change the def of the second occurrence to be
 -- just a reference to the first.
-joinDefs :: Bool -> [ADef] -> [ADef]
-joinDefs False ds = ds
-joinDefs True dsx = reverse (snd (foldl add (M.empty, []) dsx))
-  where add :: (M.Map AExpr ADef, [ADef]) -> ADef -> (M.Map AExpr ADef,[ADef])
-        add (m, ds) d@(ADef _ _ (ASInt _ _ _) _) = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASDef _ _) _)   = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASStr _ _ _) _) = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASPort _ _) _)  = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASParam _ _) _) = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASAny _ _) _)   = (m, d:ds)
-        add (m, ds) d@(ADef ie _ e props)            =
-                case M.lookup e m of
-                Nothing
-                    | hasIdProp ie IdP_enable  -> (m, d:ds)
-                    | defPropsHasNoCSE props   -> (m, d:ds)
-                    | otherwise                -> (M.insert e d m, d:ds)
-                -- a NoCSE def must not be merged in either direction:
-                -- it can neither BE the surviving name nor be rewritten
-                -- into an alias of one (-keep-method-conds relies on the
-                -- COND def keeping its own full expression); before this
-                -- guard, a NoCSE def whose twin happened to precede it
-                -- in (interning-order-sensitive) def order was silently
-                -- collapsed
-                Just (ADef i t _ p)
-                    | defPropsHasNoCSE props -> (m, d:ds)
-                    | otherwise -> -- traces ("adding simple assignment: " ++ ppReadable (ie,i)) $
-                                   (m, (ADef ie t (ASDef t i) p) : ds)
+-- Select each CSE class's surviving def using the unified 5-level quality
+-- rank (anchors > user binders > inferred names > library binders > bad/MUX
+-- temporaries), breaking equal-rank ties by first-sighting order (Down seqNo,
+-- never Ord Id).  Enable defs (including inlined RWire $whas) keep their
+-- non-winner role so they are rewritten as aliases rather than clobbering
+-- firing signals or user binders; NoCSE defs (-keep-method-conds) are never
+-- merged in either direction; and any other def sharing the RHS (including a
+-- second distinct anchor) is rewritten into an explicit alias ADef.
+joinDefs :: Bool -> M.Map AId Int -> S.Set AId -> S.Set AId -> [ADef] -> [ADef]
+joinDefs False _ _ _ ds = ds
+joinDefs True origDefOrder portAnchors inlinedPorts dsx = map rewrite dsx
+  where shapeOK (ASInt _ _ _)  = False
+        shapeOK (ASDef _ _)    = False
+        shapeOK (ASStr _ _ _)  = False
+        shapeOK (ASPort _ _)   = False
+        shapeOK (ASParam _ _)  = False
+        shapeOK (ASAny _ _)    = False
+        shapeOK _              = True
+
+        repCandidate (ADef ie _ e props) =
+            shapeOK e && not (hasIdProp ie IdP_enable)
+                      && not (defPropsHasNoCSE props)
+
+        defQuality ie
+          | S.member ie portAnchors  = 4
+          | S.member ie inlinedPorts = 2
+          | otherwise                = idQuality (Just ie)
+
+        defRank seqNo ie =
+            (defQuality ie,
+             Down (M.findWithDefault maxBound ie origDefOrder),
+             Down seqNo)
+
+        bestByRank a@(k1, _) b@(k2, _) = if k1 >= k2 then a else b
+
+        reps :: M.Map AExpr ((Int, Down Int, Down Int), ADef)
+        reps = MS.fromListWith bestByRank
+                   [ (adef_expr d, (defRank seqNo (adef_objid d), d))
+                   | (seqNo, d) <- zip [0..] dsx
+                   , repCandidate d ]
+
+        rewrite d@(ADef ie _ e props)
+            | shapeOK e
+            , not (defPropsHasNoCSE props)
+            , Just (_, ADef i t _ p) <- M.lookup e reps
+            , i /= ie
+            = ADef ie t (ASDef t i) p
+            | otherwise
+            = d
 
 -- if the expression is a primitive with 1-bit type, optimize it as
 -- a boolean expression

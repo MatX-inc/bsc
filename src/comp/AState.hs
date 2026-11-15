@@ -529,15 +529,19 @@ aState' flags pps schedule_info apkg = do
         (amux_selss, amux_valss, amux_outss, _) =
             unzip4 (map (mkEmuxssAction portId exclusive_rules_db value_method_ids om) ars)
 
-        mux_sel_defs = concat emux_selss ++ concat amux_selss
+        mux_sel_defs0 = concat emux_selss ++ concat amux_selss
+        -- Filter out dead bypassed single-writer MUX_*__SEL_ alias defs once
+        -- esubmap substitutes their target WILL_FIRE/RDY directly into the
+        -- mux outputs; leaving them in aspkg_values would let AOpt.aOptDef
+        -- expand them into duplicates of WILL_FIRE.
+        esubmap0 = M.fromList $ genAliases mux_sel_defs0
+        esubmap = M.map (aSubst esubmap0) esubmap0
+        mux_sel_defs = [ d | d <- mux_sel_defs0,
+                             not (M.member (adef_objid d) esubmap) ]
         mux_val_defs = concat emux_valss ++ concat amux_valss
         mux_out_defs = concat emux_outss ++ concat amux_outss
         mux_defsRed = mux_sel_defs ++ mux_val_defs ++ mux_out_defs
-        --
-        -- filter out the redundant def from the new definitions
-        -- leave the mux_val_defs since these may not have good names.
-        esubmap = M.fromList $ genAliases (mux_sel_defs)
-        mux_defs = map (aSubst esubmap)  mux_defsRed
+        mux_defs = map (aSubst esubmap) mux_defsRed
 
         enas = concatMap (mkEnabless portId) ars
 

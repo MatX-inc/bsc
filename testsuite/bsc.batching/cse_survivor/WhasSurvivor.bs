@@ -1,0 +1,29 @@
+package WhasSurvivor where
+
+interface WhasOut8 =
+  o :: Bit 8
+
+-- Inlined RWire $whas preserves its non-winner enable role and $wget ranks
+-- below user binders, so user binders and firing signals survive.
+{-# verilog mkWhasSurvivor #-}
+mkWhasSurvivor :: Module WhasOut8
+mkWhasSurvivor = module
+  rw :: RWire (Bit 8) <- mkRWire
+  a :: Reg (Bit 8) <- mkReg 1
+  b :: Reg (Bit 8) <- mkReg 2
+  sent :: Reg (Bit 8) <- mkReg 0
+  let wantSend :: Bool
+      wantSend = (a + b) > 8'd10
+  let payload :: Bit 8
+      payload = (a ^ b) + 8'd7
+  rules
+    "drive_rw": when wantSend ==> action
+      rw.wset payload
+      sent := sent + 8'd1
+    "step_a": when True ==> action
+      a := a + 8'd1
+      b := b + payload
+  interface
+    o = case rw.wget of
+          Valid v -> (v ^ payload) + (if wantSend then 8'd1 else 8'd0)
+          Invalid -> b ^ payload

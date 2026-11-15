@@ -76,9 +76,12 @@ addDef newdef@(ADef i t e p) = do
            state <- get
            olddefs <- gets defs
            rlm <- gets rlookup
-           let rlm1 = if (defPropsHasNoCSE p)
+           let keepBest new old
+                 | idQuality (Just new) > idQuality (Just old) = new
+                 | otherwise                                   = old
+               rlm1 = if (defPropsHasNoCSE p)
                       then rlm
-                      else M.insert (e,t) i rlm
+                      else M.insertWith keepBest (e,t) i rlm
            when debug $ traceM("VeriQ adding: " ++ ppReadable newdef)
            put state{defs = (newdef:olddefs), rlookup = rlm1 }
 
