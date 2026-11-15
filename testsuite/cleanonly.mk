@@ -68,6 +68,7 @@ DELFILES = $(filter-out \
 	%* \
         *% \
         %expected \
+        %.verilator \
         %.sh* \
         %.handbuilt \
         %.ses \

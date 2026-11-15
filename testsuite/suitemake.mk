@@ -51,9 +51,55 @@ TEST_CONFIG ?= $(CONFDIR)/config
 
 TEST_BSC_VERILOG_SIM ?= iverilog
 
-TEST_SYSTEMC_INC ?= $(pkg-config --variable includedir systemc --silence-errors)
-TEST_SYSTEMC_LIB ?= $(pkg-config --variable libarchdir systemc --silence-errors)
-TEST_SYSTEMC_CXXFLAGS ?=
+# The SystemC settings are derived with $(shell), and RUNTESTENV is expanded
+# once per test file by parallel.mk, so a recursively expanded (?=) variable
+# would re-run pkg-config and nm hundreds of times per test run.  Instead,
+# assign with := behind an origin guard, which keeps the ?= override
+# semantics, and export, so that a recursive child make sees origin
+# "environment" and skips the derivation too.  The exported values are :=
+# literals, copied into each recipe's environment without re-expansion; only
+# an exported recursive variable re-runs its shell per recipe.
+# When SYSTEMCTEST=0 the variables stay undefined and reach runtest as empty
+# strings, which unix.exp never consults because SYSTEMCTEST=0 reaches it
+# through make's command-line export.  An unset SYSTEMCTEST expands to empty,
+# which is != 0, so the default path still derives.
+ifneq ($(SYSTEMCTEST),0)
+
+ifeq ($(origin TEST_SYSTEMC_INC),undefined)
+TEST_SYSTEMC_INC := $(shell pkg-config --variable includedir systemc --silence-errors)
+endif
+export TEST_SYSTEMC_INC
+
+ifeq ($(origin TEST_SYSTEMC_LIB),undefined)
+TEST_SYSTEMC_LIB := $(shell pkg-config --variable libarchdir systemc --silence-errors)
+endif
+export TEST_SYSTEMC_LIB
+
+# SystemC encodes the C++ standard it was built with into its
+# sc_api_version_<ver>_cxx<std> symbol, and a translation unit compiled with a
+# different standard references a differently-named symbol and fails to link
+# (see sysc/kernel/sc_ver.h).  So read the standard off the installed library
+# rather than assuming one -- SystemC 3.x needs at least C++17, which is newer
+# than some compilers default to.  Empty when no library is found, which leaves
+# pre-C++17 SystemC installations behaving as they did before.  The $(if)
+# guard matters: with no library file a bare nm would read a.out.
+ifeq ($(origin TEST_SYSTEMC_CXXFLAGS),undefined)
+TEST_SYSTEMC_LIBFILE  := $(firstword $(wildcard \
+	$(TEST_SYSTEMC_LIB)/libsystemc.dylib \
+	$(TEST_SYSTEMC_LIB)/libsystemc.so \
+	$(TEST_SYSTEMC_LIB)/libsystemc.a))
+# -D reads the dynamic symbol table, which only an ELF shared object has.  A
+# libsystemc.so installed stripped of its regular symbols exposes
+# sc_api_version_ only there, while Mach-O keeps a single table and a static
+# archive has no dynamic one, so .dylib and .a need plain nm.  Choosing on the
+# file rather than on the host keeps a static-only installation working.
+TEST_SYSTEMC_NMFLAGS  := $(if $(filter %.so,$(TEST_SYSTEMC_LIBFILE)),-D)
+TEST_SYSTEMC_CXXFLAGS := $(if $(TEST_SYSTEMC_LIBFILE),$(shell nm $(TEST_SYSTEMC_NMFLAGS) $(TEST_SYSTEMC_LIBFILE) 2>/dev/null | \
+	sed -E -n 's/.*sc_api_version_[0-9_]+_cxx20([0-9][0-9]).*/-std=c++\1/p' | head -1))
+endif
+export TEST_SYSTEMC_CXXFLAGS
+
+endif
 
 STATS_FILE ?= $(CONFDIR)/time.out
 
@@ -71,14 +117,23 @@ RUNTESTENV = MAKEFLAGS= BSCTEST=1 \
 	OSTYPE=$(TEST_OSTYPE) \
 	MACHTYPE=$(TEST_MACHTYPE) \
 	LC_ALL=$(LC_ALL) \
-	SYSTEMC_INC=$(TEST_SYSTEMC_INC) \
-	SYSTEMC_LIB=$(TEST_SYSTEMC_LIB) \
-	SYSTEMC_CXXFLAGS=$(TEST_SYSTEMC_CXXFLAGS) \
+	SYSTEMC_INC="$(TEST_SYSTEMC_INC)" \
+	SYSTEMC_LIB="$(TEST_SYSTEMC_LIB)" \
+	SYSTEMC_CXXFLAGS="$(TEST_SYSTEMC_CXXFLAGS)" \
 	PATH="$(BLUESPECDIR)/../bin:$(PATH)"
 
 
-## Track the overall time it took to run  runtest.  Make sure this command is the same as in unix.exp.
-#TIME = /usr/bin/time -a -o $(STATS_FILE) -f "runtest, %S, %U, %e"
+## Wrap the runtest invocation to record how long the whole run took.  Disabled
+## by default; uncomment one of the examples below or set TIME on the command
+## line.  The category name must begin with "check_", or scripts/collapse.pl
+## dies on the output; the three fields are system, user and elapsed, in that
+## order.  Both examples need GNU time for -f -- macOS ships BSD time, which
+## has no -f, so install GNU time there (brew install gnu-time) and use gtime.
+##
+## on Linux:
+#TIME = /usr/bin/time -a -o $(STATS_FILE) -f "check_runtest, %S, %U, %e"
+## on macOS:
+#TIME = gtime -a -o $(STATS_FILE) -f "check_runtest, %S, %U, %e"
 TIME =
 
 ## use RTFLAGS to pass runtest flag from the make file.
@@ -120,15 +175,37 @@ LOCALCHKCMD ?= $(RUNTESTENV) $(RUNTEST) $(RUNTESTFLAGS) *.exp
 localcheck: $(LOCALCHECKPREREQUISITES)
 	$(LOCALCHKCMD)
 
+# The tool whose tests are collected by 'run-tests-setup'.  This must be
+# non-empty so that the generated 'all_tests.mk' is limited to test
+# directories (and can be sorted by time); with an empty value, stray
+# non-test .exp files (config/unix.exp, site.exp, lib/bsc.exp) are also
+# treated as tests.
+tool ?= bsc
+
+# TESTDIRS (space-separated directory prefixes, e.g. "bsc.mcd
+# bsc.lib/BRAM") restricts the run to tests under those directories;
+# empty runs everything.  Used by CI to shard the suite across jobs.
+# The empty-list guard below makes a TESTDIRS value that matches
+# nothing loudly fatal rather than a silent zero-test run.
+TESTDIRS ?=
+export TESTDIRS
+
 # This creates the file 'all_tests.mk', that is used by the 'run-tests'
 # target in the 'parallel.mk' file.  It also checks for duplicates
 # which can cause problems.
 .PHONY: run-tests-setup
 run-tests-setup:
 	perl $(CONFDIR)/scripts/sort-by-time.pl $(tool) \
+		| perl $(CONFDIR)/scripts/filter-testdirs.pl \
 		| awk '{t=t " " $$0} END{print "ALL_TESTS :=" t}' \
 		> $(CONFDIR)/all_tests.mk
+	@grep -q '\.exp' $(CONFDIR)/all_tests.mk || \
+		{ echo "ERROR: run-tests-setup produced an empty test list" \
+		       "(all_tests.mk has no .exp entries); refusing to run" \
+		       "zero tests" >&2; \
+		  exit 1; }
 	perl $(CONFDIR)/scripts/sort-by-time.pl $(tool) \
+		| perl $(CONFDIR)/scripts/filter-testdirs.pl \
 		| perl $(CONFDIR)/scripts/double-directory.pl
 
 
@@ -149,6 +226,24 @@ generate-stats:
 	@echo ""
 	@echo "=== Brief list of results ==="
 	@find . -name '*.sum' | sort | perl $(CONFDIR)/scripts/process-summary-file.pl
+	@echo ""
+	@echo "Refreshing timing.txt (used for time-ordered scheduling when"
+	@echo "RUN_TESTCASES_IN_ORDER_OF_TIME=1 is set)"
+	@find . -name time.out -exec cat '{}' \; \
+		| perl $(CONFDIR)/scripts/times-by-directory.pl \
+		> $(CONFDIR)/timing.txt.new
+	@if [ -f $(CONFDIR)/timing.txt ]; then \
+		awk '!seen[$$2]++' $(CONFDIR)/timing.txt.new $(CONFDIR)/timing.txt \
+			> $(CONFDIR)/timing.txt.merged && \
+		mv $(CONFDIR)/timing.txt.merged $(CONFDIR)/timing.txt.new; \
+	fi
+	@if [ -s $(CONFDIR)/timing.txt.new ]; then \
+		mv $(CONFDIR)/timing.txt.new $(CONFDIR)/timing.txt; \
+	else \
+		echo "No timing data found; leaving timing.txt as-is" \
+		     "(an empty timing.txt would defeat time-ordered scheduling)"; \
+		rm -f $(CONFDIR)/timing.txt.new; \
+	fi
 
 
 #we call "false" in the else branch to cause a error exit status
