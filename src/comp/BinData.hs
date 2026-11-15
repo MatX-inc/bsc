@@ -66,6 +66,7 @@ import qualified Data.ByteString.Lazy as B
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Encoding as TE
 import qualified Data.Map as M
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
 import Numeric(showHex)
 
@@ -207,7 +208,11 @@ unknownCache :: BinCache
 unknownCache = BinCache unknown unknown unknown unknown unknown
 
 -- Table of known indexes and the values they map to
-type Table v = Known Int v
+-- Indices are handed out in sequence, one per shared value read.
+data Table v = Table !Int !(IM.IntMap v)
+
+emptyTable :: Table v
+emptyTable = Table 0 IM.empty
 
 data BinTable = BinTable { string_table   :: Table FString
                          , id_table       :: Table Id
@@ -235,7 +240,7 @@ set_itype_table :: BinTable -> Table IType -> BinTable
 set_itype_table    bt t = bt { itype_table = t }
 
 unknownTable :: BinTable
-unknownTable = BinTable unknown unknown unknown unknown unknown
+unknownTable = BinTable emptyTable emptyTable emptyTable emptyTable emptyTable
 
 -- We don't use Id as a key since the Eq instance for Id only
 -- compares the strings, but we want to distinguish Ids with
@@ -448,8 +453,8 @@ mkNewVal :: (BinTable -> (Table v)) ->
             In (Int,v)
 mkNewVal get set =
   In $ \_ bt off ->
-          let (Known n m) = get bt
-              !bt' = set bt (Known (n+1) m)
+          let (Table n m) = get bt
+              !bt' = set bt (Table (n+1) m)
           in (# (n, undefined), bt', off #)
 
 -- get the right table, add a mapping from the index to the value,
@@ -459,8 +464,8 @@ mkRecordVal ::(BinTable -> (Table v)) ->
               (Int -> v -> In ())
 mkRecordVal get set idx v =
   In $ \_ bt off ->
-          let (Known n m) = get bt
-              !bt' = v `seq` set bt (Known n (M.insert idx v m))
+          let (Table n m) = get bt
+              !bt' = v `seq` set bt (Table n (IM.insert idx v m))
           in (# (), bt', off #)
 
 
@@ -469,8 +474,8 @@ mkLookupIdx ::(BinTable -> (Table v)) ->
               (Int -> In v)
 mkLookupIdx get idx =
   In $ \_ bt off ->
-          let (Known _ m) = get bt
-          in case (M.lookup idx m) of
+          let (Table _ m) = get bt
+          in case (IM.lookup idx m) of
                (Just v) -> (# v, bt, off #)
                Nothing  -> case (internalError ("BinData.lookupIdx: invalid index " ++ (show idx)) :: ()) of
                              () -> (# undefined, bt, off #)
