@@ -101,7 +101,7 @@ import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlClosed, tlUnitExpr, tlInstance, tlInstArg, tlInstReset,
                  tlOutReset, tlMethod, tlFinalEnd)
 import TypeLinksDecl(tlFieldTypes, tlConEncodings, tlBitsInstance,
-                     tlAlwaysMethod)
+                     tlAlwaysMethod, tlParamTypes)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
 
@@ -307,12 +307,14 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def =
   fst <$> iExpandTL Nothing errh flags symt alldefs atf_cache is_noinlined_func pps def
 
 -- iExpand, writing the module's type-links file (TypeLinks) when given its
--- path, package name and module name.  The evaluator writes most of the
+-- path, package name and module name, and the name of the module as it
+-- was written (the definition whose type has the module's arguments at
+-- their declared types).  The evaluator writes most of the
 -- file as it runs; the action returned writes the rest (the facts of the
 -- end of elaboration, the named ends and the types) and must be run once
 -- the caller has forced the module (after the expanded dump), so that it
 -- reads only names the compile has already built.
-iExpandTL :: Maybe (FilePath, String, String) ->
+iExpandTL :: Maybe ((FilePath, String, String), Id) ->
              ErrorHandle -> Flags ->
              SymTab -> M.Map Id HExpr ->
              IATFCache ->
@@ -325,7 +327,7 @@ iExpandTL tl_file errh flags symt alldefs atf_cache is_noinlined_func pps def@(I
          hSetBuffering stderr LineBuffering
   -- execute the static elaboration
   -- go is of type GOutput X, where X is the large tuple output of iExpandModuleDef
-  tl_log <- tlNewLog tl_file
+  tl_log <- tlNewLog (fst <$> tl_file)
   go <- runG errh flags symt alldefs atf_cache mi is_noinlined_func pps tl_log $
             iExpandModuleDef def
   -- trace the steps and heap size
@@ -472,6 +474,11 @@ iExpandTL tl_file errh flags symt alldefs atf_cache is_noinlined_func pps def@(I
                    iExpandTypeLinks tl_log iheap ptr_map ptr_info insts rules
                                     rules_cleanup ifc (go_port_types go)
                                     pps vresetinfo
+                                    (case tl_file of
+                                       Just (_, user_mod) ->
+                                           tlParamTypes flags symt (changedOrId norm)
+                                                        user_mod mi varginfo
+                                       Nothing -> [])
                                     (changedOrId norm)
                                     (tlFieldTypes flags symt (changedOrId norm))
                                     (tlConEncodings symt)
@@ -982,18 +989,19 @@ iExpandCapture iheap ptr_map ptrm0 ptr_info args caplog =
 -- forced, so every cell, name and type read here is already evaluated.
 -- norm is the type normalizer with the cache of the end of elaboration;
 -- field_types, con_encodings and has_bits read the symbol table
--- (TypeLinksDecl); pps are the module's pragmas and own_resets its
--- reset ports.
+-- (TypeLinksDecl); pps are the module's pragmas, own_resets its reset
+-- ports and param_types the declared types of its parameters, by name.
 iExpandTypeLinks :: TLog -> IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
                     [(HeapPointer, (HExpr, Maybe HDef))] ->
                     [(Id, HStateVar)] -> HRules -> HRules -> [HEFace] ->
-                    PortTypeMap -> [PProp] -> VResetInfo ->
+                    PortTypeMap -> [PProp] -> VResetInfo -> [(String, IType)] ->
                     (IType -> IType) ->
                     (IType -> Maybe [(Int, Int, String, Maybe IType)]) ->
                     (IType -> Maybe [(Integer, Integer, Integer)]) ->
                     (IType -> Maybe Bool) -> IO ()
 iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules_clean)
-                 ifc port_types pps own_resets norm field_types con_encodings has_bits = do
+                 ifc port_types pps own_resets param_types norm field_types con_encodings
+                 has_bits = do
     tlFinalBegin l norm
     let cellExpr p = case IM.lookup p iheap of
                        Just (HNF { hc_pexpr = P _ e }) -> Just e
@@ -1003,10 +1011,14 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
         closed_cells = IS.fromList [ c | (c, _) <- ptr_info,
                                          Just e <- [cellExpr c], tlClosedExpr e ]
         own_types = M.findWithDefault M.empty Nothing port_types
-        -- the declared source type of one of the module's own inputs
+        -- the declared source type of one of the module's own inputs (a
+        -- parameter has no saved port type: its type is the module's own
+        -- argument type)
         declared kind name
-          | kind == "port" || kind == "arg" || kind == "param" =
-              M.lookup (VName name) own_types
+          | kind == "port" || kind == "arg" = M.lookup (VName name) own_types
+          | kind == "param" = case M.lookup (VName name) own_types of
+                                Nothing -> lookup name param_types
+                                mt -> mt
           | otherwise = Nothing
     -- the canonical cells: defs and final expressions
     mapM_ (\ (c, (_, md)) -> do

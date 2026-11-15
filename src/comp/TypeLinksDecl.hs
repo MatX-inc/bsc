@@ -3,9 +3,10 @@
 -- file (TypeLinks); the tag encodings of a data type's constructors, read
 -- from the same constructor entries, for the E records; and whether a
 -- type has an instance of Bits, read from the class's instance list, for
--- the B records; and whether the module's pragmas give a method no
--- enable port or no ready port, for the H records.  Used only after
--- elaboration.
+-- the B records; whether the module's pragmas give a method no enable
+-- port or no ready port, for the H records; and the declared types of the
+-- module's parameters, read from the module's own type, for their P
+-- records.  Used only after elaboration.
 --
 -- Nothing here makes an identifier or a string: a constructor's or
 -- field's scheme is instantiated at the type's own arguments by replacing
@@ -13,7 +14,7 @@
 -- instance's head is only matched; a pragma's method names are compared
 -- as text.
 module TypeLinksDecl(tlFieldTypes, tlConEncodings, tlBitsInstance,
-                     tlAlwaysMethod) where
+                     tlAlwaysMethod, tlParamTypes) where
 
 import qualified Data.IntMap as IM
 import qualified Data.Set as S
@@ -27,8 +28,10 @@ import CType(Type(..), TyCon(..), CType, TISort(..), StructSubType(..), CTypecla
 import Scheme(Scheme(..))
 import Pred(Qual(..), Pred(..), Class(..), Inst(..))
 import Assump(Assump(..))
-import SymTab(SymTab, ConInfo(..), FieldInfo(..), findCon, findField, findSClass)
+import SymTab(SymTab, ConInfo(..), FieldInfo(..), VarInfo(..), findCon, findField,
+              findSClass, findVar)
 import Pragma(PProp(..))
+import VModInfo(VArgInfo(..), getVNameString)
 import ConTagInfo(ConTagInfo(..))
 import IConv(iConvT)
 import IType(IType(ITCon, ITNum, ITStr, ITAp), iToCK)
@@ -192,3 +195,27 @@ tlAlwaysMethod pps =
                    "" (map getIdBaseString path))
         hit m is = null is || (getIdQualString m, getIdBaseString m) `elem` map flat is
     in  \ m -> (any (hit m) enabled, any (hit m) ready)
+
+-- The declared types of the module's parameters, by the parameter's
+-- name: the arguments of the type of the module as it was written (the
+-- definition modId, also looked up with the qualifier of the definition
+-- that is elaborated, elabId), lined up with the module's arguments as
+-- the evaluator lists them (its own arguments come first, in order).
+-- Only a closed argument type is given, converted as IConv converts any
+-- type and normalized by norm.
+tlParamTypes :: Flags -> SymTab -> (IType -> IType) -> Id -> Id -> [VArgInfo] ->
+                [(String, IType)]
+tlParamTypes flags symt norm modId elabId vargs =
+    case lookups of
+      VarInfo { vi_assump = _ :>: Forall _ (_ :=> ty) } : _ ->
+          [ (getVNameString vn, norm (iConvT flags symt a))
+          | (Param vn, a) <- zip vargs (args ty), closed a ]
+      _ -> []
+  where
+    lookups = [ vi | i <- [modId, setIdQual modId (getIdQual elabId)],
+                     Just vi <- [findVar symt i] ]
+    args (TAp (TAp (TCon (TyCon i _ _)) a) r) | i == idArrow noPosition = a : args r
+    args _ = []
+    closed (TAp f a) = closed f && closed a
+    closed (TCon _) = True
+    closed _ = False

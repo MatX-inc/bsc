@@ -1283,7 +1283,7 @@ genModule
     start flags DFexpanded
     -- the module's type-links file (TypeLinks), beside its .ba
     let tl_file = (dropSuf (mkAName (bdir flags) prefix modstr) ++ ".tl", srcName, modstr)
-    (imod0, tl_end) <- iExpandTL (Just tl_file) errh flags symt alldefs atf_cache fwrapper pps def
+    (imod0, tl_end) <- iExpandTL (Just (tl_file, mod_nm wi)) errh flags symt alldefs atf_cache fwrapper pps def
     iMCheck flags symt imod0 "expanded"
     t <- dump errh flags t DFexpanded dumpnames imod0
     -- the dump forced the module: write the end of the type-links file
