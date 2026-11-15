@@ -1,0 +1,34 @@
+package NestedBuildModule where
+
+-- A primBuildModule forced inside another primBuildModule's rule body starts
+-- two unrelated singleton IStateLoc stacks (empty tails); the schedule-name
+-- scope must keep both frames distinct rather than collapsing them.
+
+innerBuild :: Clock -> Reset -> Bool -> Bool
+innerBuild c rst x =
+  primBuildModule (primMakeName "innerBox" noPosition) c rst $
+    module
+      w :: Wire Bool <- mkBypassWire
+      rules
+        "pass": when True ==> w := x
+      return w
+
+outerBuild :: Reg Bool -> Bool
+outerBuild r =
+  let c = clockOf r
+      rst = noReset
+  in  primBuildModule (primMakeName "outerHist" noPosition) c rst $
+        module
+          q :: Reg Bool <- mkRegU
+          rules
+            "shift": when True ==> q := innerBuild c rst r._read
+          return q._read
+
+{-# verilog sysNestedBuildModule #-}
+sysNestedBuildModule :: Module Empty
+sysNestedBuildModule =
+  module
+    sig :: Reg Bool <- mkReg False
+    dst :: Reg Bool <- mkReg False
+    rules
+      "consume": when True ==> dst := outerBuild sig

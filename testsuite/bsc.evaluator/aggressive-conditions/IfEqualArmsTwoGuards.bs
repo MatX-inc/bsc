@@ -1,0 +1,56 @@
+package IfEqualArmsTwoGuards where
+
+interface Guarded a =
+    val :: a
+
+guarded :: Bool -> a -> Guarded a
+guarded c x =
+    interface Guarded
+        val = x when c
+
+{-# verilog sysIfEqualArmsTwoGuards #-}
+sysIfEqualArmsTwoGuards :: Module Empty
+sysIfEqualArmsTwoGuards =
+  module
+    cyc    :: Reg (UInt 3) <- mkReg 0
+    phase  :: Reg (UInt 2) <- mkReg 0
+    readyA :: Reg Bool     <- mkReg False
+    readyB :: Reg Bool     <- mkReg False
+    let gA :: Guarded (Bit 8)
+        gA = guarded readyA 5
+        gB :: Guarded (Bit 8)
+        gB = guarded readyB 5
+    rules
+      -- Both arms evaluate to 5 with distinct predicates readyA and readyB:
+      --   phase 0 (sel == False): requires readyB only (fires on cyc 1).
+      --   phase 1 (sel == True):  requires readyA only (fires on cyc 3).
+      "step": when phase < 2 ==>
+        let sel = phase == 1
+            v = if sel then gA.val else gB.val
+        in  action
+              $display "cyc=%0d phase=%0d v=%0d" cyc phase v
+              if phase == 0 then
+                phase := 1
+              else
+                action
+                  phase := 2
+                  $display "PASS"
+                  $finish 0
+
+      "tick": when True ==>
+        action
+          cyc := cyc + 1
+          if cyc == 0 then
+            readyB := True
+          else if cyc == 1 then
+            readyB := False
+          else if cyc == 2 then
+            readyA := True
+          else
+            noAction
+          if cyc == 6 then
+            action
+              $display "FAIL: timeout"
+              $finish 0
+          else
+            noAction

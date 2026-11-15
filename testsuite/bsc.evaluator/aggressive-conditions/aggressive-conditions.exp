@@ -64,3 +64,14 @@ compile_verilog_pass CantLift_AVValue_Arg.bsv
 compile_verilog_pass CantLift_AVValue_NoArg.bsv
 
 # -----
+
+# Equal-arm shortcuts in IExpand.doIf: when both arms evaluate to equal values,
+# each arm's implicit condition must still be guarded by the branch condition.
+test_c_veri_bs_modules_options IfEqualArmsGuard {} \
+    "-aggressive-conditions" sysIfEqualArmsGuard.out.expected
+test_c_veri_bs_modules_options IfEqualArmsGuardAttr {} \
+    "-no-aggressive-conditions" sysIfEqualArmsGuard.out.expected
+test_c_veri_bs_modules_options IfEqualArmsTwoGuards {} \
+    "-aggressive-conditions" sysIfEqualArmsTwoGuards.out.expected
+
+# -----

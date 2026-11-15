@@ -1,0 +1,61 @@
+package ModuleContextNames where
+
+import ModuleContext
+import ModuleCollect
+
+interface CounterCtx =
+    total :: Bit 16
+
+mkInnerContext :: ModuleContext (Bit 16) CounterCtx
+mkInnerContext =
+  module
+    initVal :: Bit 16 <- getContext
+    putContext (initVal + 1)
+    count :: Reg (Bit 16) <- liftModule (mkReg initVal)
+    interface CounterCtx
+      total = count
+    rules
+      "incInner": when True ==> count := count + 1
+
+mkOuterContext :: ModuleContext (Bit 16) CounterCtx
+mkOuterContext =
+  module
+    initVal :: Bit 16 <- getContext
+    count :: Reg (Bit 16) <- liftModule (mkReg initVal)
+    step :: Reg (Bit 16) <- mkReg 1
+    inner :: CounterCtx <- mkInnerContext
+    hiddenSub :: CounterCtx <- setStateName (primMakeName "_anon" noPosition) mkInnerContext
+    interface CounterCtx
+      total = count + inner.total + hiddenSub.total
+    rules
+      "incOuter": when True ==> count := count + step
+
+{-# verilog sysModuleContextNames #-}
+sysModuleContextNames :: Module CounterCtx
+sysModuleContextNames =
+  module
+    (_, out) <- runWithContext 10 mkOuterContext
+    return out
+
+type CollectM i = ModuleCollect (Bit 8) i
+
+mkCollectInner :: CollectM CounterCtx
+mkCollectInner =
+  module
+    count :: Reg (Bit 16) <- mkReg 0
+    flag :: Reg Bool <- mkReg False
+    addToCollection (5 :: Bit 8)
+    interface CounterCtx
+      total = count
+    rules
+      "stepCollect": when True ==> action
+        count := count + 1
+        flag := not flag
+
+{-# verilog sysModuleCollectNames #-}
+sysModuleCollectNames :: Module Empty
+sysModuleCollectNames =
+  module
+    ec :: IWithCollection (Bit 8) CounterCtx <- exposeCollection mkCollectInner
+    rules
+      "observe": when (ec.device.total == 99) ==> $finish 0
