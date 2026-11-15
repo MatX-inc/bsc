@@ -14,7 +14,8 @@
 -- constructors; B whether a type has an instance of Bits; I each
 -- state instance's Verilog module; G what each instance argument feeds in
 -- that module; R which reset an instance's reset argument is under; O
--- which reset an output reset of the module is; Q the number of
+-- which reset an output reset of the module is; H a method of the
+-- module's interface with its named ends; Q the number of
 -- calls of each instance method in the final expressions; L the source
 -- position of a one-constructor type's constructor application or of an
 -- unpack, a number into the table X.
@@ -49,7 +50,7 @@ module TypeLinks(
         End, tlCellEnd,
         tlFinalBegin, tlDef, tlMerge, tlFinalExpr, tlFinalTuple, tlNamed,
         tlRootAliases, tlAlias, tlClosedExpr, tlClosed, tlUnitExpr,
-        tlInstance, tlInstArg, tlInstReset, tlOutReset, tlFinalEnd
+        tlInstance, tlInstArg, tlInstReset, tlOutReset, tlMethod, tlFinalEnd
     ) where
 
 import Control.Exception(SomeException, evaluate, try, catch)
@@ -256,7 +257,8 @@ ctN, ctC, ctK, ctAS, ctAR, ctAF, ctV, ctD, ctM, ctP, ctT, ctErr, ctDeferred,
   ctB, ctNormRec, ctNormType, ctNormLeft, ctPreRewriteInline, ctPreRewriteLost,
   ctPreRewriteCarried, ctPreRewriteZero, ctG, ctL, ctX, ctLNone, ctE,
   ctETypes, ctEDefault, ctENone, ctR, ctRNone, ctRIn, ctRInst, ctRUnknown,
-  ctO, ctClass0, nCounters :: Int
+  ctH, ctHValue, ctHAction, ctHActionValue, ctHNoEnable, ctHNoReady,
+  ctHArgUnread, ctO, ctClass0, nCounters :: Int
 ctN = 0
 ctC = 1
 ctK = 2
@@ -310,8 +312,15 @@ ctRNone = 49        -- reset arguments under the reset that is never asserted
 ctRIn = 50          -- under a reset input of the module
 ctRInst = 51        -- under a reset output of an instance
 ctRUnknown = 52     -- under a reset that could not be named
-ctO = 53
-ctClass0 = 54       -- cells by class: ctClass0 + class
+ctH = 53
+ctHValue = 54       -- value methods
+ctHAction = 55      -- action methods
+ctHActionValue = 56 -- action methods with a value
+ctHNoEnable = 57    -- action methods (with or without a value) with no enable port
+ctHNoReady = 58     -- methods with no ready port
+ctHArgUnread = 59   -- argument ports of methods that no record names
+ctO = 60
+ctClass0 = 61       -- cells by class: ctClass0 + class
 nCounters = ctClass0 + nClasses
 
 counterNames :: [(Int, String)]
@@ -338,12 +347,15 @@ counterNames =
       (ctENone, "E-no-declaration") ] ++
     [ (ctClass0 + c, "cells-" ++ clsName c) | c <- [0 .. nClasses - 1] ]
 
--- the counts of the records that are written last (R, O), which come
+-- the counts of the records that are written last (R, O, H), which come
 -- after every other count
 lateCounterNames :: [(Int, String)]
 lateCounterNames =
     [ (ctR, "R"), (ctRNone, "R-none"), (ctRIn, "R-in"), (ctRInst, "R-inst"),
-      (ctRUnknown, "R-unknown"), (ctO, "O") ]
+      (ctRUnknown, "R-unknown"), (ctO, "O"), (ctH, "H"), (ctHValue, "H-value"),
+      (ctHAction, "H-action"), (ctHActionValue, "H-actionvalue"),
+      (ctHNoEnable, "H-no-enable"), (ctHNoReady, "H-no-ready"),
+      (ctHArgUnread, "H-arg-unread") ]
 
 -- -----
 -- The log
@@ -405,8 +417,8 @@ data TLog = TLog {
     -- the table, newest first
     tl_posTab :: !(IORef (M.Map (FString, Int, Int) Int)),
     tl_posList :: !(IORef [Position]),
-    -- the records that are written after every other record (R, then
-    -- O), each with its counter, newest first
+    -- the records that are written after every other record (R, then O,
+    -- then H), each with its counter, newest first
     tl_late :: !(IORef [(Int, B.Builder)]),
     tl_counts :: !(IOUArray Int Int)
   }
@@ -1817,6 +1829,44 @@ tlOutReset l name port what names = safely l $ do
   late l ctO (B.string7 "O " <> B.stringUtf8 (word name) <> sp <> B.stringUtf8 (word port) <>
               sp <> B.string7 what <> mconcat [ sp <> B.stringUtf8 (word n) | n <- names ])
 
+-- A method of the module's interface (H): its kind ("value", "action",
+-- "actionvalue"); its name, which is the name of its root; the port of
+-- its enable, when it has one; the root of its ready method, and the
+-- port of the ready, when it has one; its root (for an action method the
+-- pair of its value and its actions); the named end that is its value,
+-- when it has one; the named ends of its output ports, in port order;
+-- and its argument ports by name, in port order, each written as the
+-- named end of that argument, or as absent when no record names it.
+-- Called once every record that can name an argument has been written;
+-- the record is kept and written after every other record, as R is.
+tlMethod :: TLog -> String -> String -> Maybe String -> Maybe End -> Maybe String ->
+            End -> Maybe End -> [End] -> [String] -> IO ()
+tlMethod l kind name en rdy rdyPort root value ports args = safely l $ do
+  let tok = maybe "-" word
+      end = maybe (return (B.char7 '-')) (endB l)
+  -- read first: a failure must not leave half a record
+  _ <- evaluate (length kind + length name + length (tok en) + length (tok rdyPort) +
+                 sum (map length args))
+  leafs <- readIORef (tl_leafs l)
+  let argIds = [ M.lookup (leafKindName lkArg, word a) leafs | a <- args ]
+      argB = mconcat [ sp <> maybe (B.char7 '-') (\ n -> B.char7 'n' <> B.intDec n) m
+                     | m <- argIds ]
+  rdyB <- end rdy
+  rootB <- endB l root
+  valueB <- end value
+  portsB <- endsB l ports
+  late l ctH (B.string7 "H " <> B.string7 kind <> sp <> B.stringUtf8 (word name) <> sp <>
+              B.stringUtf8 (tok en) <> sp <> rdyB <> sp <> B.stringUtf8 (tok rdyPort) <> sp <>
+              rootB <> sp <> valueB <> sp <> B.intDec (length ports) <> portsB <> sp <>
+              B.intDec (length args) <> argB)
+  bump l (case kind of
+            "value" -> ctHValue
+            "action" -> ctHAction
+            _ -> ctHActionValue)
+  when (kind /= "value" && en == Nothing) $ bump l ctHNoEnable
+  when (rdyPort == Nothing) $ bump l ctHNoReady
+  forM_ argIds $ \ m -> when (m == Nothing) $ bump l ctHArgUnread
+
 -- keep a record that is written after every other record
 late :: TLog -> Int -> B.Builder -> IO ()
 late l ct b = modifyIORef' (tl_late l) ((ct, b) :)
@@ -1862,7 +1912,7 @@ tlNamed l kname declared width name =
 -- the lookup has one; the call counts (Q) of the given instance methods
 -- and of any other method called; the field types (F), the constructor
 -- encodings (E) and the types (T); the positions (X); the records kept
--- for last (R, O); and the counts; and close the file.
+-- for last (R, O, H); and the counts; and close the file.
 -- fieldsOf gives a data or struct type's constructor payloads and fields
 -- as (constructor number, field number, name, type), or Nothing when it
 -- has no declaration to read.  encOf gives a data type's constructors as
@@ -1980,11 +2030,11 @@ tlFinalEnd l declared fieldsOf encOf bitsOf methods = do
       put l ctX (B.string7 "X " <> B.intDec n <> sp <> B.intDec (pos_line pos) <> sp <>
                  B.intDec (pos_column pos) <> sp <>
                  B.char7 (if pos_is_stdlib pos then '1' else '0') <> sp <> B.stringUtf8 file)
-  -- the records kept to be written last: R, then O (each kind in the
-  -- order it was made)
+  -- the records kept to be written last: R, then O, then H (each kind
+  -- in the order it was made)
   safely l $ do
     rs <- reverse <$> readIORef (tl_late l)
-    forM_ [ctR, ctO] $ \ kind ->
+    forM_ [ctR, ctO, ctH] $ \ kind ->
         forM_ rs $ \ (ct, b) -> when (ct == kind) $ put l ct b
   safely l $ do
     forM_ counterNames $ \ (k, name) -> do

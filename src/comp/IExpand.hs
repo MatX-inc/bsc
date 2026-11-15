@@ -99,8 +99,9 @@ import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlRoot, tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr,
                  tlFinalTuple, tlNamed, tlRootAliases, tlAlias, tlClosedExpr,
                  tlClosed, tlUnitExpr, tlInstance, tlInstArg, tlInstReset,
-                 tlOutReset, tlFinalEnd)
-import TypeLinksDecl(tlFieldTypes, tlConEncodings, tlBitsInstance)
+                 tlOutReset, tlMethod, tlFinalEnd)
+import TypeLinksDecl(tlFieldTypes, tlConEncodings, tlBitsInstance,
+                     tlAlwaysMethod)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
 
@@ -470,7 +471,7 @@ iExpandTL tl_file errh flags symt alldefs atf_cache is_noinlined_func pps def@(I
   let tl_end = when (tlOn tl_log) $
                    iExpandTypeLinks tl_log iheap ptr_map ptr_info insts rules
                                     rules_cleanup ifc (go_port_types go)
-                                    vresetinfo
+                                    pps vresetinfo
                                     (changedOrId norm)
                                     (tlFieldTypes flags symt (changedOrId norm))
                                     (tlConEncodings symt)
@@ -981,17 +982,18 @@ iExpandCapture iheap ptr_map ptrm0 ptr_info args caplog =
 -- forced, so every cell, name and type read here is already evaluated.
 -- norm is the type normalizer with the cache of the end of elaboration;
 -- field_types, con_encodings and has_bits read the symbol table
--- (TypeLinksDecl); own_resets are the module's reset ports.
+-- (TypeLinksDecl); pps are the module's pragmas and own_resets its
+-- reset ports.
 iExpandTypeLinks :: TLog -> IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
                     [(HeapPointer, (HExpr, Maybe HDef))] ->
                     [(Id, HStateVar)] -> HRules -> HRules -> [HEFace] ->
-                    PortTypeMap -> VResetInfo ->
+                    PortTypeMap -> [PProp] -> VResetInfo ->
                     (IType -> IType) ->
                     (IType -> Maybe [(Int, Int, String, Maybe IType)]) ->
                     (IType -> Maybe [(Integer, Integer, Integer)]) ->
                     (IType -> Maybe Bool) -> IO ()
 iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules_clean)
-                 ifc port_types own_resets norm field_types con_encodings has_bits = do
+                 ifc port_types pps own_resets norm field_types con_encodings has_bits = do
     tlFinalBegin l norm
     let cellExpr p = case IM.lookup p iheap of
                        Just (HNF { hc_pexpr = P _ e }) -> Just e
@@ -1037,7 +1039,9 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
     -- methods: the value, with the saved type of a single output port,
     -- and the cell that held the value before it was walked
     aliases <- tlRootAliases l
-    mapM_ (\ ief ->
+    -- (each interface field with its root, the named end that is its
+    -- value, and the named ends of its output ports)
+    meth_ends <- mapM (\ ief ->
                case ief_value ief of
                  Just (e, t) -> do
                      let name = getIdString (ief_name ief)
@@ -1067,12 +1071,17 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
                                    let ws = map bitw (itTupleElems vt)
                                        widths | length ws == length outs = ws
                                               | otherwise = map (const (-1)) outs
-                                   in  mapM_ (\ (k, vn, w) ->
-                                                  tlNamed l "out" (M.lookup vn own_types) w
-                                                          (name ++ "." ++ show (k :: Int)))
-                                             (zip3 [0 ..] outs widths)
-                               _ -> return ()
-                     case e of
+                                   in  mapM (\ (k, vn, w) ->
+                                                 tlNamed l "out" (M.lookup vn own_types) w
+                                                         (name ++ "." ++ show (k :: Int)))
+                                            (zip3 [0 ..] outs widths)
+                               _ -> return []
+                         -- the ends of the output ports: those, or the
+                         -- value's own end when there is one port
+                         port_ends v ls = case (outs, ls) of
+                                            ([_], _) -> [v]
+                                            _ -> ls
+                     ends <- case e of
                        -- an action method with a value: the value is a
                        -- named end of its own, with the output port's type
                        IAps (ICon _ (ICTuple {})) _ [v, _]
@@ -1085,19 +1094,23 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
                            tlFinalExpr l nv v
                            tlAlias l (alias 1 v) nv
                            tlFinalTuple l n nv e
-                           leaves vt
+                           ls <- leaves vt
+                           return (n, Just nv, port_ends nv ls)
                        -- an action method with no value
                        IAps (ICon _ (ICTuple {})) _ [_, _] | isActionType t -> do
                            n <- tlNamed l "out" decl (bitw t) name
                            tlFinalExpr l n e
+                           return (n, Nothing, [])
                        -- a value method (its value is a pair when it is
                        -- over several ports)
                        _ -> do
                            n <- tlNamed l "out" decl (bitw t) name
                            tlFinalExpr l n e
                            tlAlias l (alias 0 e) n
-                           leaves t
-                 Nothing -> return ())
+                           ls <- leaves t
+                           return (n, Just n, port_ends n ls)
+                     return (Just (ief, t, ends))
+                 Nothing -> return Nothing)
           ifc
     -- instances: the Verilog module
     mapM_ (\ (inst, sv) ->
@@ -1206,6 +1219,37 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
                                                  (getIdString inst ++ "$" ++ port))
                      (M.toList m))
           (M.toList port_types)
+    -- the module's methods (a method's ready method is the field after
+    -- it, and is told with it; output clocks, resets and inouts are no
+    -- methods), told here because every record that can name a method
+    -- argument has been written
+    let always = tlAlwaysMethod pps
+        fields = catMaybes meth_ends
+    mapM_ (\ ((ief, t, (root, value, ports)), next) ->
+               case ief_fieldinfo ief of
+                 Method { vf_enable = men } | not (isRdyId (ief_name ief)) -> do
+                     let kind | isitActionValue_ t = "actionvalue"
+                              | isActionType t = "action"
+                              | otherwise = "value"
+                         (always_en, always_rdy) = always (ief_name ief)
+                         en = case men of
+                                Just (vn, _) | kind /= "value", not always_en ->
+                                    Just (getVNameString vn)
+                                _ -> Nothing
+                         (rdy, rdy_port) =
+                             case next of
+                               Just (rief, _, (rroot, _, _)) | isRdyId (ief_name rief) ->
+                                   (Just rroot,
+                                    case ief_fieldinfo rief of
+                                      Method { vf_outputs = [(vn, _)] } | not always_rdy ->
+                                          Just (getVNameString vn)
+                                      _ -> Nothing)
+                               _ -> (Nothing, Nothing)
+                     tlMethod l kind (getIdString (ief_name ief)) en rdy rdy_port
+                              root value ports
+                              (map (getIdString . fst) (concat (ief_args ief)))
+                 _ -> return ())
+          (zip fields (map Just (drop 1 fields) ++ [Nothing]))
     -- every instance method, by the name a call record gives it (for the
     -- call counts)
     let meth_names = [ getIdString inst ++ "." ++ getIdBaseString m

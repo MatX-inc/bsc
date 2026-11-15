@@ -3,20 +3,24 @@
 -- file (TypeLinks); the tag encodings of a data type's constructors, read
 -- from the same constructor entries, for the E records; and whether a
 -- type has an instance of Bits, read from the class's instance list, for
--- the B records.  Used only after elaboration.
+-- the B records; and whether the module's pragmas give a method no
+-- enable port or no ready port, for the H records.  Used only after
+-- elaboration.
 --
 -- Nothing here makes an identifier or a string: a constructor's or
 -- field's scheme is instantiated at the type's own arguments by replacing
 -- its generic variables, and converted as IConv converts any type; an
--- instance's head is only matched.
-module TypeLinksDecl(tlFieldTypes, tlConEncodings, tlBitsInstance) where
+-- instance's head is only matched; a pragma's method names are compared
+-- as text.
+module TypeLinksDecl(tlFieldTypes, tlConEncodings, tlBitsInstance,
+                     tlAlwaysMethod) where
 
 import qualified Data.IntMap as IM
 import qualified Data.Set as S
 
 import Flags(Flags)
 import Position(noPosition)
-import Id(Id, getIdBaseString, getIdQual, setIdQual, qualEq)
+import Id(Id, getIdBaseString, getIdQualString, getIdQual, setIdQual, qualEq)
 import PreIds(idArrow, idBits)
 import CType(Type(..), TyCon(..), CType, TISort(..), StructSubType(..), CTypeclass(..),
              splitTAp)
@@ -24,6 +28,7 @@ import Scheme(Scheme(..))
 import Pred(Qual(..), Pred(..), Class(..), Inst(..))
 import Assump(Assump(..))
 import SymTab(SymTab, ConInfo(..), FieldInfo(..), findCon, findField, findSClass)
+import Pragma(PProp(..))
 import ConTagInfo(ConTagInfo(..))
 import IConv(iConvT)
 import IType(IType(ITCon, ITNum, ITStr, ITAp), iToCK)
@@ -167,3 +172,23 @@ tlBitsInstance symt =
                                    | open -> Nothing
                                    | otherwise -> Just False
                        _ -> Nothing
+
+-- Whether the module's pragmas make the method m always enabled (it has
+-- no enable port) and always ready (it has no ready port; always enabled
+-- implies it).  This is what Pragma.isAlwaysEn and Pragma.isAlwaysRdy
+-- decide, but those build an identifier for each name a pragma lists;
+-- here the names are compared as text: a listed path is the method when
+-- its parts joined by "_" (a part with no name left out) are the method's
+-- name and its first part's qualifier is the method's.  A pragma that
+-- lists no name is for every method.
+tlAlwaysMethod :: [PProp] -> Id -> (Bool, Bool)
+tlAlwaysMethod pps =
+    let enabled = [ is | PPalwaysEnabled is <- pps ]
+        ready = [ is | PPalwaysReady is <- pps ] ++ enabled
+        flat [] = ("", "")
+        flat path@(i : _) =
+            (getIdQualString i,
+             foldl (\ a b -> if null a then b else if null b then a else a ++ "_" ++ b)
+                   "" (map getIdBaseString path))
+        hit m is = null is || (getIdQualString m, getIdBaseString m) `elem` map flat is
+    in  \ m -> (any (hit m) enabled, any (hit m) ready)
