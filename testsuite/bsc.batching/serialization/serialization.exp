@@ -1,0 +1,27 @@
+# Issue: BinData's Data.Map, Data.Set, and MethodConflictInfo instances (and
+# GenABin's ExclusiveRulesDB and RuleRelationDB instances) serialized entries
+# in Ord key order, which for Id- and IType-keyed containers follows string or
+# type interning order.
+# Fix: order serialized entries by the standalone binary encoding of their keys.
+# Probe: verify .bo, .ba, and .v outputs for SerOrder.bs are identical across
+# standalone vs. scrambled-batch compilation and normal vs. reversed interning.
+
+batching_bo_pair SerOrder.bs SerOrderRoot.bs SerOrderScramble.bs
+reverse_intern_same_bo SerOrder.bs
+
+batching_verilog_pair SerOrder.bs mkSerOrder SerOrderRoot.bs mkSerOrderRoot {SerOrderScramble.bs}
+reverse_intern_same_verilog SerOrder.bs mkSerOrder
+check_verilog_regen SerOrder.bs mkSerOrder
+
+erase SerOrder.bo
+erase mkSerOrder.ba
+with_normal_intern_order {
+    compile_verilog_pass SerOrder.bs mkSerOrder {-elab}
+}
+move mkSerOrder.ba mkSerOrder.normal.ba
+
+erase SerOrder.bo
+with_normal_intern_order {
+    compile_verilog_pass SerOrder.bs mkSerOrder {-elab -trace-intern-reverse}
+}
+compare_file mkSerOrder.ba mkSerOrder.normal.ba

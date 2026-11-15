@@ -1,0 +1,8 @@
+package SerOrderScramble where
+
+interface ScramblePair =
+    mAlpha :: Bit 8
+    mBeta  :: Bit 8
+
+scrambleIds :: (Bit 8, Bit 8) -> (Bit 8, Bit 8)
+scrambleIds (instAlpha, instBeta) = (instAlpha, instBeta)
