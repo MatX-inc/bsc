@@ -1,0 +1,19 @@
+# Issue: the scheduler's method-use maps (AUses), the allocator's walk and
+# Kempe degree check (RSchedule), and AState's enable/mux port lists depended
+# on Ord Id (intern) order.
+# Fix: AUses numbers each use where its elaboration-order walk first meets it,
+# RSchedule peels vertices with degree < rMax and colors higher-degree cores in
+# use order without GraphMap.ncc, and every consumer preserves that order.
+
+batching_verilog_pair EnableOrder.bs mkEnableOrder EnableOrderTop.bs mkEnableOrderTop {EnableOrderScrambleA.bs EnableOrderScrambleB.bs}
+
+batching_verilog_pair ArbOrder.bs mkArbOrder ArbOrderTop.bs mkArbOrderTop {ArbOrderScrambleA.bs ArbOrderScrambleB.bs} {-resource-simple}
+
+reverse_intern_same_verilog KempeOrder.bs mkKempeBipartite
+
+with_normal_intern_order {
+    compile_verilog_fail_error KempeOrder.bs G0002 1 mkKempeOddCycle "-promote-warnings G0002"
+    compile_verilog_fail_error KempeOrder.bs G0002 1 mkKempeOddCycle "-promote-warnings G0002 -trace-intern-reverse"
+}
+
+reverse_intern_same_verilog KempeOrder.bs mkKempeOddCycle {-resource-simple -no-opt-join-defs -suppress-warnings G0002:G0003:G0010:S0080}

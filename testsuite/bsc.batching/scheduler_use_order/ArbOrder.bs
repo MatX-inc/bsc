@@ -1,0 +1,28 @@
+package ArbOrder where
+
+import RegFile
+
+-- Six rules read the register file, and it has five read ports, so under
+-- -resource-simple the scheduler arbitrates: it makes two of the rules
+-- conflict, and which two it picks was decided by the order of the uses,
+-- which was Ord on the names of the index expressions' defs.  Elaboration
+-- meets the uses in rule order whatever the process compiled before.
+{-# verilog mkArbOrder #-}
+mkArbOrder :: Module Empty
+mkArbOrder =
+    module
+        rf :: RegFile (Bit 3) (Bit 8) <- mkRegFileFull
+        idx :: Reg (Bit 3) <- mkReg 0
+        out1 :: Reg (Bit 8) <- mkRegU
+        out2 :: Reg (Bit 8) <- mkRegU
+        out3 :: Reg (Bit 8) <- mkRegU
+        out4 :: Reg (Bit 8) <- mkRegU
+        out5 :: Reg (Bit 8) <- mkRegU
+        out6 :: Reg (Bit 8) <- mkRegU
+        rules
+            "read1": when True ==> out1 := rf.sub (idx + 1)
+            "read2": when True ==> out2 := rf.sub (idx + 2)
+            "read3": when True ==> out3 := rf.sub (idx + 3)
+            "read4": when True ==> out4 := rf.sub (idx + 4)
+            "read5": when True ==> out5 := rf.sub (idx + 5)
+            "read6": when True ==> out6 := rf.sub (idx + 6)

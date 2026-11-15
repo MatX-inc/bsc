@@ -1,0 +1,15 @@
+package ArbOrderTop where
+
+import ArbOrderScrambleB
+import ArbOrderScrambleA
+import ArbOrder
+
+-- Batch order B, A, probe: the index defs of read2..read6 are interned
+-- before read1's.
+{-# verilog mkArbOrderTop #-}
+mkArbOrderTop :: Module Empty
+mkArbOrderTop =
+    module
+        _b :: Empty <- mkArbOrderScrambleB
+        _a :: Empty <- mkArbOrderScrambleA
+        _p :: Empty <- mkArbOrder

@@ -1,0 +1,16 @@
+package EnableOrderScrambleA where
+
+interface EnableOrderScrambleA =
+    w1 :: UInt 8 -> Action
+    w9 :: UInt 8 -> Action
+
+-- The probe with w2 renamed: the same shape, so w1's names are the same
+-- strings as the probe's, interned here first.
+{-# verilog mkEnableOrderScrambleA #-}
+mkEnableOrderScrambleA :: Module EnableOrderScrambleA
+mkEnableOrderScrambleA =
+    module
+        r :: Reg (UInt 8) <- mkReg 0
+        interface EnableOrderScrambleA
+            w1 x = r := x
+            w9 x = r := x

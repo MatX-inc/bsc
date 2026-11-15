@@ -8,10 +8,11 @@ module AState(
               ratToBlobs, genMethodMult,
               ) where
 
+import qualified Data.List as L
 import qualified Data.Map as M
 import qualified Data.Set as S
 
-import Data.List(transpose, sortBy, partition,
+import Data.List(transpose, sortBy, sortOn, partition,
             unzip4, groupBy, intersect,
             genericLength)
 
@@ -432,7 +433,7 @@ aState' flags pps schedule_info apkg = do
                                         (conflictMsg na nb) ]
                 in  (S.insert key seen, reverse calls ++ acc)
             | otherwise = (seen, acc)
-        conflict_rfas = reverse $ snd $ foldl' stepConflict (S.empty, []) $
+        conflict_rfas = reverse $ snd $ L.foldl' stepConflict (S.empty, []) $
             sC (methodConflictInfo (asi_v_sched_info schedule_info))
 
         -- (domain, rule foreign actions)
@@ -954,11 +955,19 @@ mkBlob mMap omMultMap (method@(MethodId obj met), usedPorts) =
       -- Create the mapping (port_num, [uses]) -- the inverse of the
       -- mapping "usedPorts" found in RAT, which is a list of pairs
       -- that map uses to ports.  Then strip out just the [uses].
+      -- the uses in the use map's order (the order the scheduler met
+      -- them), which decides the order of the enable's terms and of the
+      -- mux's arms; the allocation table is a map and would give Ord,
+      -- i.e. string-intern, order
+      useIdx = M.fromList (zip (map fst methodUses) [0 :: Int ..])
+      usedPortsOrdered =
+          sortOn (\ (u, _) -> M.findWithDefault maxBound u useIdx) usedPorts
+
       portUses :: [[UniqueUse]]
       portUses = M.elems $
-                     -- use "flip" to preserve the order of uses?
+                     -- "flip" preserves the order of the uses
                      M.fromListWith (flip (++))
-                               [(port, [uUse]) | (uUse,port) <- usedPorts]
+                               [(port, [uUse]) | (uUse,port) <- usedPortsOrdered]
 
       -- ---------------
       -- Prepare the info for this method from MethodUsesMap

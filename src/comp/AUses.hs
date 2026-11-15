@@ -71,14 +71,15 @@ import qualified Data.Set as S
 import Position
 import Id
 import FStringCompat
-import Data.List(union, partition, foldl')
+import Data.List(partition, sortOn)
+import qualified Data.List as L
 import Util
 import PPrint
 import PVPrint
 import ErrorUtil(internalError)
 import Prim
 import IntLit
-import Control.Monad(liftM, mapAndUnzipM)
+import Control.Monad(liftM, mapAndUnzipM, when)
 import Control.Monad.State.Strict(State, runState, get, put)
 -- import Debug.Trace
 
@@ -598,7 +599,21 @@ data UCState = UCState { nextNo :: !Int,
                          defMap :: DefMap,
                          defUseMap :: DefUseMap,
                          cseMap :: M.Map AExpr (AId, AType),
-                         keyRanks :: M.Map AExpr Int
+                         keyRanks :: M.Map AExpr Int,
+                         -- the order in which the walk first meets each
+                         -- method use (condition dropped), which is the
+                         -- module's elaboration order: its rules in order
+                         -- and then its methods, each rule's predicate,
+                         -- then its other reads, then its actions in order
+                         -- (a call after its arguments); a def's uses
+                         -- where it is first referenced.  The use lists
+                         -- come out in this order (orderMethodUses), and
+                         -- the allocator and AState follow it, so no
+                         -- consumer orders uses by Ord, which for Ids is
+                         -- string-intern order and depends on what the
+                         -- process compiled before.
+                         useOrder :: M.Map UniqueUse Int,
+                         nextUse :: !Int
                        }
 
 type UCM a = State (UCState) a
@@ -633,8 +648,19 @@ initUCState defs keys = UCState {
                      cseMap = M.fromList [(e, (i,t)) | ADef i t e _props <- defs ],
                      defMap = M.fromList [(i, e) | ADef i _ e _props <- defs ],
                      defUseMap = M.empty,
-                     keyRanks = mkKeyRanks keys
+                     keyRanks = mkKeyRanks keys,
+                     useOrder = M.empty,
+                     nextUse = 0
                    }
+
+-- record a method use the first time the walk meets it
+noteUse :: UniqueUse -> UCM ()
+noteUse u = do
+  s <- get
+  let u' = useDropCond u
+  when (not (M.member u' (useOrder s))) $
+      put (s { useOrder = M.insert u' (nextUse s) (useOrder s),
+               nextUse = nextUse s + 1 })
 
 runUCState :: [ADef] -> [AExpr] -> UCM a -> (a, [ADef])
 runUCState defs keys m = (res, new_defs s)
@@ -799,7 +825,7 @@ andUseCond' dm _ (APrim _ _ PrimBNot [e]) uc = doBNot Nothing e
         err i = internalError ("AUses.andUseCond - unknown def: " ++ ppReadable i)
 andUseCond' dm _ eq@(APrim _ _ PrimEQ [x, ASInt _ _ i]) uc = doEQ x i uc
 andUseCond' dm _ e uc | length es > 1 =
-    {-# SCC "aucFold" #-} foldl' (flip (andUseCond' dm Nothing)) uc es
+    {-# SCC "aucFold" #-} L.foldl' (flip (andUseCond' dm Nothing)) uc es
   where es = getAnds Nothing e
         getAnds _ (APrim _ _ PrimBAnd es') = concatMap (getAnds Nothing) es'
         getAnds _ d@(ASDef _ i) = getAnds (Just d) (M.findWithDefault (err i) i dm)
@@ -852,26 +878,48 @@ addTrue e uc
 buildUseMaps :: [ADef] -> [Rule] -> [AVInst] -> (RuleUsesMap, MethodUsesMap, [ADef])
 buildUseMaps defs rules avis = (rum, mum, reverse new_defs)
   where ((rum, mum), new_defs) = runUCState defs (useKeys defs rules avis) m
-        m = do rum <- ruleUsesMap rules
-               -- traceM (ppReadable rum)
-               mum <- createMethodUsesMap rum avis
-               return (rum, mum)
+        m = do rlist <- ruleUsesList rules
+               let rum0 = M.fromList rlist
+               -- traceM (ppReadable rum0)
+               mum0 <- createMethodUsesMap rlist avis
+               order <- liftM useOrder get
+               return (rum0, orderMethodUses order rule_pos inst_pos mum0)
+        rule_pos = M.fromList (zip (map ruleName rules) [0 :: Int ..])
+        inst_pos = M.fromList (zip (map avi_vname avis) [0 :: Int ..])
 
-ruleUsesMap :: [Rule] -> UCM RuleUsesMap
-ruleUsesMap rules = liftM M.fromList (mapM f rules)
+-- Put each method's use list in the order the walk met the uses, and
+-- each use's rule and instance lists in the module's order (the maps
+-- that collected them iterate in Ord, i.e. string-intern, order).
+orderMethodUses :: M.Map UniqueUse Int -> M.Map RuleId Int -> M.Map AId Int ->
+                   MethodUsesMap -> MethodUsesMap
+orderMethodUses order rule_pos inst_pos = M.map orderList
+  where orderList us = [ (u, orderUsers mus) | (u, mus) <- sortOn (pos . fst) us ]
+        pos u = M.findWithDefault maxBound (useDropCond u) order
+        orderUsers (ps, as, is) = (byPos rule_pos ps, byPos rule_pos as, byPos inst_pos is)
+        byPos m = dedup . sortOn (\ i -> M.findWithDefault maxBound i m)
+        dedup = go S.empty
+          where go _ [] = []
+                go seen (x:xs)
+                  | x `S.member` seen = go seen xs
+                  | otherwise = x : go (S.insert x seen) xs
+
+ruleUsesList :: [Rule] -> UCM [(RuleId, (AExpr, RuleUses))]
+ruleUsesList rules = mapM f rules
   where f r = do ru <- rUses r
                  let rp = aAnds (rulePred r)
                  return (ruleName r, (rp, ru))
 
 rUses :: Rule -> UCM (RuleUses)
 rUses (Rule _ _ preds reads writes) = do
-  (wDomains, wRanges) <- mapAndUnzipM aUses writes
+  -- walked in the rule's order, predicate then body, which is the order
+  -- its method uses are numbered in (noteUse)
+  pDomains <- mapM eDomain preds
 
   -- could condition on the preds, but the users of this info
   -- already do that, so it is redundant
   rDomains <- mapM eDomain reads
 
-  pDomains <- mapM eDomain preds
+  (wDomains, wRanges) <- mapAndUnzipM aUses writes
   ps <- mergeExprUsesM pDomains
   rs <- mergeExprUsesM (rDomains ++ wDomains)
   -- Action uses don't require monadic merging
@@ -884,6 +932,7 @@ aUses a@(ACall i mi (c:es)) = do
     dm <- getDefMap
     arg_uses  <- liftM (map (addUseCond dm c)) $ mapM eDomain es
     expr_uses <- mergeExprUsesM (cond_uses : arg_uses)
+    noteUse (UUAction a)
     let action_uses = singleMethodActionUse i (unQualId mi) a
     return (expr_uses, action_uses)
 
@@ -946,6 +995,7 @@ eDomain e@(AMethCall _ i mi es) = do
     k <- rankKey e
     let this_use = singleMethodExprUse i (unQualId mi) k ucTrue
     es_uses <- mapM eDomain es
+    noteUse (UUExpr e ucTrue)
     mergeExprUsesM (this_use : es_uses)
 eDomain (ATuple _ es) = mapM eDomain es >>= mergeExprUsesM
 eDomain (ATupleSel _ e _) = eDomain e
@@ -1027,18 +1077,29 @@ type MethodUsesMap = M.Map MethodId [(UniqueUse, MethodUsers)]
 type MethodUsesList = [(MethodId, [UniqueUse])]
 
 mergeUseMapData :: [(UniqueUse, MethodUsers)] -> [(UniqueUse, MethodUsers)] -> [(UniqueUse, MethodUsers)]
+-- The result keeps the first list's order and appends the second's new
+-- uses in its order (a map would put them in Ord order).
 mergeUseMapData a b | null exprBlobs   = actionMergeResult
                     | null actionBlobs = exprMergeResult
                     | otherwise = internalError("Method has both action and expr uses " ++ ppReadable blobs)
   where blobs = a ++ b
         (actionBlobs, exprBlobs) = partition (isUUAction . fst) blobs
-        actionMergeResult = M.toList (M.fromListWith concatMethodUsers blobs)
+        actionMergeResult = groupInOrder concatMethodUsers actionBlobs
         -- UUExpr merging needs to be handled carefully because we
         -- want to be able to look up uses without the use condition
         exprCondMerge (c1, u1) (c2, u2) = (orUseCond c1 c2, concatMethodUsers u1 u2)
-        exprMergeList = [(e, (c, mus)) | (UUExpr e c, mus) <- blobs ]
-        exprMergeMap  = M.fromListWith exprCondMerge exprMergeList
-        exprMergeResult = [(UUExpr e c, mus) | (e, (c, mus)) <- M.toList exprMergeMap]
+        exprMergeList = [(e, (c, mus)) | (UUExpr e c, mus) <- exprBlobs ]
+        exprMergeResult = [(UUExpr e c, mus) | (e, (c, mus)) <- groupInOrder exprCondMerge exprMergeList]
+
+-- combine the values of equal keys, keeping the keys' first-occurrence order
+groupInOrder :: (Ord k) => (v -> v -> v) -> [(k, v)] -> [(k, v)]
+groupInOrder f kvs =
+    let add (ks, m) (k, v) = case M.lookup k m of
+                               Nothing -> (k : ks, M.insert k v m)
+                               Just v0 -> (ks, M.insert k (f v0 v) m)
+        (keys, vals) = L.foldl' add ([], M.empty) kvs
+        err = internalError "AUses.groupInOrder"
+    in  [ (k, M.findWithDefault err k vals) | k <- reverse keys ]
 
 
 concatMethodUsers :: MethodUsers -> MethodUsers -> MethodUsers
@@ -1054,31 +1115,28 @@ getMethodUUExprs = toListMethodExprUses . getMethodExprUses
 getMethodUUActions :: ActionUses -> [(MethodId, [UniqueUse])]
 getMethodUUActions = toListMethodActionUses . getMethodActionUses
 
-createMethodUsesMap :: RuleUsesMap -> [AVInst] -> UCM (MethodUsesMap)
-createMethodUsesMap rmap avis = do
-  let methodUsesMap0 = invertRuleUsesMap rmap
+createMethodUsesMap :: [(RuleId, (AExpr, RuleUses))] -> [AVInst] -> UCM (MethodUsesMap)
+createMethodUsesMap rlist avis = do
+  let methodUsesMap0 = invertRuleUsesList rlist
   instUses <- aInstUseMap avis
   -- reverse the instance use-map
   let inst_edges = [(mId, [(uuse, ([], [], [instId])) | uuse <- us])
                          | (instId, uses) <- instUses,
                            -- uses for each method
                            (mId, us) <- getMethodUUExprs uses ]
-  -- add the instance edges to the initial map (of just rule uses)
-  -- add the edges to the initial map (of just rule uses)
+  -- add the instance edges in avis order, merging matching uses via mergeUseMapData
       methodUsesMap =
-          foldr (uncurry (M.insertWith (mergeWith muUnion))) methodUsesMap0 inst_edges
-      -- function for merging the new edges
-      -- XXX takes advantage of the new edges not having rule uses
-      muUnion (_,_,zs) (xs',ys',zs') = (xs', ys', union zs zs')
+          L.foldl' (\m (mId, us) -> M.insertWith (flip mergeUseMapData) mId us m)
+                   methodUsesMap0 inst_edges
 
   return (methodUsesMap)
 
 -- convert (rule -> method -> uses) to (method -> uses -> users)
--- (list of instance users will be empty in the map)
-invertRuleUsesMap :: RuleUsesMap -> MethodUsesMap
-invertRuleUsesMap rMap =
-    foldr (uncurry (M.insertWith mergeUseMapData)) M.empty $
-    [cvt rId uses | (rId, (_, RuleUses pUses rUses wUses)) <- M.toList rMap,
+-- in the module's rule order (list of instance users will be empty in the map)
+invertRuleUsesList :: [(RuleId, (AExpr, RuleUses))] -> MethodUsesMap
+invertRuleUsesList rlist =
+    L.foldl' (\m (mId, us) -> M.insertWith (flip mergeUseMapData) mId us m) M.empty $
+    [cvt rId uses | (rId, (_, RuleUses pUses rUses wUses)) <- rlist,
                     let pMUses = getMethodUUExprs pUses,
                     let rMUses = getMethodUUExprs rUses,
                     let wMUses = getMethodUUActions wUses,
