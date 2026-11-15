@@ -461,6 +461,7 @@ traceflags = [
           "trace-icheck",
           "trace-inst-tree",
           "trace-instance-overlap",
+          "trace-intern-table",
           "legacy-inst-index",
           "trace-kind-inference",
           "trace-lift",

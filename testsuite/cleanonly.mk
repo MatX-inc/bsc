@@ -10,6 +10,7 @@ TRYDELFILES = $(wildcard \
 	*.bi \
 	*.bo \
 	*.ba \
+	*.intern.json \
 	*inline-reg \
 	*c_sim \
 	*.c \
