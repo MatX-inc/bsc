@@ -1,0 +1,5 @@
+checking package dependencies
+compiling BDPIActionValueConvertTwiceExclusive.bsv
+code generation for mkBDPIActionValueConvertTwiceExclusive starts
+Verilog file created: mkBDPIActionValueConvertTwiceExclusive.v
+All packages are up to date.

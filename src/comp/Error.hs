@@ -1245,11 +1245,13 @@ data ErrMsg =
 -- call's scope is made (see EForeignResultUsed): in another rule or method
 -- (named); in the user itself (the user's kind, "rule" or "method") under
 -- other conditions, which differ, perhaps, because one of them holds a
--- don't-care value (its position); or nowhere, with the position of the
--- read that does not run the call, when it is known.
+-- don't-care value (its position); in the user itself, by a converted
+-- action that it can run more than once in one cycle; or nowhere, with
+-- the position of the read that does not run the call, when it is known.
 data ForeignCallMade = ForeignCallMadeIn String
                      | ForeignCallMadeHere String
                      | ForeignCallMadeHereUndet String Position
+                     | ForeignCallMadeTwice String
                      | ForeignCallNotMade (Maybe Position)
         deriving (Eq, Show)
 
@@ -4206,6 +4208,13 @@ getErrorText (EForeignResultUsed f link call_pos user made) =
             "value" ++ atUsefulPosition pos ++ ", and each use of a " ++
             "don't-care value can be given a different value).  The " ++
             "result exists only in a cycle in which the call is made."
+        usedWhere (ForeignCallMadeTwice kind) =
+            ", but the call is made by an action converted by " ++
+            "toActionValue_, toAction_ or toPrimAction (as by splitIf), " ++
+            "which makes it once for every execution of the converted " ++
+            "action, and this " ++ kind ++ " can run the converted action " ++
+            "more than once in one cycle, so the result does not belong " ++
+            "to one execution."
         usedWhere (ForeignCallNotMade (Just read_pos)) =
             ", but the call is not made: the ActionValue that makes it is " ++
             "read without running it at " ++ prPosition read_pos ++

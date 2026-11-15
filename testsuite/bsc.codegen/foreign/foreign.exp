@@ -165,6 +165,14 @@ peek_fail_error BDPIActionValueConvertMethod.bsv G0139 1
 # (the conditions are compared as written, without reasoning about them:
 # a call in both arms of an if is not a call outside the if)
 peek_fail_error BDPIActionValueConvertRunTwice.bsv G0139 1
+# A conversion makes the call once, where it converts the action, so all
+# the executions of the converted action share it.  A use of the result
+# is reported where two of them can run in one cycle (here two in a rule,
+# which is also what a loop over the converted action gives) ...
+peek_fail_error BDPIActionValueConvertTwice.bsv G0139 1
+# ... and not where only one of them runs in a cycle, or where nothing
+# uses the result
+peek_pass BDPIActionValueConvertTwiceExclusive.bsv
 
 # peekGet reads the value of an ActionValue without running it, so the
 # call in the action is not made and its result does not exist.  A value
