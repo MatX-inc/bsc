@@ -5,6 +5,9 @@ module AExpr2Yices(
 
        checkDisjointExpr,
        checkDisjointRulePair,
+       convertRulePair,
+       decideRulePairs,
+       YTerm,
 
        checkBiImplication,
        isConstExpr,
@@ -16,6 +19,7 @@ import Control.Monad(when)
 import Control.Monad.State(StateT, runStateT, liftIO,
                            gets, get, put, modify)
 import qualified Data.Map as M
+import qualified Data.Set as S
 import qualified Yices as Y
 import Data.Word(Word32)
 
@@ -40,6 +44,9 @@ traceTest = "-trace-smt-test" `elem` progArgs
 
 traceConv :: Bool
 traceConv = "-trace-smt-conv" `elem` progArgs
+
+traceWitness :: Bool
+traceWitness = "-trace-smt-witness" `elem` progArgs
 
 -- -------------------------
 
@@ -112,7 +119,6 @@ checkDisjointExprM single e1 e2 = withTraceTest $ do
         --when traceTest $ traceM("conv1 done")
         (ye2, _) <- convAExpr2YExpr_Force True e2
         --when traceTest $ traceM("conv2 done")
-        ctx <- gets context
         sat_memo <- gets satMap
         let mcond = if single then singleCondition e1 e2 else Nothing
 
@@ -123,38 +129,35 @@ checkDisjointExprM single e1 e2 = withTraceTest $ do
                     then do ectx <- getExprContext
                             liftIO $ Y.ctxStatusAssuming ectx [ye1, ye2]
                     else return Y.Unknown
-            res <- if isDecided res0 then return res0 else do
-              -- push a new ctx so that we can cleanly retract some assertions
-              -- (this is more efficient than retracting them individually)
-              liftIO $ Y.ctxPush ctx
-              liftIO $ Y.assert ctx ye1
-              --when traceTest $ traceM("assert1 done")
-              liftIO $ Y.assert ctx ye2
-              --when traceTest $ traceM("assert2 done")
-
-              r <- liftIO $ Y.ctxStatus ctx
-
-              -- retract the assertions
-              liftIO $ Y.ctxPop ctx
-              return r
+            res <- if isDecided res0 then return res0 else checkPushPop ye1 ye2
             case mcond of
               Just c | isDecided res ->
                 modify (\s -> s { satMap = M.insert c res (satMap s) })
               _ -> return ()
             return res
         -- memoize the result
-        addToProofMap e1 e2 sat_res
+        addToProofMap e1 e2 (Proved sat_res)
         return sat_res
 
   memRes <- lookupProofMap e1 e2
   sat_res <- case memRes of
-    Just r  -> return r
+    Just (Proved r) -> return r
+    Just (Unchecked ye1 ye2) -> do
+      r <- checkPushPop ye1 ye2
+      addToProofMap e1 e2 (Proved r)
+      return r
     Nothing -> doProof
 
   -- if the conditions can both be satisfied, then they are not ME
   return $ case (cvtStatus sat_res) of
               Just b -> Just (not b)
               Nothing -> Nothing
+
+-- The satisfiability of two converted conditions, in the main context.
+checkPushPop :: Y.Expr -> Y.Expr -> YM Y.Status
+checkPushPop ye1 ye2 = do
+  ctx <- gets context
+  liftIO $ checkAssertions ctx [ye1, ye2]
 
 checkDisjointRulePair :: YState -> (ARuleId, ARuleId) -> IO (Maybe Bool, YState)
 checkDisjointRulePair s rp = runStateT (checkDisjointRulePairM rp) s
@@ -165,6 +168,78 @@ checkDisjointRulePairM (r1, r2) = do
   c1 <- getRuleCond r1
   c2 <- getRuleCond r2
   checkDisjointExprM False c1 c2
+
+type YTerm = Y.Expr
+
+-- Convert a rule pair's conditions without running the solver yet, leaving
+-- them Unchecked in proofMap for decideRulePairs unless already proved.
+convertRulePair :: YState -> (ARuleId, ARuleId) ->
+                   IO (Either (Maybe Bool) (Y.Expr, Y.Expr), YState)
+convertRulePair s rp = runStateT (convertRulePairM rp) s
+
+convertRulePairM :: (ARuleId, ARuleId) ->
+                    YM (Either (Maybe Bool) (Y.Expr, Y.Expr))
+convertRulePairM (r1, r2) = do
+  when traceTest $ traceM("comparing rules: " ++ ppString (r1,r2))
+  c1 <- getRuleCond r1
+  c2 <- getRuleCond r2
+  memRes <- lookupProofMap c1 c2
+  case memRes of
+    Just (Proved r) -> return (Left (fmap not (cvtStatus r)))
+    Just (Unchecked ye1 ye2) -> return (Right (ye1, ye2))
+    Nothing -> do
+      (ye1, _) <- convAExpr2YExpr_Force True c1
+      (ye2, _) <- convAExpr2YExpr_Force True c2
+      addToProofMap c1 c2 (Unchecked ye1 ye2)
+      return (Right (ye1, ye2))
+
+-- Decide converted rule pairs in order.  When the batch has many pairs per
+-- condition and its first pairs are all satisfiable, every condition is
+-- checked at once: if they can all hold together, no pair is disjoint.
+decideRulePairs :: YState -> [(Y.Expr, Y.Expr)] -> IO ([Maybe Bool], YState)
+decideRulePairs s ps = do
+  let ctx = context s
+      terms = nubTerms [ t | (y1, y2) <- ps, t <- [y1, y2] ]
+      nterms = length terms
+      npairs = length ps
+      tryAll = npairs >= allAtOnceRatio * nterms
+      (pre, rest) = if tryAll then splitAt allAtOncePreChecks ps else (ps, [])
+      checkPair (y1, y2) = do r <- checkAssertions ctx [y1, y2]
+                              return $! fmap not (cvtStatus r)
+  vpre <- mapM checkPair pre
+  let attempt = tryAll && not (null rest) && all (== Just False) vpre
+  allSat <- if attempt
+            then (== Y.Satisfiable) <$> checkAssertions ctx terms
+            else return False
+  vrest <- if allSat
+           then return (map (const (Just False)) rest)
+           else mapM checkPair rest
+  when traceWitness $
+      traceM ("decideRulePairs: pairs " ++ show npairs ++
+              ", conditions " ++ show nterms ++
+              ", all at once " ++ (if attempt then show allSat else "-") ++
+              ", pair checks " ++
+              show (length pre + (if allSat then 0 else length rest)))
+  return (vpre ++ vrest, s)
+
+allAtOnceRatio, allAtOncePreChecks :: Int
+allAtOnceRatio = 32
+allAtOncePreChecks = 8
+
+nubTerms :: [Y.Expr] -> [Y.Expr]
+nubTerms = go S.empty
+  where go _ [] = []
+        go seen (t:ts) | S.member t seen = go seen ts
+                       | otherwise = t : go (S.insert t seen) ts
+
+-- The satisfiability of the conjunction, in the main context (push/pop)
+checkAssertions :: Y.Context -> [Y.Expr] -> IO Y.Status
+checkAssertions ctx es = do
+    Y.ctxPush ctx
+    mapM_ (Y.assert ctx) es
+    r <- Y.ctxStatus ctx
+    Y.ctxPop ctx
+    return r
 
 isDecided :: Y.Status -> Bool
 isDecided r = r == Y.Satisfiable || r == Y.Unsatisfiable
@@ -392,7 +467,7 @@ data YState =
                defMap        :: M.Map AId ADef,
                ruleMap       :: M.Map ARuleId RuleTriple,
                stateMap      :: M.Map AId VModInfo,
-               proofMap      :: M.Map (AExpr, AExpr) Y.Status,
+               proofMap      :: M.Map (AExpr, AExpr) ProofEntry,
                -- satisfiability of single conditions (checkDisjointExprM)
                satMap        :: M.Map AExpr Y.Status,
 
@@ -406,6 +481,8 @@ data YState =
               }
 
 type YM = StateT YState IO
+
+data ProofEntry = Proved Y.Status | Unchecked Y.Expr Y.Expr
 
 type RuleTriple = (ARuleId, [AExpr], Maybe ARuleId)
 
@@ -446,7 +523,7 @@ addToPortMap p res = do
         pmap' = M.insert p res pmap
     put (s { portYExprMap = pmap' })
 
-addToProofMap :: AExpr -> AExpr -> Y.Status -> YM()
+addToProofMap :: AExpr -> AExpr -> ProofEntry -> YM()
 addToProofMap e1 e2 res = do
   rmap <- gets proofMap
   -- insert both orderings for expressions
@@ -454,7 +531,7 @@ addToProofMap e1 e2 res = do
       rmapX = M.insert (e2,e1) res rmap1
   modify (\s -> s {proofMap = rmapX})
 
-lookupProofMap :: AExpr -> AExpr -> YM (Maybe Y.Status)
+lookupProofMap :: AExpr -> AExpr -> YM (Maybe ProofEntry)
 lookupProofMap e1 e2 = do
   rmap <- gets proofMap
   return $ M.lookup (e1,e2) rmap
