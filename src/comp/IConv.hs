@@ -134,10 +134,11 @@ iConvVar flags r env i =
                 _ -> IVar i
 
 -- A Classic foreign function whose result is ActionValue (Bit n) or Action
--- (which MakeSymTab.chkTopDef accepts for a function not bound to a
--- module) is a call that returns ActionValue_.  Like an imported function
--- (see TCheck), each reference is wrapped, so that every execution of the
--- action calls the function (see primMarkForeignCall in the Prelude):
+-- (which MakeSymTab.chkTopDef accepts for a function that is not bound to
+-- a module and has no provisos) is a call that returns ActionValue_.  Like
+-- an imported function (see TCheck), each reference is wrapped, so that
+-- every execution of the action calls the function (see
+-- primMarkForeignCall in the Prelude):
 --   /\ vs . \ xs . bitsFromForeignActionValue_ (f vs xs)
 -- where f, of the type given by foreignActionValueType, returns ActionValue_.
 foreignActionValueType :: [Kind] -> CType -> Maybe Scheme

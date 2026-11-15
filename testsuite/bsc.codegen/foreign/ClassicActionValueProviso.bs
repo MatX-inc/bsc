@@ -1,0 +1,13 @@
+package ClassicActionValueProviso(sysClassicActionValueProviso) where
+
+-- a Classic foreign function whose result is an ActionValue, with a
+-- proviso: only a function with no provisos can return an ActionValue
+foreign my_count :: (Add n 1 m) => Bit n -> ActionValue (Bit m) = "my_count"
+
+{-# verilog sysClassicActionValueProviso #-}
+sysClassicActionValueProviso :: Module Empty
+sysClassicActionValueProviso =
+  module
+    r :: Reg (Bit 9) <- mkReg 0
+    rules
+      "a": when True ==> action { x <- my_count (1 :: Bit 8); r := x }

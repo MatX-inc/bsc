@@ -1,0 +1,12 @@
+package ClassicActionProviso(sysClassicActionProviso) where
+
+-- the same for an Action
+foreign my_act :: (Add n 1 m) => Bit n -> Bit m -> Action = "my_act"
+
+{-# verilog sysClassicActionProviso #-}
+sysClassicActionProviso :: Module Empty
+sysClassicActionProviso =
+  module
+    r :: Reg (Bit 8) <- mkReg 0
+    rules
+      "a": when True ==> my_act r (zeroExtend r)

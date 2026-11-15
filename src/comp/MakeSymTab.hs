@@ -685,20 +685,20 @@ chkTopDef r mi src_pkg isDep (CIValueSign i ct) = do
     sc <- mkSchemeWithSymTab r ct
     return [(i, VarInfo VarDefn (i :>: sc) (isDep i) src_pkg)]
 chkTopDef r mi src_pkg isDep (Cforeign i qt on ops ni) = do
-    sc@(Forall _ (_ :=> t)) <- mkSchemeWithSymTab r qt
+    sc@(Forall _ (ps :=> t)) <- mkSchemeWithSymTab r qt
     let name = case on of
                 Just s -> s
                 Nothing -> getIdString i
         -- We accept functions whose arguments are bits/string and whose
         -- return result is either bits/string or is a
         -- primitive action/actionvalue, or, for a function that is not
-        -- bound to a module, an ActionValue of bits or an Action (which
-        -- IConv.iConvVar makes into an action that calls the function at
-        -- each execution)
+        -- bound to a module and has no provisos, an ActionValue of bits or
+        -- an Action (which IConv.iConvVar makes into an action that calls
+        -- the function at each execution).
         isGoodResult :: CType -> Bool
         isGoodResult t = (isTypeBit t) || (isTypeString t) ||
                          (isTypeActionValue_ t) || (isTypePrimAction t) ||
-                         (isNothing ops && isActionValueOfBits t)
+                         (isNothing ops && isActionValueOfBits t && null ps)
         isActionValueOfBits t =
             isTypeActionValue t &&
             (let a = getActionValueArg t in isTypeBit a || isTypeUnit a)
