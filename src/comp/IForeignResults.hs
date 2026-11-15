@@ -27,10 +27,13 @@ module IForeignResults(checkForeignResults) where
 -- Conditions are compared by their structure (see condKey), so that the
 -- result does not depend on which equal expressions the evaluator or a
 -- later pass happens to share: a def is the same as its body, and two
--- equal expressions are the same condition, wherever they are.  There is
--- no reasoning about values: a condition that is equivalent to another
--- but built differently (c against not c with the arms swapped) is a
--- different condition.
+-- equal expressions are the same condition, wherever they are.  The joins
+-- that the evaluator writes as Boolean operations (it makes an if on a
+-- one-bit value with a constant arm into && or ||, and an if on not c
+-- into an if on c, see iTrAp of PrimIf in ITransform) are read as the ifs
+-- they are (see alternatives and ifKey).  There is no other reasoning
+-- about values: a condition that is equivalent to another but built
+-- differently (c && d against d && c) is a different condition.
 
 import Control.Monad(zipWithM)
 import Control.Monad.State(State, evalState, gets, modify)
@@ -48,6 +51,7 @@ import PPrint(ppReadable)
 import PreIds(idAVValue_, idAVAction_, idActionValue_)
 import Prim
 import ISyntax
+import ISyntaxUtil(iTrue, iFalse)
 import IntLit
 import Util(quote)
 import IExpandUtils(HExpr, HeapData, HeapCell(..), PExpr(..),
@@ -275,7 +279,7 @@ choice :: (Path -> HExpr -> KM ([Item] -> [Item])) -> Path -> HExpr ->
           [(Maybe Choice, HExpr)] -> KM ([Item] -> [Item])
 choice walk p idx alts = do
     m_k <- if any (isJustChoice . fst) alts
-           then Just <$> condKey idx
+           then Just <$> choiceKey idx alts
            else return Nothing
     let alt (m_ch, e) = do
             p' <- case (m_ch, m_k) of
@@ -296,23 +300,45 @@ isSplitWrapper _ = False
 -- The arm of a choice that an alternative is (see Cond)
 data Choice = ChIf Bool | ChSel Integer | ChCase (Maybe HExpr)
 
-choiceCond :: CKey -> Choice -> KM Cond
-choiceCond k (ChIf b) = return (CIf k b)
-choiceCond k (ChSel n) = return (CSel k n)
-choiceCond k (ChCase m_v) = CCase k <$> mapM condKey m_v
+-- The key of the expression that chooses, and, for an if, whether its
+-- arms are those of an if on the key's expression (True) or on its
+-- negation (False): if (not c) t e is if c e t (see ifKey)
+type ChoiceKey = (CKey, Bool)
+
+choiceKey :: HExpr -> [(Maybe Choice, HExpr)] -> KM ChoiceKey
+choiceKey idx alts
+    | any (isIf . fst) alts = ifKey idx
+    | otherwise = (\ k -> (k, True)) <$> condKey idx
+  where isIf (Just (ChIf _)) = True
+        isIf _ = False
+
+-- (the evaluator makes an if on not c into an if on c, and writes either
+-- where a join becomes a Boolean operation, see alternatives)
+ifKey :: HExpr -> KM ChoiceKey
+ifKey c | Just c' <- negated c = (\ (k, pol) -> (k, not pol)) <$> ifKey c'
+  where negated (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]) = Just e
+        negated (ICon _ (ICValue { iValDef = d })) = negated d
+        negated _ = Nothing
+ifKey c = (\ k -> (k, True)) <$> condKey c
+
+choiceCond :: ChoiceKey -> Choice -> KM Cond
+choiceCond (k, pol) (ChIf b) = return (CIf k (b == pol))
+choiceCond (k, _) (ChSel n) = return (CSel k n)
+choiceCond (k, _) (ChCase m_v) = CCase k <$> mapM condKey m_v
 
 -- The alternatives of a choice (an if, a dynamic selection of an array
 -- that the module builds, or a case), each with the arm it is, and the
 -- expression that chooses, which is also used.  A literal condition or
 -- index chooses one alternative, which then has no condition: IExpand can
 -- prune the action of an arm whose condition folds to 0 but leave its
--- value under an if on 0, which is not a use.
+-- value under an if on 0, which is not a use.  The evaluator writes an
+-- if on a one-bit value whose arm is a constant (as a join of a Bool
+-- result with its default is) as && or ||: a && b is if a b 0, and a || b
+-- is if a 1 b (see iTrAp of PrimIf in ITransform).
 alternatives :: HExpr -> Maybe (HExpr, [(Maybe Choice, HExpr)])
-alternatives (IAps (ICon _ (ICPrim _ PrimIf)) _ [c, t, e]) =
-    Just (c, case literalValue c of
-               Just 0 -> [(Nothing, e)]
-               Just _ -> [(Nothing, t)]
-               Nothing -> [(Just (ChIf True), t), (Just (ChIf False), e)])
+alternatives (IAps (ICon _ (ICPrim _ PrimIf)) _ [c, t, e]) = ifAlternatives c t e
+alternatives (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [a, b]) = ifAlternatives a b iFalse
+alternatives (IAps (ICon _ (ICPrim _ PrimBOr)) _ [a, b]) = ifAlternatives a iTrue b
 alternatives (IAps (ICon _ (ICPrim _ PrimArrayDynSelect)) [_, ITNum sz] [arr, idx])
     | Just elems <- buildArrayElems arr =
         -- (an index out of range selects no element)
@@ -330,6 +356,13 @@ alternatives (IAps (ICon _ (ICPrim _ PrimCase)) _ (idx : dflt : ces)) =
                      Nothing -> (Just (ChCase Nothing), dflt) :
                                 [ (Just (ChCase (Just v)), e) | (v, e) <- arms ])
 alternatives _ = Nothing
+
+ifAlternatives :: HExpr -> HExpr -> HExpr -> Maybe (HExpr, [(Maybe Choice, HExpr)])
+ifAlternatives c t e =
+    Just (c, case literalValue c of
+               Just 0 -> [(Nothing, e)]
+               Just _ -> [(Nothing, t)]
+               Nothing -> [(Just (ChIf True), t), (Just (ChIf False), e)])
 
 -- the arms of a case: pairs of a value and its arm
 casePairs :: [HExpr] -> [(HExpr, HExpr)]
@@ -375,7 +408,7 @@ exprUses infos = go
         if all M.null alt_uses
           then return idx_uses
           else do
-            k <- condKey idx
+            k <- choiceKey idx alts
             let under (Just ch, _) uses | not (M.null uses) = do
                     c <- choiceCond k ch
                     return (M.map (S.insert c) uses)
