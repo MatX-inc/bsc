@@ -85,6 +85,8 @@ data SimPackage =
              , sp_is_wrapped :: Bool -- carryover
              , sp_version :: String -- from ABin
              , sp_pps :: [PProp] -- from ABinModInfo
+             -- whether the .ba was compiled with -split-undetermined-vals
+             , sp_split_undet_vals :: Bool -- from ABinModInfo flags
              , sp_size_params :: [AId] -- carryover
              , sp_inputs :: [AAbstractInput] -- carryover
              , sp_clock_domains :: [AClockDomain] -- carryover?
@@ -223,6 +225,7 @@ instance Eq SimPackage where
          (sp_name sp1 == sp_name sp2) &&
          (sp_is_wrapped sp1 == sp_is_wrapped sp2) &&
          (sp_version sp1 == sp_version sp2) &&
+         (sp_split_undet_vals sp1 == sp_split_undet_vals sp2) &&
          (sp_size_params sp1 == sp_size_params sp2) &&
          (sp_inputs sp1 == sp_inputs sp2) &&
          (sp_clock_domains sp1 == sp_clock_domains sp2) &&
@@ -240,8 +243,9 @@ instance Eq SimPackage where
         )
 
 instance NFData SimPackage where
-    rnf (SimPackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19) =
+    rnf (SimPackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20) =
         rnf19 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19
+            `seq` rnf n20
 
 instance NFData SimSchedule where
     rnf ssched =
