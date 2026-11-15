@@ -2,7 +2,8 @@
 module ADropUndet(aDropUndet) where
 
 import qualified Data.Map.Lazy as M
-import Data.Maybe(fromMaybe, isNothing)
+import Data.Bits(testBit)
+import Data.Maybe(fromMaybe, isJust, isNothing)
 import Error(ErrMsg(..), ErrorHandle, bsErrorUnsafe, internalError)
 import PPrint
 import Position
@@ -13,6 +14,7 @@ import IntLit(IntLit(..), ilHex)
 import IntegerUtil
 import Flags
 import Prim
+import ProofObligation(ProofObligation(..))
 
 
 -- During elaboration, undetermined values may have been annotated with
@@ -145,6 +147,18 @@ hasNoActionValue avm (AMGate {}) = True
 -- filled from bits that canFixUndet accepts.  Undetermined bits that no arm
 -- supplies are left for fixUndet.
 --
+-- In an if-expression that was filled, a constant run of one arm is also
+-- replaced by the other arm's bits when the condition implies they are
+-- equal.  That is the decode/re-encode of a padded encoding:
+--
+--   if (x[4:2] != 3'b001) x (3'b001 ++ _)  -->  x
+--
+-- The implication is checked by evaluating the condition on every
+-- assignment of the bits it reads, when there are at most maxTermVars.
+-- Inside an arm, the conditions of the enclosing if-expressions hold as
+-- well; that includes the if-expression of another def when the arm is a
+-- def used only there (a decode chain of one def per tag).
+--
 -- The values are picked here, once, before the backends diverge, and they
 -- are 2-state.  A filled bit is a copy of the other arm's bit, and that bit
 -- can itself be invalid when the arm is not selected (an RWire that is not
@@ -164,23 +178,57 @@ fillUndetBits flags apkg =
     let defs = apkg_local_defs apkg
         defmap = M.fromList [ (adef_objid d, adef_expr d) | d <- defs ]
         avmap = M.map (hasNoActionValue avmap) defmap
+        -- whether a def holds an undetermined value, also through other defs
+        anymap = M.map (hasUndetValue (\i -> M.findWithDefault False i anymap))
+                       defmap
 
         -- the rewritten defs, and what is known about their bits
-        newmap = M.map fillWith defmap
+        newmap = M.mapWithKey (\i e -> fillWith (defPathCond i) e) defmap
         undetmap = M.map (mayHaveUndetBits env) newmap
         viewmap = M.mapWithKey (viewDef env) newmap
 
         env = FillEnv { fe_canFill = canFixUndet flags avmap,
+                        fe_defExpr = \i -> M.lookup i newmap,
                         fe_defUndet = \i -> M.findWithDefault False i undetmap,
-                        fe_defView = \i -> M.lookup i viewmap >>= id }
+                        fe_defView = \i -> M.lookup i viewmap >>= id,
+                        fe_defVaries = \i -> optUndet flags &&
+                                             M.findWithDefault False i anymap }
 
-        fillWith e = fromMaybe e (fillExpr env e)
+        fillWith pc e = fromMaybe e (fillExpr env pc e)
+        fillTop = fillWith (BTConst True)
+
+        -- A def used once, as an arm of the if-expression that defines
+        -- another def, is only evaluated when that if-expression's
+        -- condition (and the other def's own path condition) selects it.
+        -- (every reference counts, including clocks, resets and proof
+        -- obligations, which mapAExprs does not visit)
+        otherExprs =
+            [ e | (_, cs) <- apkg_clock_domains apkg, AClock o g <- cs,
+                  e <- [o, g] ] ++
+            [ areset_wire r | (_, r) <- apkg_reset_list apkg ] ++
+            concat [ poExprs po | (po, _) <- apkg_proof_obligations apkg ]
+        uses = M.fromListWith (+)
+                   [ (i, 1 :: Int)
+                   | i <- findAExprs defRefs apkg ++
+                          concatMap defRefs otherExprs ]
+        armOf = M.fromList [ (a, (p, isThen))
+                           | ADef p _ (APrim _ _ PrimIf [_, tt, ff]) _ <- defs,
+                             (ASDef _ a, isThen) <- [(tt, True), (ff, False)] ]
+        pcmap = M.mapWithKey pathCond defmap
+        pathCond i _ =
+            case (M.lookup i uses, M.lookup i armOf) of
+              (Just 1, Just (p, isThen))
+                  | Just (APrim _ _ PrimIf (c:_)) <- M.lookup p defmap ->
+                  let ct = boolTerm env boolTermDepth c
+                  in  BTAnd [defPathCond p, if isThen then ct else BTNot ct]
+              _ -> BTConst True
+        defPathCond i = M.findWithDefault (BTConst True) i pcmap
 
         newDef d = case M.lookup (adef_objid d) newmap of
                      Just e -> d { adef_expr = e }
                      Nothing -> internalError ("fillUndetBits: " ++
                                                ppReadable (adef_objid d))
-        apkg' = mapAExprs fillWith (apkg { apkg_local_defs = [] })
+        apkg' = mapAExprs fillTop (apkg { apkg_local_defs = [] })
     in  apkg' { apkg_local_defs = map newDef defs }
 
 -- The fill runs under -split-undetermined-vals, unless the undetermined
@@ -194,10 +242,15 @@ fillUndetBitsOn flags =
 data FillEnv = FillEnv {
         -- whether the bits of an expression may fill undetermined bits
         fe_canFill :: AExpr -> Bool,
+        -- the expression of a def, after filling
+        fe_defExpr :: AId -> Maybe AExpr,
         -- whether a def may have undetermined bits (mayHaveUndetBits)
         fe_defUndet :: AId -> Bool,
         -- the bits of a def of Bit type, after filling
-        fe_defView :: AId -> Maybe [BitPiece]
+        fe_defView :: AId -> Maybe [BitPiece],
+        -- whether a def can have different values where it is used
+        -- (see fixedExpr)
+        fe_defVaries :: AId -> Bool
     }
 
 -- A run of bits of an expression, as seen by viewBits.
@@ -350,34 +403,54 @@ isVarExpr (ASParam {}) = True
 isVarExpr _ = False
 
 -- Fill the undetermined bits under if-expressions; Nothing if unchanged.
-fillExpr :: FillEnv -> AExpr -> Maybe AExpr
-fillExpr env (APrim i t PrimIf [c, tt, ff]) =
-    let mc = fillExpr env c
-        mt = fillExpr env tt
-        mf = fillExpr env ff
+-- The BoolTerm holds wherever the expression is evaluated.
+fillExpr :: FillEnv -> BoolTerm -> AExpr -> Maybe AExpr
+fillExpr env pc (APrim i t PrimIf [c, tt, ff]) =
+    let ct = boolTerm env boolTermDepth c
+        mc = fillExpr env pc c
+        mt = fillExpr env (BTAnd [pc, ct]) tt
+        mf = fillExpr env (BTAnd [pc, BTNot ct]) ff
         c' = fromMaybe c mc
         tt' = fromMaybe tt mt
         ff' = fromMaybe ff mf
         rebuilt | all isNothing [mc, mt, mf] = Nothing
                 | otherwise = Just (APrim i t PrimIf [c', tt', ff'])
-    in  case fillIf env i t c' tt' ff' of
+    in  case fillIf env pc i t c' tt' ff' of
           Just e' -> Just e'
           Nothing -> rebuilt
-fillExpr env (APrim i t op es) = fmap (APrim i t op) (fillExprs env es)
-fillExpr env (AMethCall t i m es) = fmap (AMethCall t i m) (fillExprs env es)
-fillExpr env (ATuple t es) = fmap (ATuple t) (fillExprs env es)
-fillExpr env (ATupleSel t e n) = fmap (\e' -> ATupleSel t e' n) (fillExpr env e)
-fillExpr env (ANoInlineFunCall t i f es) =
-    fmap (ANoInlineFunCall t i f) (fillExprs env es)
-fillExpr env (AFunCall t i f isC es) =
-    fmap (AFunCall t i f isC) (fillExprs env es)
-fillExpr env (ASAny t (Just e)) = fmap (ASAny t . Just) (fillExpr env e)
-fillExpr _ _ = Nothing
+fillExpr env pc (APrim i t op es) = fmap (APrim i t op) (fillExprs env pc es)
+fillExpr env pc (AMethCall t i m es) =
+    fmap (AMethCall t i m) (fillExprs env pc es)
+fillExpr env pc (ATuple t es) = fmap (ATuple t) (fillExprs env pc es)
+fillExpr env pc (ATupleSel t e n) =
+    fmap (\e' -> ATupleSel t e' n) (fillExpr env pc e)
+fillExpr env pc (ANoInlineFunCall t i f es) =
+    fmap (ANoInlineFunCall t i f) (fillExprs env pc es)
+fillExpr env pc (AFunCall t i f isC es) =
+    fmap (AFunCall t i f isC) (fillExprs env pc es)
+fillExpr env pc (ASAny t (Just e)) = fmap (ASAny t . Just) (fillExpr env pc e)
+fillExpr _ _ _ = Nothing
 
-fillExprs :: FillEnv -> [AExpr] -> Maybe [AExpr]
-fillExprs env es =
-    let mes = map (fillExpr env) es
+fillExprs :: FillEnv -> BoolTerm -> [AExpr] -> Maybe [AExpr]
+fillExprs env pc es =
+    let mes = map (fillExpr env pc) es
     in  if all isNothing mes then Nothing else Just (zipWith fromMaybe es mes)
+
+poExprs :: ProofObligation AExpr -> [AExpr]
+poExprs (ProveEq x y) = [x, y]
+poExprs (ProveNotEq x y) = [x, y]
+
+-- The ids of the defs an expression refers to (with repeats).
+defRefs :: AExpr -> [AId]
+defRefs (ASDef _ i) = [i]
+defRefs (APrim { ae_args = es }) = concatMap defRefs es
+defRefs (AMethCall { ae_args = es }) = concatMap defRefs es
+defRefs (ATuple _ es) = concatMap defRefs es
+defRefs (ATupleSel { ae_exp = e }) = defRefs e
+defRefs (ANoInlineFunCall { ae_args = es }) = concatMap defRefs es
+defRefs (AFunCall { ae_args = es }) = concatMap defRefs es
+defRefs (ASAny _ (Just e)) = defRefs e
+defRefs _ = []
 
 -- The segments of the result of an if-expression whose undetermined bits
 -- are being filled: bits given by both arms, or a mux of the two arms.
@@ -400,8 +473,9 @@ muxRunExpr i c r =
     in  APrim i (ATBit (sum (map pieceWidth ps))) PrimIf
             [c, piecesExpr ps, piecesExpr qs]
 
-fillIf :: FillEnv -> AId -> AType -> AExpr -> AExpr -> AExpr -> Maybe AExpr
-fillIf env i t@(ATBit w) c tt ff
+fillIf :: FillEnv -> BoolTerm -> AId -> AType -> AExpr -> AExpr -> AExpr ->
+          Maybe AExpr
+fillIf env pc i t@(ATBit w) c tt ff
     | w > 0
     -- whole undetermined arms are fixUndet's case
     , not (isASAny tt || isASAny ff)
@@ -416,11 +490,207 @@ fillIf env i t@(ATBit w) c tt ff
         segs = map seg (alignPieces (viewBits env tt) (viewBits env ff))
         filled (FSBoth _ b) = b
         filled _ = False
+        -- After the fill, an arm is often a re-encoding of the other: a
+        -- constant that the condition selects only when the other arm's
+        -- bits have that value (the tag of the padded encoding).
+        -- The condition alone first, then with the path condition, whose
+        -- bits may exceed maxTermVars.
+        cterm = boolTerm env boolTermDepth c
+        implied cond concl =
+            holdsWhen cond concl ||
+            (not (isTrueTerm pc) && holdsWhen (BTAnd [pc, cond]) concl)
+        reencode (FSMux p@(BPConst {}) q)
+            | Just qs <- pieceTerms env q, implied cterm (constEq qs p) =
+            FSBoth q False
+        reencode (FSMux p q@(BPConst {}))
+            | Just ps <- pieceTerms env p,
+              implied (BTNot cterm) (constEq ps q) =
+            FSBoth p False
+        reencode s = s
         runExpr r@(FSMux {} : _) = muxRunExpr i c r
         runExpr r = piecesExpr [ p | FSBoth p _ <- r ]
     in  if any filled segs
-        then case map runExpr (segRuns segs) of
+        then case map runExpr (segRuns (map reencode segs)) of
                [e] -> Just e
                es -> Just (APrim defaultAId t PrimConcat es)
         else Nothing
-fillIf _ _ _ _ _ _ = Nothing
+fillIf _ _ _ _ _ _ _ = Nothing
+
+-- -----
+
+-- A Bool-valued expression over bits of other expressions.  An expression
+-- that is not taken apart is a variable when it has the same value
+-- everywhere it occurs (fixedExpr), so a property that holds for every
+-- assignment of the variables holds for the expressions.  Any other
+-- expression is BTAny, a value that is not known and is not the same at
+-- two occurrences: an undetermined value, for example, is resolved
+-- separately where it occurs, by fixUndet, by the fill above, or by AOpt
+-- under -opt-undetermined-vals.
+data BoolTerm = BTConst Bool
+              | BTVar AExpr Integer  -- bit i of an expression
+              | BTAny
+              | BTNot BoolTerm
+              | BTAnd [BoolTerm]
+              | BTOr [BoolTerm]
+
+isTrueTerm :: BoolTerm -> Bool
+isTrueTerm (BTConst True) = True
+isTrueTerm _ = False
+
+-- How many references to defs boolTerm looks through on one path; past
+-- that, a def is a variable.  A disjunction of tag comparisons is often a
+-- chain of defs, one per term.  The term of a def is not shared between
+-- the paths that reach it, so the term can be much larger than the defs it
+-- reads; it is built lazily, and holdsWhen gives up on a term of more than
+-- maxTermNodes nodes before building the rest, or with more than
+-- maxTermVars distinct variable bits.
+boolTermDepth :: Int
+boolTermDepth = 12
+
+-- The most nodes of a term that holdsWhen evaluates.
+maxTermNodes :: Int
+maxTermNodes = 1024
+
+-- The most variable bits holdsWhen enumerates.
+maxTermVars :: Int
+maxTermVars = 10
+
+boolTerm :: FillEnv -> Int -> AExpr -> BoolTerm
+boolTerm _ _ (ASInt _ _ il) = BTConst (ilValue il /= 0)
+boolTerm _ _ (ASAny {}) = BTAny
+boolTerm env d (ASDef (ATBit 1) i)
+    | d > 0, Just e <- fe_defExpr env i = boolTerm env (d - 1) e
+    -- the fill can give it different values where it is an arm
+    | fe_defUndet env i = BTAny
+boolTerm env d (APrim _ (ATBit 1) op [a])
+    | op == PrimBNot || op == PrimInv = BTNot (boolTerm env d a)
+boolTerm env d (APrim _ (ATBit 1) op es)
+    | op == PrimBAnd || op == PrimAnd = BTAnd (map (boolTerm env d) es)
+    | op == PrimBOr || op == PrimOr = BTOr (map (boolTerm env d) es)
+boolTerm env d (APrim _ (ATBit 1) PrimIf [c, a, b]) =
+    let c' = boolTerm env d c
+    in  BTOr [BTAnd [c', boolTerm env d a], BTAnd [BTNot c', boolTerm env d b]]
+boolTerm env d e@(APrim _ (ATBit 1) PrimEQ [a, b])
+    | ATBit _ <- aType a,
+      Just as <- termBits env d a,
+      Just bs <- termBits env d b =
+    BTAnd (zipWith iff as bs)
+    | otherwise = varTerm env e 0
+  where iff x y = BTOr [BTAnd [x, y], BTAnd [BTNot x, BTNot y]]
+-- Only an extract that viewBits takes apart: it returns any other extract
+-- (such as a dynamic one) as itself, and boolTerm would not terminate.
+boolTerm env d e@(APrim _ (ATBit 1) PrimExtract [_, ASInt _ _ hi, ASInt _ _ lo])
+    | ilValue hi == ilValue lo, Just [x] <- termBits env d e = x
+boolTerm env _ e = varTerm env e 0
+
+-- Bit k of an expression that is not taken apart.
+varTerm :: FillEnv -> AExpr -> Integer -> BoolTerm
+varTerm env e k | fixedExpr env e = BTVar e k
+                | otherwise = BTAny
+
+-- Whether an expression has the same value everywhere it occurs: it holds
+-- no undetermined value, and no def that can differ where it is used.
+fixedExpr :: FillEnv -> AExpr -> Bool
+fixedExpr env e = not (hasUndetValue (fe_defVaries env) e)
+
+-- Whether an expression holds an undetermined value, or a def for which
+-- the function says so.
+hasUndetValue :: (AId -> Bool) -> AExpr -> Bool
+hasUndetValue _ (ASAny {}) = True
+hasUndetValue defAny (ASDef _ i) = defAny i
+hasUndetValue defAny (APrim { ae_args = es }) = any (hasUndetValue defAny) es
+hasUndetValue defAny (AMethCall { ae_args = es }) =
+    any (hasUndetValue defAny) es
+hasUndetValue defAny (ATuple _ es) = any (hasUndetValue defAny) es
+hasUndetValue defAny (ATupleSel { ae_exp = e }) = hasUndetValue defAny e
+hasUndetValue defAny (ANoInlineFunCall { ae_args = es }) =
+    any (hasUndetValue defAny) es
+hasUndetValue defAny (AFunCall { ae_args = es }) =
+    any (hasUndetValue defAny) es
+hasUndetValue _ _ = False
+
+-- The bits of an expression, high bits first.
+termBits :: FillEnv -> Int -> AExpr -> Maybe [BoolTerm]
+termBits env d e = fmap concat (mapM (pieceTermsAt env d) (viewBits env e))
+
+pieceTerms :: FillEnv -> BitPiece -> Maybe [BoolTerm]
+pieceTerms env = pieceTermsAt env boolTermDepth
+
+pieceTermsAt :: FillEnv -> Int -> BitPiece -> Maybe [BoolTerm]
+pieceTermsAt _ _ (BPConst w v _) =
+    Just [ BTConst (testBit v (fromInteger k)) | k <- [w - 1, w - 2 .. 0] ]
+pieceTermsAt env d (BPSlice e 0 0)
+    | aSize e == 1 && not (isVarExpr e) = Just [boolTerm env d e]
+pieceTermsAt env _ (BPSlice e hi lo) =
+    Just [ varTerm env e k | k <- [hi, hi - 1 .. lo] ]
+pieceTermsAt _ _ (BPUndet _) = Nothing
+
+-- The bits equal the constant.
+constEq :: [BoolTerm] -> BitPiece -> BoolTerm
+constEq bs (BPConst w v _) =
+    BTAnd [ if testBit v (fromInteger k) then b else BTNot b
+          | (b, k) <- zip bs [w - 1, w - 2 .. 0] ]
+constEq _ p = internalError ("ADropUndet.constEq: " ++ show (pieceWidth p))
+
+-- Whether q holds in every assignment where p holds, checked by enumerating
+-- the assignments of their variable bits (if there are few enough).  BTAny
+-- makes an evaluation unknown, so q must be true whatever value it has,
+-- wherever p can be true.
+holdsWhen :: BoolTerm -> BoolTerm -> Bool
+holdsWhen p q
+    | termNodesLeft maxTermNodes [p, q] < 0 = False
+    | otherwise =
+    case termVars (BTAnd [p, q]) [] of
+      Just vs -> let n = length vs
+                     val :: Integer -> (AExpr, Integer) -> Bool
+                     val m v = maybe False (testBit m) (lookupVar 0 v vs)
+                 in  and [ evalTerm (val m) q == Just True
+                         | m <- [0 .. 2 ^ n - 1],
+                           evalTerm (val m) p /= Just False ]
+      Nothing -> False
+  where lookupVar :: Int -> (AExpr, Integer) -> [(AExpr, Integer)] -> Maybe Int
+        lookupVar _ _ [] = Nothing
+        lookupVar k x (y:ys) | x == y = Just k
+                             | otherwise = lookupVar (k + 1) x ys
+
+-- The node budget n less the nodes of the terms, or a negative number as
+-- soon as it runs out (so no more than n + 1 nodes are looked at).
+termNodesLeft :: Int -> [BoolTerm] -> Int
+termNodesLeft n _ | n < 0 = n
+termNodesLeft n [] = n
+termNodesLeft n (t:ts) = termNodesLeft (n - 1) (subTerms t ++ ts)
+  where subTerms (BTNot x) = [x]
+        subTerms (BTAnd xs) = xs
+        subTerms (BTOr xs) = xs
+        subTerms _ = []
+
+-- The variable bits of a term, added to an accumulator of at most
+-- maxTermVars distinct bits (Nothing if there are more).  The accumulator
+-- is that short, so a list is enough.
+termVars :: BoolTerm -> [(AExpr, Integer)] -> Maybe [(AExpr, Integer)]
+termVars (BTConst _) vs = Just vs
+termVars BTAny vs = Just vs
+termVars (BTVar e k) vs
+    | (e, k) `elem` vs = Just vs
+    | length vs >= maxTermVars = Nothing
+    | otherwise = Just ((e, k) : vs)
+termVars (BTNot x) vs = termVars x vs
+termVars (BTAnd xs) vs = foldl (\mvs x -> mvs >>= termVars x) (Just vs) xs
+termVars (BTOr xs) vs = foldl (\mvs x -> mvs >>= termVars x) (Just vs) xs
+
+-- Kleene's three-valued evaluation: Nothing when the value depends on a
+-- BTAny.
+evalTerm :: ((AExpr, Integer) -> Bool) -> BoolTerm -> Maybe Bool
+evalTerm _ (BTConst b) = Just b
+evalTerm val (BTVar e k) = Just (val (e, k))
+evalTerm _ BTAny = Nothing
+evalTerm val (BTNot x) = fmap not (evalTerm val x)
+evalTerm val (BTAnd xs) = kleene False (map (evalTerm val) xs)
+evalTerm val (BTOr xs) = kleene True (map (evalTerm val) xs)
+
+-- A conjunction (z = False) or disjunction (z = True) of three-valued
+-- values: z if any value is z, otherwise unknown if any value is.
+kleene :: Bool -> [Maybe Bool] -> Maybe Bool
+kleene z vs | any (== Just z) vs = Just z
+            | all isJust vs = Just (not z)
+            | otherwise = Nothing
