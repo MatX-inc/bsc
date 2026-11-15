@@ -72,3 +72,16 @@ compile_verilog_pass RegFileFiveInstUses.bsv
 compile_verilog_fail_error RegFileSixInstUses.bsv G0002
 
 }
+
+# A value method has no enable, so its use of a submodule method is live
+# whenever the method is ready and cannot share a port with the use by a
+# method it conflicts with.  With enough ports the uses are separated
+# (the Verilog and Bluesim outputs agree); with one port, or a port
+# without a limit, G0002 is reported, for Bluesim as well.
+test_c_veri_bs_modules ValueMethodSharedPort {mkCountTable}
+
+compile_verilog_fail_error ValueMethodOnePort.bs G0002
+erase ValueMethodOnePort.bo
+compile_fail_error ValueMethodOnePort.bs G0002 1 {-sim}
+
+compile_verilog_fail_error ValueMethodNoLimitPort.bs G0002

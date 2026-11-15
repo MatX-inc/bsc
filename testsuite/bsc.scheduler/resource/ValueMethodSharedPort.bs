@@ -1,0 +1,52 @@
+package ValueMethodSharedPort(sysValueMethodSharedPort) where
+
+import RegFile
+
+-- A value method (read) and an action method (incr) of a synthesized
+-- module conflict, and both call a submodule method with several ports
+-- (rf.sub, five) with their own arguments.  A value method has no
+-- enable, so its use is live whenever the method is ready and cannot
+-- share a port with incr's use: resource allocation must give the two
+-- uses separate ports.  When both uses got port 1, selected by RDY_read,
+-- incr read the address the parent last passed to read, and the
+-- Verilog printed "t[ 7] := 1" three times where Bluesim counts 1, 2, 3.
+
+interface CountTable =
+    read :: Bit 4 -> Bit 8
+    incr :: Bit 4 -> Action
+
+-- read bypasses the value that incr writes in the same cycle, so
+-- read must precede incr (rf) and follow it (w): the methods conflict.
+{-# synthesize mkCountTable #-}
+mkCountTable :: Module CountTable
+mkCountTable = module
+    rf :: RegFile (Bit 4) (Bit 8) <- mkRegFileFull
+    w :: RWire (Bit 4, Bit 8) <- mkRWire
+    i :: Reg (Bit 5) <- mkReg 0
+    rules
+      "clear": when i < 16 ==> do
+          rf.upd (truncate i) 0
+          i := i + 1
+      "log": when Valid (k, v) <- w.wget ==> $display "t[%d] := %d" k v
+    interface
+      read k = case w.wget of
+                 Valid (j, v) -> if j == k then v else rf.sub k
+                 Invalid -> rf.sub k
+      incr k = do
+          let v = rf.sub k + 1
+          rf.upd k v
+          w.wset (k, v)
+        when i == 16
+
+-- Increment entry 7 three times; read entry 2 in the other cycles.
+{-# synthesize sysValueMethodSharedPort #-}
+sysValueMethodSharedPort :: Module Empty
+sysValueMethodSharedPort = module
+    t :: CountTable <- mkCountTable
+    n :: Reg (Bit 8) <- mkReg 0
+    rules
+      "count": when True ==> do
+          n := n + 1
+          if n == 28 then $finish 0 else noAction
+      "inc": when n >= 20 && n < 26 && n[0:0] == 0 ==> t.incr 7
+      "look": when n >= 20 && n[0:0] == 1 ==> $display "read 2: %d" (t.read 2)

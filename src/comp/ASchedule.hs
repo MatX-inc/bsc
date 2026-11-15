@@ -871,13 +871,31 @@ aSchedule_step1 errh flags prefix pps amod = do
   -- ====================
   -- Resource usage
 
+      -- A value method has no enable: AState selects its uses of a
+      -- submodule method by RDY in the port muxes, so they are live in
+      -- every cycle the method is ready, including cycles in which the
+      -- parent enables a method it conflicts with.  For resource
+      -- allocation a value method is therefore simultaneous with every
+      -- other interface method, and no arbitration can keep such a pair
+      -- apart (rules that conflict with a value method are blocked by
+      -- its RDY and need no such edge).
+  let value_method_set =
+          S.fromList [ m | AIDef { aif_name = m } <- ifs, not (isRdyId m) ]
+      ifc_rule_set = S.fromList ifcRuleNames
+      always_live :: RuleId -> RuleId -> Bool
+      always_live r r' = (r `S.member` value_method_set) &&
+                         (r' `S.member` ifc_rule_set)
+      arbitrable :: RuleId -> RuleId -> Bool
+      arbitrable r r' = not (always_live r r' || always_live r' r)
+
       -- simultaneous (r1,r2) <==> (r1,r2) might use the same resources
   let simultaneous :: RuleId -> RuleId -> Bool
       simultaneous r r' =
                       (r == r'
                        || isNothing (G.lookup (r,r') cfConflictMap)
                        || isNothing (G.lookup (r,r') scConflictMap)
-                       || isNothing (G.lookup (r',r) scConflictMap))
+                       || isNothing (G.lookup (r',r) scConflictMap)
+                       || not (arbitrable r r'))
                       -- we assume conflict-free attribute does NOT apply to resource conflicts
                       && (not $ rule_disjoint r r')
 
@@ -930,7 +948,7 @@ aSchedule_step1 errh flags prefix pps amod = do
   (resAllocTable, resDrops) <-
       tr "(resAllocTable, resDrops) <- rSchedule ..." $
       convEM errh $
-      rSchedule nm (resource flags) resMax' methodUseMap simultaneous
+      rSchedule nm (resource flags) resMax' methodUseMap simultaneous arbitrable
 
   -- record the RAT in the state
   s <- get
