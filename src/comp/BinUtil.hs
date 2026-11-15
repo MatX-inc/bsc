@@ -24,7 +24,7 @@ import PFPrint
 import SCC
 import FileNameUtil(binSuffix)
 import FileIOUtil(readBinFilePath)
-import GenBin(readBinFile)
+import GenBin(readBinFilePoison)
 import Util(fromJustOrErr, fromMaybeM,
             map_insertManyWith, map_insertManyWithKeyM)
 
@@ -181,23 +181,17 @@ doImport errh flags hashmap i = do
     (file, name) <- fromMaybeM (bsError errh [missingErr]) $
                       readBinFilePath errh (getIdPosition i)
                           (verbose flags) binname (ifcPath flags)
-    (bi_sig, bo_sig, ipkg@(IPackage pi impHashes _ _ _), hash)
-        <- readBinFile errh name file
+    (bi_sig, bo_sig, poisoned, ipkg@(IPackage pi impHashes _ _ _), hash)
+        <- readBinFilePoison errh name file
     when (pi /= i) $
         bsError errh [(noPosition, EBinFilePkgNameMismatch name
                                        (pfpString i) (pfpString pi))]
-    when (any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]) $
+    when poisoned $
         pillMsg [(getIdPosition pi, WPoisonedDefFile binname)]
     hashmap' <- mergeHashes errh hashmap pi hash impHashes
     let impNames = map fst impHashes
     return (name, bi_sig, bo_sig, ipkg, hash, hashmap', impNames)
 
-hasPoisonPill :: IExpr a -> Bool
-hasPoisonPill (ILam _ _ e)  = hasPoisonPill e
-hasPoisonPill (ILAM _ _ e)  = hasPoisonPill e
-hasPoisonPill (IAps f _ es) = any hasPoisonPill (f:es)
-hasPoisonPill (ICon _ (ICPrim _ p)) = p == PrimPoisonedDef
-hasPoisonPill _ = False
 
 mergeHashes :: ErrorHandle -> HashMap -> Id -> String -> [(Id, String)] ->
                IO HashMap

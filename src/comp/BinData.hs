@@ -1,14 +1,14 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE MultiParamTypeClasses, FunctionalDependencies #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE ScopedTypeVariables, BangPatterns #-}
+{-# LANGUAGE ScopedTypeVariables, BangPatterns, UnboxedTuples #-}
 {-# LANGUAGE PatternSynonyms, OverloadedLists, TypeFamilies #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
 module BinData ( Byte
                , putBs, putB, putI
                , getN, getB, getI -- , getBytesRead
                , Bin(..)
-               , section
+               , section, skippable, skippableIn
                , encode, encodeWith, decode, decodeWithHash
                ) where
 
@@ -52,7 +52,7 @@ import IntLit
 import Undefined
 import Prim hiding(PrimArg(..))
 
-import Util(Hash, hashInit, nextHashByte, showHash)
+import Util(hashInit, nextHashByte, showHash)
 
 import Data.List(sort, intercalate)
 import Control.Monad(replicateM, liftM, ap)
@@ -129,6 +129,10 @@ data BinElem = B [Byte]
              -- accounting markers
              | Start String
              | End
+             -- delimit a section that a reader can skip and read later
+             -- (see "skippable")
+             | SkipStart
+             | SkipEnd
 
 instance Show BinElem where
   show (B bs)    = "[" ++
@@ -143,6 +147,8 @@ instance Show BinElem where
   -- show (AExp e)  = show e
   show (Start s) = "<BEGIN " ++ s ++ ">"
   show End       = "<END>"
+  show SkipStart = "<SKIP>"
+  show SkipEnd   = "</SKIP>"
 
 -- Simple difference list implementation for O(1) append.
 newtype DList a = DL ([a] -> [a])
@@ -331,52 +337,73 @@ endSection = Out [End] ()
 section :: String -> Out () -> Out ()
 section s action = do { beginSection s; action; endSection }
 
+-- A skippable section is written with its length in front, and shares
+-- values only with what precedes it: a shared value first written
+-- inside the section is known only until the section's end.  A reader
+-- can therefore step over the section and read it later, or never,
+-- with the tables it had on reaching it ("skippableIn").
+skippable :: Out () -> Out ()
+skippable action = do { Out [SkipStart] (); action; Out [SkipEnd] () }
+
 -- -------------------------------------------------------------
 -- The In monad makes it easy to parse a byte stream
 
--- The In monad state keeps tables for shared structures
--- in addition to unconsumed bytes and an optional hash of
--- consumed bytes.
+-- The In monad state keeps tables for shared structures and the
+-- offset of the next unconsumed byte.  The state is passed and
+-- returned unboxed: a state record and a result pair per byte read
+-- were most of the cost of reading a package.
 
-data IS = IS !BinTable !BS.ByteString !Int !(Maybe Hash)
-
--- In monad is a state transformer type monad
-newtype In a = In (IS -> (a,IS))
+-- In monad is a state transformer type monad over the bytes being read
+newtype In a = In (BS.ByteString -> BinTable -> Int -> (# a, BinTable, Int #))
 
 instance Monad In where
   return = pure
-  (In v) >>= f = In $ \is -> let !(x,is') = v is
-                                 (In fn) = f x
-                             in fn is'
+  (In v) >>= f = In $ \bs bt off ->
+                   case v bs bt off of
+                     (# x, bt', off' #) -> case f x of
+                                             In fn -> fn bs bt' off'
 
 instance Functor In where
   fmap = liftM
 
 instance Applicative In where
-  pure x = In $ \is -> (x,is)
+  pure x = In $ \_ bt off -> (# x, bt, off #)
   (<*>) = ap
 
 getN :: Int -> In [Byte]
 getN n = replicateM n getB
 
 getB :: In Byte
-getB = In $ \(IS bc bs off mh) ->
+getB = In $ \bs bt off ->
   case BS.indexMaybe bs off of
-    Nothing -> internalError "BinData.getB: unexpected end of byte stream"
+    Nothing -> case (internalError "BinData.getB: unexpected end of byte stream" :: ()) of
+                 () -> (# 0, bt, off #)
     Just b -> let !off' = off + 1
-              in case mh of
-                   Just h -> let !h' = nextHashByte h b
-                             in (b, IS bc bs off' (Just h'))
-                   Nothing -> (b, IS bc bs off' Nothing)
+              in (# b, bt, off' #)
+
+-- Read a section written by "skippable": step over it, and read it
+-- only if the result is used.  The section shares values only with
+-- what precedes it, so the tables as they are here are all it needs,
+-- and the tables are the same after it.
+skippableIn :: In a -> In a
+skippableIn (In f) = In $ \bs bt off ->
+  let byte k = fromIntegral (BS.index bs (off + k)) :: Int
+      len = byte 0 .|. (byte 1 `shiftL` 8) .|. (byte 2 `shiftL` 16)
+                   .|. (byte 3 `shiftL` 24)
+      start = off + 4
+      !end = if off + 4 > BS.length bs || start + len > BS.length bs
+             then internalError "BinData.skippableIn: section exceeds the byte stream"
+             else start + len
+      x = case f bs bt start of
+            (# v, _, off' #)
+              | off' == end -> v
+              | otherwise -> internalError "BinData.skippableIn: section length mismatch"
+  in (# x, bt, end #)
 
 -- get an Int value (between 0 and 255)
 getI :: In Int
 getI = do { b <- getB; return (fromEnum b) }
 
-{-
-getBytesRead :: In Integer
-getBytesRead = In $ \is@(IS _ _ _ n) -> (n,is)
--}
 -- ------------------------------------------------------------------
 -- The Shared typeclass simplifies the process of creating shared
 -- structures in the output byte stream.
@@ -420,10 +447,10 @@ mkNewVal :: (BinTable -> (Table v)) ->
             (BinTable -> (Table v) -> BinTable) ->
             In (Int,v)
 mkNewVal get set =
-  In $ \(IS bt bs off h) ->
+  In $ \_ bt off ->
           let (Known n m) = get bt
-              bt' = set bt (Known (n+1) m)
-          in ((n, undefined), (IS bt' bs off h))
+              !bt' = set bt (Known (n+1) m)
+          in (# (n, undefined), bt', off #)
 
 -- get the right table, add a mapping from the index to the value,
 -- and put back the updated table while returning ()
@@ -431,21 +458,22 @@ mkRecordVal ::(BinTable -> (Table v)) ->
               (BinTable -> (Table v) -> BinTable) ->
               (Int -> v -> In ())
 mkRecordVal get set idx v =
-  In $ \(IS bt bs off h) ->
+  In $ \_ bt off ->
           let (Known n m) = get bt
-              bt' = v `seq` set bt (Known n (M.insert idx v m))
-          in ((), (IS bt' bs off h))
+              !bt' = v `seq` set bt (Known n (M.insert idx v m))
+          in (# (), bt', off #)
 
 
 -- get the right table and look up the value for the given index
 mkLookupIdx ::(BinTable -> (Table v)) ->
               (Int -> In v)
 mkLookupIdx get idx =
-  In $ \is@(IS bt _ _ _) ->
+  In $ \_ bt off ->
           let (Known _ m) = get bt
           in case (M.lookup idx m) of
-               (Just v) -> (v, is)
-               Nothing  -> internalError $ "BinData.lookupIdx: invalid index " ++ (show idx)
+               (Just v) -> (# v, bt, off #)
+               Nothing  -> case (internalError ("BinData.lookupIdx: invalid index " ++ (show idx)) :: ()) of
+                             () -> (# undefined, bt, off #)
 
 
 -- This is a convenience function that groups the sequence of operations
@@ -1494,6 +1522,8 @@ buildHistogram bes = snd (foldl build (["<UNCLAIMED>"], M.empty) bes)
           (sec, updateBytes sec (toInteger (length b)) hist)
         build (sec, hist) (Start s) = ((s:sec), incrSection s hist)
         build ((_:sec), hist) End   = (sec, hist)
+        build acc SkipStart = acc
+        build acc SkipEnd   = acc
         build _ x = internalError $ "unexpected BinElem: " ++ (show x)
 
 -- ------------------------------------------------------------------
@@ -1528,15 +1558,48 @@ share' k x bc =
 
 
 compress :: (Position -> Position) -> [BinElem] -> [BinElem]
-compress remapP bes = compress' (bes, unknownCache)
-  where compress' ((x@(B _):xs), cache) = x:(compress' (xs, cache))
-        compress' ((x@(Start _):xs), cache) = x:(compress' (xs, cache))
-        compress' ((x@(End):xs), cache) = x:(compress' (xs, cache))
-        compress' ((x:xs), cache) =
-          let (bes, cache') = share remapP x cache
-          in -- trace ((show x) ++ " -> " ++ (show bes)) $
-             compress' (bes ++ xs, cache')
-        compress' ([], _) = []
+compress remapP bes = compress' bes unknownCache []
+  where -- the third argument holds the cache as it was at the start of
+        -- each enclosing skippable section
+        compress' ((x@(B _):xs)) cache saved = x:(compress' xs cache saved)
+        compress' ((x@(Start _):xs)) cache saved = x:(compress' xs cache saved)
+        compress' ((x@(End):xs)) cache saved = x:(compress' xs cache saved)
+        compress' (SkipStart:xs) cache saved =
+          SkipStart:(compress' xs cache (cache:saved))
+        compress' (SkipEnd:xs) _ (cache:saved) =
+          SkipEnd:(compress' xs cache saved)
+        compress' (SkipEnd:_) _ [] =
+          internalError "BinData.compress: unbalanced skippable section"
+        compress' (x:xs) cache saved =
+          let (bes', cache') = share remapP x cache
+          in -- trace ((show x) ++ " -> " ++ (show bes')) $
+             compress' (bes' ++ xs) cache' saved
+        compress' [] _ _ = []
+
+-- The bytes of compressed BinData; a skippable section is preceded by
+-- its length (4 bytes, LSB first).
+serialize :: [BinElem] -> [Byte]
+serialize bes = case go bes of
+                  (bytes, []) -> bytes
+                  _ -> internalError "BinData.serialize: unbalanced skippable section"
+  where -- returns the bytes up to the end of the enclosing section,
+        -- and the elements after it
+        go :: [BinElem] -> ([Byte], [BinElem])
+        go [] = ([], [])
+        go (B bs : xs) = let (rest, after) = go xs in (bs ++ rest, after)
+        go (SkipStart : xs) =
+            let (inner, after_inner) = go xs
+                (rest, after) = go (dropEnd after_inner)
+                len = length inner
+                lenBytes = [ toEnum ((len `shiftR` sh) .&. 255)
+                           | sh <- [0, 8, 16, 24] ]
+            in  if len >= 2^(31::Int)
+                then internalError "BinData.serialize: section too long"
+                else (lenBytes ++ inner ++ rest, after)
+        go xs@(SkipEnd : _) = ([], xs)
+        go (_ : xs) = go xs
+        dropEnd (SkipEnd : xs) = xs
+        dropEnd _ = internalError "BinData.serialize: unterminated skippable section"
 
 -- Run the Out monad and extract a byte stream.  The resulting
 -- byte stream is generated lazily through the monad and preserves
@@ -1545,7 +1608,7 @@ compress remapP bes = compress' (bes, unknownCache)
 runOutWith :: (Position -> Position) -> Out () -> [Byte]
 runOutWith remapP (Out xs _) =
     let bes   = compress remapP $ toList xs
-        bytes = concat [ bs | B bs <- bes ]
+        bytes = serialize bes
     in -- trace ("xs = " ++ (show xs)) $
        -- trace ("bytes = " ++ (show bytes)) $
        if trace_bindata
@@ -1561,12 +1624,16 @@ encode = encodeWith id
 encodeWith :: (Bin a) => (Position -> Position) -> a -> [Byte]
 encodeWith remapP x = runOutWith remapP (toBin x)
 
+-- The hash of the bytes read is computed in one pass over them, when
+-- asked for, rather than threaded through the reader.
 runIn :: In a -> BS.ByteString -> Bool -> (a, Int, String)
 runIn (In f) bs do_hash =
-  let h0 = if do_hash then (Just hashInit) else Nothing
-      (x,(IS _ _ off h)) = f (IS unknownTable bs 0 h0)
-      hstr = maybe "" showHash h
-  in (x, off, hstr)
+  case f bs unknownTable 0 of
+    (# x, _, off #) ->
+      let hstr = if do_hash
+                 then showHash (BS.foldl' nextHashByte hashInit (BS.take off bs))
+                 else ""
+      in (x, off, hstr)
 
 decode :: (Bin a) => BS.ByteString -> a
 decode s = let (x, off, _) = runIn fromBin s False

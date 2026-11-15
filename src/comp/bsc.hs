@@ -524,7 +524,9 @@ compilePackage
         -- module, via "updDef").
         dictBuckets = mkDictBuckets binmods
 
-    t <- dump errh flags t DFbinary dumpnames binmods
+    -- not "dump": that would read every definition of every imported
+    -- package, of which this compile may need few
+    t <- dumpStr errh flags t DFbinary dumpnames (ppReadable binmods)
 
     -- For "genModule" we construct a symbol table that includes all defs,
     -- not just those that are user visible.

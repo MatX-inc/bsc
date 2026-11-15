@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module GenBin(genBinFile, readBinFile) where
+module GenBin(genBinFile, readBinFile, readBinFilePoison) where
 
 import Control.Monad(when)
 import qualified Data.Text as T
@@ -14,6 +14,7 @@ import ISyntaxUtil(icUndet)
 import CSyntax
 import Undefined(UndefKind(UNoMatch))
 import BinData
+import Prim(PrimOp(..))
 import FileIOUtil(writeBinaryFileCatch)
 import PFPrint
 
@@ -26,7 +27,7 @@ doTrace = elem "-trace-genbin" progArgs
 -- .bo file tag -- change this whenever the .bo format changes
 -- See also GenABin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260715-6"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260715-7"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -34,17 +35,35 @@ headerBS = B.pack header
 genBinFile :: ErrorHandle -> (Position -> Position) ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
 genBinFile errh remapP fn bi_sig bo_sig ipkg =
-    writeBinaryFileCatch errh fn
-        (header ++ encodeWith remapP (bi_sig, bo_sig, ipkg))
+    -- whether a definition is poisoned is recorded apart from the
+    -- definitions, so that an importing compile need not read their
+    -- bodies to find out
+    let poisoned = any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]
+    in  writeBinaryFileCatch errh fn
+            (header ++ encodeWith remapP (bi_sig, bo_sig, poisoned, ipkg))
+
+hasPoisonPill :: IExpr a -> Bool
+hasPoisonPill (ILam _ _ e)  = hasPoisonPill e
+hasPoisonPill (ILAM _ _ e)  = hasPoisonPill e
+hasPoisonPill (IAps f _ es) = any hasPoisonPill (f:es)
+hasPoisonPill (ICon _ (ICPrim _ p)) = p == PrimPoisonedDef
+hasPoisonPill _ = False
 
 readBinFile :: ErrorHandle -> String -> B.ByteString ->
                IO (CSignature, CSignature, IPackage a, String)
-readBinFile errh nm s =
+readBinFile errh nm s = do
+    (bi_sig, bo_sig, _, ipkg, hash) <- readBinFilePoison errh nm s
+    return (bi_sig, bo_sig, ipkg, hash)
+
+-- also returns whether any definition of the package is poisoned
+readBinFilePoison :: ErrorHandle -> String -> B.ByteString ->
+                     IO (CSignature, CSignature, Bool, IPackage a, String)
+readBinFilePoison errh nm s =
     let hlen = B.length headerBS
     in if B.take hlen s == headerBS
-       then let ((bi_sig, bo_sig, ipkg), hash) =
+       then let ((bi_sig, bo_sig, poisoned, ipkg), hash) =
                     decodeWithHash $ B.drop hlen s
-            in return (bi_sig, bo_sig, ipkg, hash)
+            in return (bi_sig, bo_sig, poisoned, ipkg, hash)
        else bsError errh [(noPosition, EBinFileVerMismatch nm)]
 
 -- ----------
@@ -560,11 +579,14 @@ instance Bin (IPackage a) where
 instance Bin (IDef a) where
     writeBytes (IDef i ty e p) =
         section "IDef" $
-        do toBin i; toBin ty; toBin e ; toBin p
+        -- the body is read only when it is used: an importing package
+        -- needs the name, type and properties of every definition, and
+        -- few of the bodies
+        do toBin i; toBin ty; skippable (toBin e); toBin p
     readBytes = do when doTrace $ traceM("read IDef")
                    i <- fromBin
                    ty <- fromBin
-                   e <- fromBin
+                   e <- skippableIn fromBin
                    p <- fromBin
                    return $ IDef i ty e p
 
