@@ -33,6 +33,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: true
+      # Every root module imports Warmup, the barrier of the deterministic
+      # parallel build (src/comp/Warmup.hs); the check reads the sources.
+      - name: Check that every root module imports Warmup
+        run: src/comp/check-warmup-roots.sh
       - name: Install dependencies
         shell: bash
         run: |
@@ -43,13 +47,11 @@ jobs:
         uses: haskell/ghcup-setup@v1
         with:
           ghc: ${{ inputs.ghc_version }}
-          cabal: recommended
-      # Until BSC uses cabal to build, pre-install these packages
-      - name: Install Haskell dependencies
+          cabal: 3.16.1.0
+      # The cabal build fetches the compiler's Haskell libraries from Hackage
+      - name: Update the package index
         shell: bash
-        run: |
-          cabal update
-          cabal v1-install old-time regex-compat split strict-concurrency syb
+        run: cabal update
       # Restore previous ccache cache of compiled object files. Use a SHA
       # in the key so that a new cache file is generated after every build,
       # and have the restore-key use the most recent.
@@ -80,6 +82,15 @@ jobs:
 
           make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src
           tar czf inst.tar.gz inst
+      - name: Check that only bluetcl links Tcl
+        run: |
+          for exe in inst/bin/*; do
+            if readelf -d "$exe" | grep -q 'NEEDED.*libtcl'; then
+              [ "$(basename "$exe")" = bluetcl ] || { echo "$exe links libtcl"; exit 1; }
+            else
+              [ "$(basename "$exe")" != bluetcl ] || { echo "bluetcl does not link libtcl"; exit 1; }
+            fi
+          done
       - name: CCache stats
         env:
           CCACHE_DIR: ${{ GITHUB.WORKSPACE }}/ccache
@@ -102,19 +113,16 @@ jobs:
             fi
           python3 util/haskell-language-server/gen_hie.py
           pushd src/comp
-          haskell-language-server-${{ inputs.ghc_version }} bsc.hs
+          haskell-language-server-${{ inputs.ghc_version }} app/bsc.hs
           popd
       # Check that .ghci has all the right flags to load the source.
       # This is important for text editor integration & tools like ghcid
-      # NB stp, yices and htcl must be built first, so do this after Build.
+      # NB after Build: .ghci loads Warmup from the built library (-package bsc),
+      # BuildVersion.hs from src/comp, and links the solvers from inst/lib/SAT.
       - name: Check GHCI :load
         run: |
           cd src/comp
-          export NOGIT=0
-          export NOUPDATEBUILDVERSION=0
-          ./update-build-version.sh
-          ./update-build-system.sh
-          echo ':load bsc.hs' | ghci 2>&1 | tee ghci.log
+          echo ':load app/bsc.hs' | ghci 2>&1 | tee ghci.log
           if grep '\(Failed\|error:\)' ghci.log
           then
             echo "GHCi reported errors."

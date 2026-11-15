@@ -2,21 +2,29 @@ PWD := $(shell pwd)
 TOP := $(PWD)
 
 PREFIX   ?= $(TOP)/inst
+# Absolute, so every sub-make installs into the same directory whatever its
+# own is.
+override PREFIX := $(abspath $(PREFIX))
 BUILDDIR ?= $(TOP)/build
+override BUILDDIR := $(abspath $(BUILDDIR))
 
 .PHONY: help
 help:
 	@echo 'This Makefile will create an installation of the Bluespec Compiler tools,'
 	@echo 'in a directory named "inst".  This directory can be moved anywhere, but'
 	@echo 'the contents should remain in the same relative locations.  Intermediate'
-	@echo 'files are stored in a directory named "build".  The "clean" target will'
-	@echo 'delete the "build" directory; the "full_clean" target will delete both'
-	@echo 'the "build" and "inst" directories.'
+	@echo 'files are stored in directories named "build" and "dist-newstyle".  The'
+	@echo '"clean" target will delete those directories; the "full_clean" target will'
+	@echo 'delete the "inst" directory as well.'
 	@echo
 	@echo '    make  release      Build a release dir with the tools and docs'
 	@echo
 	@echo '    make  install-src  Build and install just the tools'
+	@echo '    make  install-solvers'
+	@echo '                       Build and install just the vendored solvers'
 	@echo '    make  install-doc  Build and install just the documentation'
+	@echo '    make  install-bluehs'
+	@echo '                       Install the tools and the bluehs script runtime'
 	@echo
 	@echo '    make  check-smoke  Run a quick smoke test'
 	@echo '    make  check-suite  Run the test suite (this will take time!)'
@@ -38,7 +46,7 @@ rem_inst:
 
 .PHONY: rem_build
 rem_build:
-	rm -fr $(BUILDDIR)
+	rm -fr $(BUILDDIR) $(TOP)/dist-newstyle $(TOP)/.ghc.environment.*
 
 # -------------------------
 
@@ -46,9 +54,20 @@ rem_build:
 install-src:
 	$(MAKE)  -C src  PREFIX=$(PREFIX)  install
 
+# The vendored solvers alone, built by their own Makefiles and installed under
+# $(PREFIX)/lib/SAT with their link names, so that a build may link the
+# installed copies by name. install-src does this first.
+.PHONY: install-solvers
+install-solvers:
+	$(MAKE)  -C src  PREFIX=$(PREFIX)  install-solvers
+
 .PHONY: install-doc
 install-doc:
 	$(MAKE)  -C doc  PREFIX=$(PREFIX)  install
+
+.PHONY: install-bluehs
+install-bluehs: install-src
+	$(MAKE)  -C src/comp  PREFIX=$(PREFIX)  BUILDDIR=$(BUILDDIR)  install-bluehs
 
 .PHONY: install-release
 install-release:

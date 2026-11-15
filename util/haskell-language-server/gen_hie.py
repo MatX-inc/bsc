@@ -8,15 +8,15 @@ os.chdir(f"{file_dir}/../../src/comp")
 # sources
 dirs = [
     ".",
+    "./app",
     "./Libs",
-    "./GHC",
     "./GHC/posix",
     "./Parser",
     "./Parser/BSV",
     "./Parser/Classic",
     "../Parsec",
-    "../vendor/stp/include_hs",
-    "../vendor/yices/include_hs",
+    "../vendor/stp/HaskellIfc",
+    "../vendor/yices/v2.6/HaskellIfc",
     "../vendor/htcl"
 ]
 

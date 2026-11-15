@@ -24,6 +24,9 @@ jobs:
       - name: Check tabs and whitespace
         shell: bash
         run: ".github/workflows/check_whitespace.sh"
+      - name: Check spelling of tool names
+        shell: bash
+        run: ".github/workflows/check_spelling.sh"
 
   build-check-testsuite:
     name: "Check: testsuite lint"
@@ -86,13 +89,16 @@ jobs:
     secrets: inherit
 
   # ------------------------------
-  # Tests using other recent versions of GHC, particularly newer ones,
-  # in anticipation of upgrading the release builds to that version
+  # Tests using other versions of GHC: newer ones, in anticipation of
+  # upgrading the release builds to that version, and the oldest version
+  # tested, 9.4.7 (Ubuntu 24.04's GHC).
 
   build-and-test-ghc-ubuntu:
     strategy:
       matrix:
         ghc:
+          - version: 9.4.7
+            hls:
           - version: 9.8.4
             hls: 2.13.0.0
           - version: 9.10.3
