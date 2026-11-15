@@ -825,13 +825,13 @@ chkTopDef r mi src_pkg isDep (Cforeign i qt on ops ni) = do
         -- We accept functions whose arguments are bits/string and whose
         -- return result is either bits/string or is a
         -- primitive action/actionvalue, or, for a function that is not
-        -- bound to a module, an ActionValue of bits or an Action (which
-        -- IConv.iConvVar makes into an action that calls the function at
-        -- each execution)
+        -- bound to a module and has no provisos, an ActionValue of bits or
+        -- an Action (which IConv.iConvVar makes into an action that calls
+        -- the function at each execution).
         isGoodResult :: CType -> Bool
         isGoodResult t = (isTypeBit t) || (isTypeString t) ||
                          (isTypeActionValue_ t) || (isTypePrimAction t) ||
-                         (isNothing ops && isActionValueOfBits t)
+                         (isNothing ops && isActionValueOfBits t && null preds)
         isActionValueOfBits t =
             isTypeActionValue t &&
             (let a = getActionValueArg t in isTypeBit a || isTypeUnit a)

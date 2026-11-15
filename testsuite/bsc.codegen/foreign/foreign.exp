@@ -84,6 +84,14 @@ compare_file ClassicActionValue_.bs.bsc-out
 # (a foreign function bound to a module keeps its own checks)
 compile_fail_error ClassicActionValue_Module.bs T0162
 
+# Only a Classic foreign function with no provisos can return an
+# ActionValue of bits or an Action: IConv wraps a reference of one in a
+# call for each execution, which it can do only where the reference needs
+# no dictionaries, so a declaration with a proviso is not a type that a
+# foreign function can have (T0012)
+compile_fail_error ClassicActionValueProviso.bs T0012
+compile_fail_error ClassicActionProviso.bs T0012
+
 # The result of a call of a foreign function that returns an ActionValue
 # exists only in a cycle in which the action that makes the call runs.  It
 # can be used (by state, a system task, another foreign call, or a
