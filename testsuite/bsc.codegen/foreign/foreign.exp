@@ -261,6 +261,24 @@ peek_pass BDPIActionValuePeekUnreach.bsv
 peek_pass BDPIActionValuePeekFold.bsv
 peek_pass BDPIActionValuePeekGuard.bsv
 peek_fail_error BDPIActionValuePeekNoFold.bsv G0139 1
+# The check sees the design as the evaluator leaves it, so which uses it
+# reports can depend on the optimization options: without
+# -keep-method-conds the evaluator folds q == q to True and prunes the
+# arm that reads the result, and with it each read of q is its own
+# expression, the comparison is not folded, and the arm and its use
+# remain.  This dependence on the options is an accepted limitation of
+# deciding the question on the elaborated design.
+foreach opts { {} {-aggressive-conditions} {-split-if} } {
+    erase "BDPIActionValuePeekKeepMethodConds.bo"
+    compile_verilog_pass BDPIActionValuePeekKeepMethodConds.bsv {} \
+        "-no-use-dpi $opts"
+}
+erase "BDPIActionValuePeekKeepMethodConds.bo"
+compile_verilog_fail_error BDPIActionValuePeekKeepMethodConds.bsv G0139 1 {} \
+    "-no-use-dpi -keep-method-conds"
+if { $vtest == 1 } {
+    compare_file BDPIActionValuePeekKeepMethodConds.bsv.bsc-vcomp-out
+}
 # splitIf and the like make their action with toPrimAction, where the
 # calls in it are made; a peek that drops that action and does not use
 # the results uses nothing
