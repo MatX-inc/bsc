@@ -23,7 +23,7 @@ FlexibleInstances is necessary.
 --
 module RSchedule(rSchedule, RAT, ratToNestedLists) where
 
-import Data.List((\\),partition,sortBy)
+import Data.List((\\),partition,sortOn)
 import Data.Maybe(maybeToList)
 import Control.Monad(when)
 import qualified Data.Map as M
@@ -60,8 +60,7 @@ type RAT = M.Map MethodId (M.Map UniqueUse Integer) -- resource allocation table
 
 -- hack to avoid sorting order differences after switching from a list to a map
 sortRatList :: [(MethodId, [(UniqueUse, Integer)])] -> [(MethodId, [(UniqueUse, Integer)])]
-sortRatList = sortBy cmp
-    where cmp x y = compare (ppString x) (ppString y)
+sortRatList = sortOn ppString
 
 ratToNestedLists :: RAT -> [(MethodId, [(UniqueUse, Integer)])]
 ratToNestedLists = sortRatList . M.toList . M.map M.toList
