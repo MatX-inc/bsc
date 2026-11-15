@@ -23,6 +23,8 @@ import Prelude hiding ((<>))
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import qualified Data.IntSet as IS
+import Control.Exception(evaluate)
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
 import Data.Maybe(isJust, fromJust)
 import System.IO.Unsafe(unsafePerformIO)
@@ -504,9 +506,27 @@ instance Show IType where
 
 -- --------------------------------
 -- NFData Instances
+-- Interior nodes are shared heavily (a type's tree size can be many
+-- orders of magnitude over its node count), so each node is traversed
+-- once: the uniques of nodes already known to be in normal form are
+-- remembered.  Normal form is permanent, so the table never goes stale.
+{-# NOINLINE rnfDoneTable #-}
+rnfDoneTable :: IORef IS.IntSet
+rnfDoneTable = unsafePerformIO $ newIORef IS.empty
+
+{-# NOINLINE rnfNode #-}
+rnfNode :: Int -> () -> ()
+rnfNode u deep = unsafePerformIO $ do
+    done <- readIORef rnfDoneTable
+    if IS.member u done
+      then return ()
+      else do
+        () <- evaluate deep
+        atomicModifyIORef' rnfDoneTable (\ s -> (IS.insert u s, ()))
+
 instance NFData IType where
-    rnf (ITForAll i k t) = rnf3 i k t
-    rnf (ITAp a b) = rnf2 a b
+    rnf (ITForAll_ u _ i k t) = rnfNode u (rnf3 i k t)
+    rnf (ITAp_ u _ a b) = rnfNode u (rnf2 a b)
     rnf (ITVar i) = rnf i
     rnf (ITCon i k s) = rnf3 i k s
     rnf (ITNum i) = rnf i
