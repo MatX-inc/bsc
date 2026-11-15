@@ -254,7 +254,7 @@ position {Test.bsv 62 23}
 ---------
 
 ----------
-Test Vector RegFile Array List ConfigReg PreludeBSV Prelude
+Test Vector Array RegFile List ConfigReg PreludeBSV Prelude
 
 Command: browsepackage list 0
 1 . {}

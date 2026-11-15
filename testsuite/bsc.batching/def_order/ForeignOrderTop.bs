@@ -1,0 +1,12 @@
+package ForeignOrderTop where
+
+import ForeignOrderScrambleB
+import ForeignOrderScrambleA
+import ForeignOrder
+
+{-# verilog mkForeignOrderTop #-}
+mkForeignOrderTop :: Module Empty
+mkForeignOrderTop = do
+  _ <- mkForeignOrderScrambleB
+  _ <- mkForeignOrderScrambleA
+  mkForeignOrder

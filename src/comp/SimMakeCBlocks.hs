@@ -1504,7 +1504,7 @@ tsortActionsAndDefs modId rId mmap ds acts reset_ids =
         decNode (Left r)  = Left (fromJust (M.lookup r unrank_map))
         decNode (Right n) = Right n
         enc_edges :: [EncEdge]
-        enc_edges = [ (encNode n, map encNode ns) | (n,ns) <- g_edges ]
+        enc_edges = sortOn fst [ (encNode n, map encNode ns) | (n,ns) <- g_edges ]
 
         -- ----------
         -- convert a graph node back into a def/action

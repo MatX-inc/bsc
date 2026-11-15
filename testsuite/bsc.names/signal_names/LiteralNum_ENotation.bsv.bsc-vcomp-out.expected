@@ -40,24 +40,24 @@ rg_start___d1  = rg_start.read;
 signed_0___d2 :: Bit 32;
 signed_0___d2  = Prelude.$signed 32'd0;
 -- IdProp signed_0___d2[IdP_from_rhs,IdP_signed]
-signed_1___d4 :: Bit 32;
-signed_1___d4  = Prelude.$signed 32'd1;
--- IdProp signed_1___d4[IdP_from_rhs,IdP_signed]
-signed_2___d6 :: Bit 32;
-signed_2___d6  = Prelude.$signed 32'd2;
--- IdProp signed_2___d6[IdP_from_rhs,IdP_signed]
-signed_3___d8 :: Bit 32;
-signed_3___d8  = Prelude.$signed 32'd3;
--- IdProp signed_3___d8[IdP_from_rhs,IdP_signed]
 _3d0679615757712823eneg3___d3 :: Real ;
 _3d0679615757712823eneg3___d3  = 3.0679615757712823e-3;
 -- IdProp _3d0679615757712823eneg3___d3[IdP_from_rhs]
+signed_1___d4 :: Bit 32;
+signed_1___d4  = Prelude.$signed 32'd1;
+-- IdProp signed_1___d4[IdP_from_rhs,IdP_signed]
 _6d135923151542565eneg3___d5 :: Real ;
 _6d135923151542565eneg3___d5  = 6.135923151542565e-3;
 -- IdProp _6d135923151542565eneg3___d5[IdP_from_rhs]
+signed_2___d6 :: Bit 32;
+signed_2___d6  = Prelude.$signed 32'd2;
+-- IdProp signed_2___d6[IdP_from_rhs,IdP_signed]
 _1d227184630308513eneg2___d7 :: Real ;
 _1d227184630308513eneg2___d7  = 1.227184630308513e-2;
 -- IdProp _1d227184630308513eneg2___d7[IdP_from_rhs]
+signed_3___d8 :: Bit 32;
+signed_3___d8  = Prelude.$signed 32'd3;
+-- IdProp signed_3___d8[IdP_from_rhs,IdP_signed]
 _2d454369260617026eneg2___d9 :: Real ;
 _2d454369260617026eneg2___d9  = 2.454369260617026e-2;
 -- IdProp _2d454369260617026eneg2___d9[IdP_from_rhs]

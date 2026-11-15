@@ -1,0 +1,12 @@
+package SelectOrderTopAB where
+
+import SelectOrderScrambleA
+import SelectOrderScrambleB
+import SelectOrder
+
+{-# verilog mkSelectOrderTopAB #-}
+mkSelectOrderTopAB :: Module Empty
+mkSelectOrderTopAB = do
+  _ <- mkSelectOrderScrambleA
+  _ <- mkSelectOrderScrambleB
+  mkSelectOrder

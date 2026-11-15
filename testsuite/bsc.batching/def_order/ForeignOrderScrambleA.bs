@@ -1,0 +1,16 @@
+package ForeignOrderScrambleA where
+
+-- Compiled after ForeignOrderScrambleB and before ForeignOrder so a's
+-- hidden def name is interned after b's.
+{-# verilog mkForeignOrderScrambleA #-}
+mkForeignOrderScrambleA :: Module Empty
+mkForeignOrderScrambleA =
+  module
+    rules
+      "r": when True ==>
+        action
+          t <- $time
+          let a = t + 1
+              y = t + 2
+          $display "%d %d" a a
+          $display "%d %d" y y

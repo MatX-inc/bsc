@@ -99,7 +99,7 @@ Typeclass
         Arith#(Real)
         Arith#(String)
         Arith#(UInt#(n))
-    position {%/Libraries/Prelude.bs 530 21 {Library Prelude}}
+    position {%/Libraries/Prelude.bs 619 21 {Library Prelude}}
 
 Bits#(a, n)
 Typeclass
@@ -129,7 +129,7 @@ Typeclass
         Bits#(Vector::Ascii#(n), _v101)   provisos (Mul#(n, 8, _v101))
         Bits#(Vector::Vector#(n, a), nsa)   provisos (Mul#(n, sa, nsa), Bits#(a, sa))
         Bits#(void, 0)
-    position {%/Libraries/Prelude.bs 351 15 {Library Prelude}}
+    position {%/Libraries/Prelude.bs 416 15 {Library Prelude}}
 Typeclass
     Bits#(type a, numeric type n)
     dependencies
@@ -157,7 +157,7 @@ Typeclass
         Bits#(Vector::Ascii#(n), _v101)   provisos (Mul#(n, 8, _v101))
         Bits#(Vector::Vector#(n, a), nsa)   provisos (Mul#(n, sa, nsa), Bits#(a, sa))
         Bits#(void, 0)
-    position {%/Libraries/Prelude.bs 351 15 {Library Prelude}}
+    position {%/Libraries/Prelude.bs 416 15 {Library Prelude}}
 Typeclass
     Bits#(type a, numeric type n)
     dependencies
@@ -185,7 +185,7 @@ Typeclass
         Bits#(Vector::Ascii#(n), _v101)   provisos (Mul#(n, 8, _v101))
         Bits#(Vector::Vector#(n, a), nsa)   provisos (Mul#(n, sa, nsa), Bits#(a, sa))
         Bits#(void, 0)
-    position {%/Libraries/Prelude.bs 351 15 {Library Prelude}}
+    position {%/Libraries/Prelude.bs 416 15 {Library Prelude}}
 Typeclass
     Bits#(type a, numeric type n)
     dependencies
@@ -213,7 +213,7 @@ Typeclass
         Bits#(Vector::Ascii#(n), _v101)   provisos (Mul#(n, 8, _v101))
         Bits#(Vector::Vector#(n, a), nsa)   provisos (Mul#(n, sa, nsa), Bits#(a, sa))
         Bits#(void, 0)
-    position {%/Libraries/Prelude.bs 351 15 {Library Prelude}}
+    position {%/Libraries/Prelude.bs 416 15 {Library Prelude}}
 
 Has_tpl_1#(t, a)
 Typeclass
@@ -231,7 +231,7 @@ Typeclass
         Has_tpl_1#(Tuple6#(a, b, c, d, e, f), a)
         Has_tpl_1#(Tuple7#(a, b, c, d, e, f, g), a)
         Has_tpl_1#(Tuple8#(a, b, c, d, e, f, g, h), a)
-    position {%/Libraries/Prelude.bs 3321 17 {Library Prelude}}
+    position {%/Libraries/Prelude.bs 3532 17 {Library Prelude}}
 
 Bitify Baz (Int 32) n:
 UNKNOWN
@@ -287,6 +287,6 @@ Tuple2#(a, b)
 
 {tpl_1 Int#(32) 32 32} {tpl_2 Int#(32) 32 0}
 
-Test Vector TaggedUnionPoly Array List PreludeBSV Prelude
+Test Vector Array List TaggedUnionPoly PreludeBSV Prelude
 TaggedUnion {TaggedUnionPoly::NSRK#(type n, type s, type r, numeric type k)} polymorphic {members {{{TaggedUnionPoly::Fin#(n, k)} N} {{TaggedUnionPoly::Fin#(s, k)} S} {{TaggedUnionPoly::Fin#(r, k)} R}}} {position {TaggedUnionPoly.bsv 9 3}}
 

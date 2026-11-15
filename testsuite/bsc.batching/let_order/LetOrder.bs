@@ -1,0 +1,18 @@
+package LetOrder(zz, aa, cc, f) where
+
+-- Top-level simple definitions ordered by Simplify.selectSimple.
+zz :: Integer
+zz = 1
+
+aa :: Integer
+aa = 2
+
+cc :: Integer
+cc = zz + aa
+
+-- Local untyped bindings grouped by TCheck.doSCC and nested by IConv.iConvLet.
+f :: Integer -> Integer
+f x = let zz2 = x + 1
+          aa2 = x + 2
+          cc2 = aa2 + zz2
+      in  cc2 + zz2 + aa2

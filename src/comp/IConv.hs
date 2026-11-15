@@ -17,7 +17,7 @@ import qualified Data.Set as S
 import qualified Data.List as List
 
 import Util(fromJustOrErr)
-import qualified SCC(tsort,Graph)
+import qualified SCC(tsortStable,Graph)
 --import Util(findDup,traces)
 --import Util(trace_answer)
 import FStringCompat(getFString)
@@ -506,20 +506,23 @@ iConvLet errh flags r env pvs ds = answer
                in  foldr addFn env d_ids
         is :: S.Set Id
         is = S.fromList d_ids
+        idIndex = M.fromList (zip d_ids [0 :: Int ..])
+        inDefOrder = List.sortOn (\j -> M.findWithDefault maxBound j idIndex)
         graph :: SCC.Graph Id -- [(Id,[Id])]
         graph = [(i, local_is) |
                    d@(CLValueSign (CDefT i _ _ _) _) <- ds,
                    -- self-recursion is caught by unrec, below
                    let local_is =
-                         filter ((/=) i)
-                           (S.toList
-                              ((snd (getFVDl d)) `S.intersection` is))]
+                         inDefOrder
+                           (filter ((/=) i)
+                              (S.toList
+                                 ((snd (getFVDl d)) `S.intersection` is)))]
         ds' :: [CDefl]
         ds' = case loop_test of
                 Left cycles -> internalError "iConvLet.cycles"
                 Right is' -> map unrec (reorderDs ds is')
         loop_test :: Either [[Id]] [Id]
-        loop_test = SCC.tsort graph
+        loop_test = SCC.tsortStable graph
         unrec :: CDefl -> CDefl
         unrec d@(CLValueSign (CDefT i vs qt@(CQType ctx ft) cs) me) =
            if S.member i (snd (getFVDl d)) then

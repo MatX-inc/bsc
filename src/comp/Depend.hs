@@ -88,10 +88,10 @@ chkDeps errh flags name = do
         (pkg, _, warns) <- parseFile errh flags False name
         pi <- getInfo errh flags gflags name pkg warns
         let initMap = DM.singleton (pkgName pi) pi
-        (errs, piMap) <- transClose errh flags ([], initMap) (imports pi)
+        (errs, piMap, revPis) <- transClose errh flags ([], initMap, [pi]) (imports pi)
         when (not $ null errs) $ bsError errh errs
 
-        let pis = DM.elems piMap
+        let pis = reverse revPis
         case tsort [ (n, is) | PkgInfo { pkgName = n, imports = is } <- pis ] of
             Left cycle@(firstImport:_) ->
                 bsError errh [(getPosition firstImport,
@@ -219,18 +219,19 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
 -- Compute the transitive closure of all imports.
 -- The `done' arg are the already visited packages,
 -- and the `ns' arg are the names of the remaining ones.
-transClose :: ErrorHandle -> Flags -> ([EMsg], DM.Map PkgName PkgInfo) -> [PkgName] ->
-              IO ([EMsg], DM.Map PkgName PkgInfo)
+transClose :: ErrorHandle -> Flags ->
+              ([EMsg], DM.Map PkgName PkgInfo, [PkgInfo]) -> [PkgName] ->
+              IO ([EMsg], DM.Map PkgName PkgInfo, [PkgInfo])
 transClose errh flags done [] = return done
-transClose errh flags (errs,done) (n:ns) = do
+transClose errh flags (errs,done,revPis) (n:ns) = do
         --putStr (ppReadable n)
         case DM.lookup n done of
-             Just _ -> transClose errh flags (errs,done) ns
+             Just _ -> transClose errh flags (errs,done,revPis) ns
              Nothing -> do
                 epi <- getPkgInfo errh flags n
                 case epi of
-                  Left  em -> transClose errh flags (em:errs,done) (ns)
-                  Right pi -> transClose errh flags (errs, DM.insert n pi done) (ns ++ imports pi)
+                  Left  em -> transClose errh flags (em:errs,done,revPis) (ns)
+                  Right pi -> transClose errh flags (errs, DM.insert n pi done, pi:revPis) (ns ++ imports pi)
 
 -- This tries to return a list of all files that will be generated from
 -- this file after codegen.
@@ -467,8 +468,8 @@ findPackages errh flags name = do
   let gflags = [ mkId noPosition (mkFString s) | s <- genName flags ]
   (pkg, _, warns) <- parseFile errh flags True name
   pi <- getInfo errh flags gflags name pkg warns
-  (errs, piMap) <- transClose errh flags ([], DM.singleton (pkgName pi) pi) (imports pi)
-  return (errs, DM.elems piMap)
+  (errs, _piMap, revPis) <- transClose errh flags ([], DM.singleton (pkgName pi) pi, [pi]) (imports pi)
+  return (errs, reverse revPis)
 
 -- generate the file name dependencies for filename
 -- A package depends on its own source file name

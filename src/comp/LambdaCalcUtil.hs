@@ -27,10 +27,10 @@ import qualified Data.Set as S
 import Control.Monad(when)
 import Control.Monad.State(State, runState, gets, get, put)
 import Data.Maybe(isJust, catMaybes)
-import Data.List(intercalate, partition, union, nub)
+import Data.List(intercalate, partition, union, nub, sortOn)
 
 import Util(makePairs, flattenPairs, allSame, fst2of3)
-import SCC(tsort)
+import SCC(tsortStable)
 
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle)
 import Flags
@@ -239,30 +239,36 @@ getAExprDefs def_map known (_:es) = getAExprDefs def_map known es
 -- XXX be sequenced properly (in case other methods have to be called after).
 -- XXX See "makeMethodTemps".
 --
-tsortActionsAndDefs :: MethodOrderMap -> DefMap ->
+-- defOrder gives each def its position in the module's definition list.
+tsortActionsAndDefs :: MethodOrderMap -> DefMap -> M.Map AId Int ->
                        M.Map AId (AType, AExpr) -> [AAction] ->
                        ([Either ADef AAction], M.Map (AId, AId) (AId, AType))
-tsortActionsAndDefs mmap defmap uses acts =
+tsortActionsAndDefs mmap defmap defOrder uses acts =
     let
-        -- we will create a graph where the edges are:
-        -- * "Left AId" to represent a def (by it's name)
-        -- * "Right Integer" to represent an action (by it's position in acts)
-
-        -- The use of Left and Right was chosen to make Defs lower in
-        -- the Ord order than Actions.  This way, tsort puts them first.
+        -- Graph nodes:
+        -- * "Left AId" represents a def (by its name)
+        -- * "Right Integer" represents an action (by its position in acts)
+        --
+        -- Nodes are listed defs first (in definition order), followed by
+        -- actions in their user-specified order, so tsortStable preserves
+        -- Defs < Actions (Left < Right) while breaking def ties by
+        -- elaboration order rather than Ord AId.
 
         -- ----------
         -- Defs
 
-        -- find the defs
+        -- find the defs, in definition order
         used_defs :: [ADef]
-        used_defs = map (\ (i, (t, e)) -> ADef i t e []) (M.toList uses)
+        used_defs = sortOn (\ d -> M.findWithDefault maxBound (adef_objid d) defOrder)
+                        (map (\ (i, (t, e)) -> ADef i t e []) (M.toList uses))
+        used_def_set = S.fromList (map adef_objid used_defs)
 
-        -- make edges for def-to-def dependencies
+        -- make edges for def-to-def dependencies within used_defs
         def_edges =
-            [ (Left i, map Left uses)
+            [ (Left i, map Left uses')
                   | ADef i _ e _ <- used_defs,
-                    let uses = M.keys $ getAExprDefs defmap M.empty [e] ]
+                    let uses' = filter (`S.member` used_def_set) $
+                                  M.keys $ getAExprDefs defmap M.empty [e] ]
 
         -- ----------
         -- Actions
@@ -311,9 +317,10 @@ tsortActionsAndDefs mmap defmap uses acts =
         -- action is called
 
         act_def_edges =
-            [ (Right n, map Left uses)
+            [ (Right n, map Left uses')
                   | (n, a) <- numbered_acts,
-                    let uses = M.keys $ getAActionDefs defmap M.empty [a] ]
+                    let uses' = filter (`S.member` used_def_set) $
+                                  M.keys $ getAActionDefs defmap M.empty [a] ]
 
         -- ----------
         -- Action method to Action method edges
@@ -432,19 +439,17 @@ tsortActionsAndDefs mmap defmap uses acts =
                                           , def_edges
                                           ]
 
-        -- Convert the graph to the format expected by tsort.
-        g_edges = M.toList g
+        -- Nodes in tie-break order: defs first (in definition order),
+        -- followed by actions in their user-specified order.
+        nodes = map (Left . adef_objid) used_defs ++ map (Right . fst) numbered_acts
+        g_edges = [ (n, M.findWithDefault [] n g) | n <- nodes ]
 
     in
       if (not (null bad_acts))
       then internalError ("tsortActionsAndDefs: unexpected inlining:\n" ++ ppReadable bad_acts)
       else
-        -- tsort returns Left if there is a loop, Right if sorted.
-        -- (In the absence of restrictive edges, tsort uses Ord to put
-        -- the lower valued nodes first.  Thus, we have chosen the node
-        -- representation to put Defs first, followed by Actions in the
-        -- order that they were give by the user.)
-        case (tsort g_edges) of
+        -- tsortStable returns Left if there is a loop, Right if sorted.
+        case (tsortStable g_edges) of
             Left is -> internalError ("tsortActionsAndDefs: cyclic " ++
                                       ppReadable is)
             Right is ->

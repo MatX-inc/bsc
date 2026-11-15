@@ -61,9 +61,9 @@ rule_RL_r1_sysTb =
      let { (def_state__h325 :: Bit #2) = meth_read_RegN (inst_state__sysTb state0)
 	 ; (def_c2___d6 :: Bit #51) = meth_read_RegN (inst_c2__sysTb state0)
 	 ; (def_c1___d5 :: Bit #51) = meth_read_RegN (inst_c1__sysTb state0)
+	 ; (def_state_EQ_1___d9 :: Bool) = primEQ def_state__h325 (1 :: Bit #2)
 	 ; (def_add___d8 :: Bit #51) = noinline_add def_c2___d6 (2 :: Bit #51)
 	 ; (def_add___d7 :: Bit #51) = noinline_add def_c1___d5 (3 :: Bit #51)
-	 ; (def_state_EQ_1___d9 :: Bool) = primEQ def_state__h325 (1 :: Bit #2)
 	 ; (act1 :: (Bool, MOD_sysMethods, Bit #51)) =
 	       meth_start_and_result_sysMethods def_c1___d5 def_c2___d6 (inst_gcd__sysTb state0)
 	 ; (guard1 :: Bool) = fst3 act1

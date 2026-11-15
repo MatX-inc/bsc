@@ -1,0 +1,92 @@
+# Issue: independent defs were ordered by Ord AId (string-intern order) or
+# PSQ tree shape in AExpand, ASyntaxUtil, foreign-call blocks, and AConv's
+# map-derived local_defs list.
+# Fix: break topological-sort ties by input position and emit AConv defs in
+# elaboration order.
+# Probe: compare generated Verilog alone vs. behind scrambler batches, under
+# -trace-intern-reverse, and across .ba -> .v regeneration.
+
+batching_verilog_pair ForeignOrder.bs mkForeignOrder ForeignOrderTop.bs mkForeignOrderTop {ForeignOrderScrambleA.bs ForeignOrderScrambleB.bs}
+reverse_intern_same_verilog ForeignOrder.bs mkForeignOrder
+check_verilog_regen ForeignOrder.bs mkForeignOrder
+
+batching_verilog_pair SelectOrder.bs mkSelectOrder SelectOrderTopBA.bs mkSelectOrderTopBA {SelectOrderScrambleA.bs SelectOrderScrambleB.bs}
+
+erase SelectOrder.bo
+erase SelectOrderScrambleA.bo
+erase SelectOrderScrambleB.bo
+erase mkSelectOrder.v
+compile_verilog_pass SelectOrderTopAB.bs mkSelectOrderTopAB
+compare_file mkSelectOrder.v mkSelectOrder.oneshot.v
+
+reverse_intern_same_verilog SelectOrder.bs mkSelectOrder
+check_verilog_regen SelectOrder.bs mkSelectOrder
+
+# Extract the synthesized module order emitted by orderGens.
+proc codegen_module_order { logfile } {
+    global srcdir subdir
+    set fp [open [file join [absolute $srcdir] $subdir $logfile] r]
+    set txt [read $fp]
+    close $fp
+    set mods [list]
+    foreach line [split $txt "\n"] {
+        if { [regexp {^code generation for ([^ ]+) starts$} $line -> m] } {
+            lappend mods $m
+        }
+    }
+    return $mods
+}
+
+proc check_codegen_order { testname logfile expected } {
+    set got [codegen_module_order $logfile]
+    if { $got eq $expected } {
+        pass $testname
+    } else {
+        fail "$testname: got {$got}, expected {$expected}"
+    }
+}
+
+if { $vtest == 1 } {
+    set expected_order_gens {mkSubAlpha mkUnrefMid mkSubZeta mkLeafHelper mkOrderParent}
+
+    erase OrderGens.bo
+    with_normal_intern_order {
+        compile_verilog_pass OrderGens.bs {}
+    }
+    check_codegen_order "OrderGens normal order" \
+        [make_bsc_vcomp_output_name OrderGens.bs] $expected_order_gens
+    foreach m $expected_order_gens {
+        move "$m.v" "$m.normal.v"
+    }
+
+    erase OrderGens.bo
+    with_normal_intern_order {
+        compile_verilog_pass OrderGens.bs {} "-trace-intern-reverse"
+    }
+    check_codegen_order "OrderGens reverse-intern order" \
+        [make_bsc_vcomp_output_name OrderGens.bs] $expected_order_gens
+    foreach m $expected_order_gens {
+        compare_file "$m.v" "$m.normal.v"
+    }
+
+    erase OrderGens.bo
+    erase OrderGensScrambleA.bo
+    erase OrderGensScrambleB.bo
+    erase OrderGensTop.bo
+    compile_verilog_pass OrderGensTop.bs mkOrderGensTop
+    set batched_all [codegen_module_order [make_bsc_vcomp_output_name OrderGensTop.bs]]
+    set batched_pkg [list]
+    foreach m $batched_all {
+        if { $m in $expected_order_gens } {
+            lappend batched_pkg $m
+        }
+    }
+    if { $batched_pkg eq $expected_order_gens } {
+        pass "OrderGens batched -u order"
+    } else {
+        fail "OrderGens batched -u order: got {$batched_pkg}, expected {$expected_order_gens}"
+    }
+    foreach m $expected_order_gens {
+        compare_file "$m.v" "$m.normal.v"
+    }
+}

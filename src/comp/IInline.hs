@@ -4,7 +4,7 @@ import Util
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.Array(listArray, (!))
-import SCC(tsort)
+import SCC(tsortStable)
 import PPrint
 import ErrorUtil
 import Id
@@ -20,15 +20,17 @@ iInline :: Bool -> IModule a -> IModule a
 iInline inlSimp = iInline1 . iInlineS inlSimp -- . iSortDs
 --iInline inlSimp = iInlineAll
 
--- Sort definitions in dependency order
+-- Sort definitions in dependency order, breaking ties between independent
+-- definitions by their position in the input list rather than Ord Id.
 iSortDs :: IModule a -> IModule a
 iSortDs imod@(IModule { imod_local_defs = ds }) =
-    let g = [(i, fdVars e) | IDef i _ e _ <- ds ]
+    let s = S.fromList [ i | IDef i _ _ _ <- ds ]
+        g = [ (i, filter (`S.member` s) (fdVars e)) | IDef i _ e _ <- ds ]
         m = M.fromList [(i, d) | d@(IDef i _ _ _) <- ds]
         get i = case M.lookup i m of
                 Nothing -> internalError ("iSortDs: lookup: " ++ ppReadable i)
                 Just d -> d
-        ds' = case tsort g of
+        ds' = case tsortStable g of
                 Left iss -> internalError ("iSortDs: cyclic definition: " ++ ppReadable iss)
                 Right is -> map get is
     in  imod { imod_local_defs = ds' }

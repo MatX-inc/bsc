@@ -1,0 +1,18 @@
+package OrderGensScrambleA where
+
+-- Interns the child and helper names of OrderGens in reverse declaration
+-- order before OrderGens is compiled under -u.
+{-# verilog mkOrderGensScrambleA #-}
+mkOrderGensScrambleA :: Module Empty
+mkOrderGensScrambleA =
+  module
+    mkLeafHelper :: Reg (Bit 8) <- mkReg 1
+    mkSubZeta    :: Reg (Bit 8) <- mkReg 2
+    mkUnrefMid   :: Reg (Bit 8) <- mkReg 3
+    mkSubAlpha   :: Reg (Bit 8) <- mkReg 4
+    oddStep      :: Reg (Bit 8) <- mkReg 5
+    evenStep     :: Reg (Bit 8) <- mkReg 6
+    rules
+      "tickA": when True ==>
+        mkLeafHelper := mkSubZeta._read + mkUnrefMid._read +
+                        mkSubAlpha._read + oddStep._read + evenStep._read

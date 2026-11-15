@@ -1,0 +1,20 @@
+package SelectOrderScrambleB where
+
+import Vector
+
+-- Same shape with k renamed n so j's generated select names are interned
+-- here when compiled before SelectOrderScrambleA.
+{-# verilog mkSelectOrderScrambleB #-}
+mkSelectOrderScrambleB :: Module Empty
+mkSelectOrderScrambleB =
+  module
+    va :: Vector 4 (Reg (UInt 8)) <- replicateM (mkReg 0)
+    n  :: Reg (UInt 2) <- mkReg 0
+    j  :: Reg (UInt 2) <- mkReg 1
+    s  :: Reg (UInt 8) <- mkRegU
+    rules
+      "step": when True ==>
+        action
+          s := (select va n)._read + (select va j)._read
+          n := n + 1
+          j := j + 1
