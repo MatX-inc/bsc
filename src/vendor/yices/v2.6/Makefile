@@ -36,6 +36,12 @@ LIBGMPA=$(LIBDIRGMP)/libgmp.a
 BUILD_ARGS=libyices_install_name=libyices.2.dylib LIBS=$(LIBGMPA)
 endif
 
+# yices stamps its library with the day of the build (its
+# utils/make_source_version, run on every make); the stamp written here
+# carries the source's commit date instead, so the bytes do not depend on
+# when the build ran.
+VERSION_ARGS=MKVERSION=$(PWD)/make_source_version
+
 .PHONY: all
 all: install
 
@@ -45,7 +51,7 @@ ifeq ($(YICES_STUB),)
 	(cd $(YICES_SRC) ; \
 		autoconf ; \
 		$(CONFIGURE_ENV) ./configure --prefix=$(YICES_INST) ; \
-		$(MAKE) $(BUILD_ARGS); \
+		$(MAKE) $(BUILD_ARGS) $(VERSION_ARGS); \
 		$(MAKE) install \
 		)
 else
