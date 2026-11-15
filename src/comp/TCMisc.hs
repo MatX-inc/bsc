@@ -883,6 +883,28 @@ reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
         f incoherent [] = return Nothing
         f incoherent (i@(Inst _ _ (_ :=> h_orig) _):is)
           | useLegacyInstIndex && not (canMatch pr' h_orig) = f incoherent is
+        -- Most candidates do not match (a predicate on a type variable
+        -- gets every instance of the class from the index).  When the
+        -- instance's own variables cannot be confused with the
+        -- predicate's, the head as declared (once normalized) decides
+        -- that as well as a freshened copy does, so the instance is not
+        -- instantiated.  Its fresh variables are still allotted, and the
+        -- capture check still sees the freshened head (built only if
+        -- the check is consulted), so that nothing later changes: not
+        -- the generated names, and not the order in which identifiers
+        -- are first looked at.
+        f incoherent (i@(Inst _ vs (_ :=> h_orig) _):is)
+          | not doVarTrace,
+            -- substitution also expands synonyms and folds type
+            -- functions in the head; do that much
+            headCannotMatch (apSub nullSubst h_orig),
+            all (`notElem` pred_tvs) vs = do
+                let poss = getVPredPositions v'
+                    getpos v = getMostUsefulPosition poss (getPosition v)
+                ts <- newTVarsLazy [ (kind v, getpos v) | v <- vs ]
+                let h = apSub (mkSubst (zip vs ts)) h_orig
+                    chk = earlierInstanceMayCapture pr' h
+                f (chk || incoherent) is
         f incoherent (i:is) = do
                 (m_tv, i'@(Inst _ _ (_ :=> h) _)) <- newInst i (getVPredPositions v')
                 x <- byInst v' i'
@@ -951,6 +973,15 @@ reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
                          -- Record the class so warnTransitiveIncoherent can check allowIncoherent.
                          sb''  = sb' { solvedClass = Just c }
                      return $ Just (Reduction qs sb'' fd_subst minst mpkg)
+
+        pred_tvs = tv pr'
+        -- exactly when matchTop (with one-way matching, as in byInst)
+        -- gives NoMatch
+        headCannotMatch (IsIn c_h ts_h) =
+            c_h /= c ||
+            and [ isNothing (matchList (boolCompress nbs ts_h)
+                                       (boolCompress nbs ts'))
+                | bs <- funDeps c, let nbs = map not bs ]
 
     let is' = genInsts c bound_tyvars dvs pr'
     r <- f False is'

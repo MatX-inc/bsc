@@ -11,6 +11,7 @@ module TIMonad(
         freshInst,
         VPred(..), getVPredPositions, expandSynVPred,
         EPred(..), Infer2, CheckT, TaskCheckT,
+        newTVarsLazy,
         getBoundTVs, getTopBoundTVs, addBoundTVs, popBoundTVs,
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
         getNumProven, getNumRefuted, addNumDecided,
@@ -436,6 +437,23 @@ newTVar msg k x = do
            when doVarTrace $ traceM ("newTVar: " ++ show n ++ " " ++ msg);
            return (TVar v)
   loopVar
+
+-- The type variables that newTVar would make for each (kind, position),
+-- allotted in one step; the variables themselves are built on demand.
+newTVarsLazy :: [(Kind, Position)] -> TI [Type]
+newTVarsLazy kps = do
+  isBound <- isBoundTV
+  let go next [] = (next, [])
+      go next rest@((k, pos) : rest') =
+          let v = TyVar (enumId "tctyvar" pos next) next k
+          in  if isBound v then go (next + 1) rest
+              else let (end, ts) = go (next + 1) rest'
+                   in  (end, TVar v : ts)
+  lift $ do
+    s <- get
+    let (end, ts) = go (tsNextTyVar s) kps
+    put (s { tsNextTyVar = end })
+    return ts
 
 -- convenience function for getting the TyVar
 -- (when create a TVar for marking a place in the subst to trim back to)
