@@ -930,9 +930,13 @@ iExpandModuleDef (IDef i t e _) = do
     -- iExpandIface:
     --   turns a struct of ILams into IEFace: evaluates method bodies and takes
     --   the methods out of the interface struct
-    ifcs <- iExpandIface mod_id clkRst ifc'
+    ifcs0 <- iExpandIface mod_id clkRst ifc'
 
     popIfcSchedNameScope
+
+    -- meant to give each rule or method that runs a converted foreign
+    -- call a call of its own; has no effect yet, see separateConvertedCalls
+    ifcs <- separateConvertedCalls ifcs0
 
     let args'  = args  ++ default_args
     let vargs' = vargs ++ default_vargs

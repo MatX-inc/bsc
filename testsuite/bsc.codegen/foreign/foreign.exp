@@ -173,6 +173,14 @@ peek_fail_error BDPIActionValueConvertTwice.bsv G0139 1
 # ... and not where only one of them runs in a cycle, or where nothing
 # uses the result
 peek_pass BDPIActionValueConvertTwiceExclusive.bsv
+# A converted action that two rules, or a rule and a method, run shares
+# one call across them: the Verilog makes the call once and they read one
+# result, the Bluesim code makes a call for every execution, and nothing
+# reports it.  BDPIActionValueConvertRules.bsv and
+# BDPIActionValueConvertMethodRule.bsv are reproducers for that open
+# case; they are not run here, because the two simulations disagree.
+# Add them when a rule or method that runs a converted action is given a
+# call of its own.
 
 # peekGet reads the value of an ActionValue without running it, so the
 # call in the action is not made and its result does not exist.  A value
