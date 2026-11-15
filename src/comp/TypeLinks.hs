@@ -10,7 +10,8 @@
 -- cell, F: the final expression of a surviving cell); V a cell whose value
 -- is a constant or a leaf; D, M the defs and merges at the end of
 -- elaboration; P the named ends; T the types; F the field types of the
--- data and struct types; B whether a type has an instance of Bits; I each
+-- data and struct types; E the tag value and tag width of a data type's
+-- constructors; B whether a type has an instance of Bits; I each
 -- state instance's Verilog module; G what each instance argument feeds in
 -- that module; Q the number of calls of each instance method in the final
 -- expressions; L the source position of a one-constructor type's
@@ -251,8 +252,8 @@ ctN, ctC, ctK, ctAS, ctAR, ctAF, ctV, ctD, ctM, ctP, ctT, ctErr, ctDeferred,
   ctInline, ctSkipConst, ctF, ctI, ctQ, ctFMissing, ctFCut, ctRootAlias,
   ctDecided, ctOutPayload, ctFallInline, ctPreRewrite, ctPreRewriteSeen,
   ctB, ctNormRec, ctNormType, ctNormLeft, ctPreRewriteInline, ctPreRewriteLost,
-  ctPreRewriteCarried, ctPreRewriteZero, ctG, ctL, ctX, ctLNone, ctClass0,
-  nCounters :: Int
+  ctPreRewriteCarried, ctPreRewriteZero, ctG, ctL, ctX, ctLNone, ctE,
+  ctETypes, ctEDefault, ctENone, ctClass0, nCounters :: Int
 ctN = 0
 ctC = 1
 ctK = 2
@@ -297,7 +298,11 @@ ctG = 40
 ctL = 41
 ctX = 42
 ctLNone = 43        -- applications whose head has no position
-ctClass0 = 44       -- cells by class: ctClass0 + class
+ctE = 44
+ctETypes = 45       -- data types that have E records
+ctEDefault = 46     -- such types whose tags are the constructor numbers at the least width
+ctENone = 47        -- data types whose constructors were not found
+ctClass0 = 48       -- cells by class: ctClass0 + class
 nCounters = ctClass0 + nClasses
 
 counterNames :: [(Int, String)]
@@ -319,7 +324,9 @@ counterNames =
       (ctPreRewriteLost, "pre-rewrite-lost"),
       (ctPreRewriteCarried, "pre-rewrite-carried"),
       (ctPreRewriteZero, "pre-rewrite-zero"), (ctG, "G"), (ctL, "L"),
-      (ctX, "X"), (ctLNone, "L-no-position") ] ++
+      (ctX, "X"), (ctLNone, "L-no-position"), (ctE, "E"),
+      (ctETypes, "E-types"), (ctEDefault, "E-default-types"),
+      (ctENone, "E-no-declaration") ] ++
     [ (ctClass0 + c, "cells-" ++ clsName c) | c <- [0 .. nClasses - 1] ]
 
 -- -----
@@ -1801,16 +1808,19 @@ tlNamed l kname declared width name =
 
 -- Write the named ends (P), with the declared source type of a leaf where
 -- the lookup has one; the call counts (Q) of the given instance methods
--- and of any other method called; the field types (F) and the types (T);
--- and the counts; and close the file.  fieldsOf gives a data or struct
--- type's constructor payloads and fields as (constructor number, field
--- number, name, type), or Nothing when it has no declaration to read.
--- bitsOf says whether a type's constructor has an instance of Bits
--- (Nothing: not known), for the B records.
+-- and of any other method called; the field types (F), the constructor
+-- encodings (E) and the types (T); and the counts; and close the file.
+-- fieldsOf gives a data or struct type's constructor payloads and fields
+-- as (constructor number, field number, name, type), or Nothing when it
+-- has no declaration to read.  encOf gives a data type's constructors as
+-- (constructor number, tag value, tag bits), or Nothing likewise.  bitsOf
+-- says whether a type's constructor has an instance of Bits (Nothing: not
+-- known), for the B records.
 tlFinalEnd :: TLog -> (String -> String -> Maybe IType) ->
               (IType -> Maybe [(Int, Int, String, Maybe IType)]) ->
+              (IType -> Maybe [(Integer, Integer, Integer)]) ->
               (IType -> Maybe Bool) -> [String] -> IO ()
-tlFinalEnd l declared fieldsOf bitsOf methods = do
+tlFinalEnd l declared fieldsOf encOf bitsOf methods = do
   safely l $ do
     leafs <- reverse <$> readIORef (tl_leafl l)
     forM_ leafs $ \ (n, kname, name, own, width) -> safely l $ do
@@ -1843,6 +1853,40 @@ tlFinalEnd l declared fieldsOf bitsOf methods = do
   -- have a bit representation has an instance of Bits; then every type
   frecs <- reading l [] (fieldRecords l fieldsOf bitsOf)
   safely l $ forM_ frecs $ \ b -> put l ctF b
+  -- the constructor encodings: for a data type, one record a constructor
+  -- with its tag value when packed and the bits of the tag.  Written for
+  -- every data type with more than one constructor, and for a type with
+  -- one constructor only when its tag is not the usual one (no bits): an
+  -- enumeration of one value that was given an encoding.
+  safely l $ do
+    ts <- reverse <$> readIORef (tl_types l)
+    forM_ (zip [0 :: Int ..] ts) $ \ (tid, t) -> safely l $ do
+      cls <- reading l clsOther (evaluate (classOf t))
+      when (cls == clsData) $ do
+        menc <- reading l Nothing $ do
+                  r <- evaluate (encOf t)
+                  case r of
+                    Nothing -> return Nothing
+                    Just es -> do
+                      -- the list and its numbers, read under the handler
+                      es' <- evaluate (foldr (\ (c, v, w) xs ->
+                                                  c `seq` v `seq` w `seq` ((c, v, w) : xs))
+                                             [] es)
+                      _ <- evaluate (length es')
+                      return (Just es')
+        case menc of
+          Nothing -> bump l ctENone
+          Just es -> do
+            let n = length es
+                -- the least number of bits that holds n tags
+                least = length (takeWhile (< toInteger n) (iterate (* 2) 1))
+                usual = and [ v == c && w == toInteger least | (c, v, w) <- es ]
+            when (n > 1 || not usual) $ do
+              bump l ctETypes
+              when usual $ bump l ctEDefault
+              forM_ es $ \ (c, v, w) ->
+                put l ctE (B.string7 "E " <> B.intDec tid <> sp <> B.string7 (show c) <> sp <>
+                           B.string7 (show v) <> sp <> B.string7 (show w))
   safely l $ do
     ts <- reverse <$> readIORef (tl_types l)
     forM_ (zip [0 :: Int ..] ts) $ \ (tid, t) -> safely l $ do

@@ -99,7 +99,7 @@ import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlRoot, tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr,
                  tlFinalTuple, tlNamed, tlRootAliases, tlAlias, tlClosedExpr,
                  tlClosed, tlUnitExpr, tlInstance, tlInstArg, tlFinalEnd)
-import TypeLinksDecl(tlFieldTypes, tlBitsInstance)
+import TypeLinksDecl(tlFieldTypes, tlConEncodings, tlBitsInstance)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
 
@@ -471,6 +471,7 @@ iExpandTL tl_file errh flags symt alldefs atf_cache is_noinlined_func pps def@(I
                                     rules_cleanup ifc (go_port_types go)
                                     (changedOrId norm)
                                     (tlFieldTypes flags symt (changedOrId norm))
+                                    (tlConEncodings symt)
                                     (tlBitsInstance symt)
   return (imod, tl_end)
 
@@ -977,16 +978,18 @@ iExpandCapture iheap ptr_map ptrm0 ptr_info args caplog =
 -- instance arguments) and the saved port types.  Run after the module was
 -- forced, so every cell, name and type read here is already evaluated.
 -- norm is the type normalizer with the cache of the end of elaboration;
--- field_types and has_bits read the symbol table (TypeLinksDecl).
+-- field_types, con_encodings and has_bits read the symbol table
+-- (TypeLinksDecl).
 iExpandTypeLinks :: TLog -> IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
                     [(HeapPointer, (HExpr, Maybe HDef))] ->
                     [(Id, HStateVar)] -> HRules -> HRules -> [HEFace] ->
                     PortTypeMap ->
                     (IType -> IType) ->
                     (IType -> Maybe [(Int, Int, String, Maybe IType)]) ->
+                    (IType -> Maybe [(Integer, Integer, Integer)]) ->
                     (IType -> Maybe Bool) -> IO ()
 iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules_clean)
-                 ifc port_types norm field_types has_bits = do
+                 ifc port_types norm field_types con_encodings has_bits = do
     tlFinalBegin l norm
     let cellExpr p = case IM.lookup p iheap of
                        Just (HNF { hc_pexpr = P _ e }) -> Just e
@@ -1164,7 +1167,7 @@ iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules
     let meth_names = [ getIdString inst ++ "." ++ getIdBaseString m
                      | (inst, sv) <- insts,
                        Method { vf_name = m } <- vFields (isv_vmi sv) ]
-    tlFinalEnd l declared field_types has_bits meth_names
+    tlFinalEnd l declared field_types con_encodings has_bits meth_names
 
 -----------------------------------------------------------------------------
 

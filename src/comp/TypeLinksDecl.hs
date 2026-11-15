@@ -1,14 +1,15 @@
 -- Type links (prototype): the field types of a data or struct type, read
 -- from its declaration in the symbol table, for the F records of the .tl
--- file (TypeLinks), and whether a type has an instance of Bits, read from
--- the class's instance list, for the B records.  Used only after
--- elaboration.
+-- file (TypeLinks); the tag encodings of a data type's constructors, read
+-- from the same constructor entries, for the E records; and whether a
+-- type has an instance of Bits, read from the class's instance list, for
+-- the B records.  Used only after elaboration.
 --
 -- Nothing here makes an identifier or a string: a constructor's or
 -- field's scheme is instantiated at the type's own arguments by replacing
 -- its generic variables, and converted as IConv converts any type; an
 -- instance's head is only matched.
-module TypeLinksDecl(tlFieldTypes, tlBitsInstance) where
+module TypeLinksDecl(tlFieldTypes, tlConEncodings, tlBitsInstance) where
 
 import qualified Data.IntMap as IM
 import qualified Data.Set as S
@@ -58,15 +59,6 @@ tlFieldTypes flags symt norm t =
 
     conv ct = norm (iConvT flags symt ct)
 
-    -- the entries of the type ti under the name i, also looked up with
-    -- ti's package as the qualifier
-    entries :: (Id -> Maybe [a]) -> (a -> Id) -> Id -> Id -> [a]
-    entries find owner ti i =
-        let pick xs = [ x | x <- xs, qualEq ti (owner x) ]
-        in  case maybe [] pick (find i) of
-              [] -> maybe [] pick (find (setIdQual i (getIdQual ti)))
-              xs -> xs
-
     conRows ti cargs c =
         case entries (findCon symt) ci_id ti c of
           [] -> Nothing
@@ -102,6 +94,35 @@ tlFieldTypes flags symt norm t =
             else IM.fromList <$> mapM gen (zip gs cargs)
     gen (TGen _ n, ct) = Just (n, ct)
     gen _ = Nothing
+
+-- the entries of the type ti under the name i, also looked up with ti's
+-- package as the qualifier
+entries :: (Id -> Maybe [a]) -> (a -> Id) -> Id -> Id -> [a]
+entries find owner ti i =
+    let pick xs = [ x | x <- xs, qualEq ti (owner x) ]
+    in  case maybe [] pick (find i) of
+          [] -> maybe [] pick (find (setIdQual i (getIdQual ti)))
+          xs -> xs
+
+-- The tag encodings of the constructors of the data type t, in the order
+-- of its declaration: for each constructor its number, its tag value when
+-- packed and the number of bits of the tag.  These are the symbol
+-- table's own numbers, the ones the derived Bits instance, a constructor
+-- with no argument and a constructor test are compiled with; they belong
+-- to the type constructor and do not depend on t's arguments.  Nothing
+-- when t is not a data type or a constructor of it is not in the symbol
+-- table.
+tlConEncodings :: SymTab -> IType -> Maybe [(Integer, Integer, Integer)]
+tlConEncodings symt t =
+    case fst (splitITAp t) of
+      ITCon ti _ (TIdata { tidata_cons = cs }) -> mapM (enc ti) cs
+      _ -> Nothing
+  where
+    enc ti c =
+        case entries (findCon symt) ci_id ti c of
+          [] -> Nothing
+          ci : _ -> let cti = ci_taginfo ci
+                    in  Just (conNo cti, conTag cti, tagSize cti)
 
 -- a type with its generic variables replaced; Nothing when one has no
 -- replacement or the type has a variable
