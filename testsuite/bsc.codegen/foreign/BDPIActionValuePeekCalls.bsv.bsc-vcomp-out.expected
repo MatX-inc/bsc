@@ -1,0 +1,5 @@
+checking package dependencies
+compiling BDPIActionValuePeekCalls.bsv
+code generation for mkBDPIActionValuePeekCalls starts
+Verilog file created: mkBDPIActionValuePeekCalls.v
+All packages are up to date.

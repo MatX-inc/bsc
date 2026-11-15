@@ -1,0 +1,8 @@
+checking package dependencies
+compiling BDPIActionValuePeekModCase.bsv
+code generation for mkBDPIActionValuePeekModCase starts
+Error: "BDPIActionValuePeekModCase.bsv", line 11, column 4: (G0070)
+  The expression for a module instantiation could not be evaluated. Modules
+  must be determined at compile time and cannot be computed dynamically.
+  During elaboration of `mkBDPIActionValuePeekModCase' at
+  "BDPIActionValuePeekModCase.bsv", line 5, column 8.

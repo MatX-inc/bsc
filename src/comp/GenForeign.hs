@@ -23,11 +23,7 @@ genForeign :: ErrorHandle -> Flags -> String -> CPackage ->
               IO [(Id, ForeignFunction)]
 genForeign errh flags prefix (CPackage pkg_id _ _ _ _ defs _) =
     let
-        isPPforeignImport (PPforeignImport {}) = True
-        isPPforeignImport _ = False
-
-        foreignIds = [ i | (CPragma (Pproperties i pps)) <- defs,
-                           any isPPforeignImport pps ]
+        foreignIds = foreignImportIds [ p | CPragma p <- defs ]
         foreignDefs = [ d | d@(CValueSign (CDefT i _ _ _)) <- defs,
                             i `elem` foreignIds ]
         foreignInfos = map extractForeignFuncInfo foreignDefs

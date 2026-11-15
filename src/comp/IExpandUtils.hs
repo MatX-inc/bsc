@@ -59,22 +59,28 @@ module IExpandUtils(
         cleanupFinalRules,
         heapCellToHExpr,
         canLiftCond,
-        newFFCallNo,
+        newFFCallNo, nextFFCallNo, separateConvertedCalls,
+        getCallSites, getCallPosition, withCallSite,
+        CallInfo(..), CallKind(..), noteForeignCall,
+        noteNotRunWorld, anyNotRunWorld, isNotRunWorld,
+        findMethodDefPosition, noteMethodDefPosition, addMethodPosition,
         makeArgPortId, makeArgParamId,
         showTopProgress, showModProgress, showRuleProgress
 ) where
 
 import Control.Monad(when, liftM)
-import Control.Monad.State(StateT, runStateT, evalStateT, lift, liftIO,
-                           gets, get, put, modify)
+import Control.Monad.State(State, StateT, runState, runStateT, evalStateT,
+                           lift, liftIO, gets, get, put, modify)
 import Data.IORef
 import System.IO.Unsafe
 import Data.List
 import Data.Maybe
 import Data.Char(isAlphaNum)
+import Data.Ord(comparing)
 import System.Time -- XXX: from old-time package
 import Debug.Trace(traceM)
 import qualified Data.Array as Array
+import qualified Data.IntMap as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
 
@@ -508,6 +514,60 @@ data GStateRO = GStateRO {
         flags :: !Flags
         }
 
+-- What findMethodDefPosition has found, while it looks (the position of
+-- the innermost subinterface selected so far, if any) or once the method
+-- is selected (the method's own position, or else that subinterface's)
+data MethodDefSearch = MDLooking (Maybe Position) | MDFound (Maybe Position)
+
+-- An execution of a foreign function call that returns ActionValue_ (see
+-- primMarkForeignCall in IExpand), by its cookie: the name that the design
+-- calls, the name the function is linked to, the position of the call,
+-- and whether the call is made.
+data CallInfo = CallInfo { ci_name :: String,
+                           ci_link :: String,
+                           ci_call_pos :: Position,
+                           ci_kind :: CallKind }
+
+-- How an execution was evaluated: in the world of primPeekWorld (not made;
+-- the position of the read), in that of primCondWorld (not made), or in
+-- any other world, where the call is made (its action is in the module
+-- unless the action is dropped).  For the last, the world, when the module
+-- has made a world in which an ActionValue is not run, so that a read
+-- that dropped the action can be named in a diagnostic.
+data CallKind = CKPeek Position | CKCond | CKRan (Maybe HExpr)
+
+-- The part of the evaluator state for foreign function calls and for
+-- ActionValues applied to a world in which they are not run (see
+-- primMarkForeignCall in IExpand), with the positions of the methods
+-- that the diagnostics about them name.  It changes only where those
+-- calls and worlds are evaluated and while a method of the module's
+-- interface is elaborated, so it is one field of GState, which every
+-- update copies.
+data ForeignState = ForeignState {
+        -- every execution of a foreign function call that returns
+        -- ActionValue_, by cookie (see checkForeignResults)
+        foreignCalls :: !(M.Map Integer CallInfo),
+
+        -- while iExpandField elaborates a method, what is found of the
+        -- position in the design of its definition (see
+        -- findMethodDefPosition), and that position for every method
+        -- elaborated, by the name of its IEFace
+        methodDefSearch :: !(Maybe MethodDefSearch),
+        methodPositions :: !(M.Map Id Position),
+
+        -- whether the module has made a world in which an ActionValue is
+        -- not run (see noteNotRunWorld): until it has, every world is
+        -- ActionWorld
+        notRunWorlds   :: !Bool
+        }
+
+initForeignState :: ForeignState
+initForeignState =
+    ForeignState { foreignCalls = M.empty,
+                   methodDefSearch = Nothing,
+                   methodPositions = M.empty,
+                   notRunWorlds = False }
+
 -- full evaluator state
 data GState = GState {
         stepNo       :: !Integer, -- evaluation step
@@ -529,7 +589,20 @@ data GState = GState {
         -- XXX we use Id, just to have a position around; String would do
         commentsMap    :: !(M.Map Id [String]),
 
-        ffcallNo       :: !Int,   -- to generate unique names for ActionValue foreign function calls
+        -- the next cookie (fcallNo) for a foreign function call: unique in
+        -- the module being elaborated, and IInlineFmt continues from it
+        -- (imod_ffcallNo)
+        ffcallNo       :: !Int,
+
+        -- the calls in the design that a diagnostic about a foreign
+        -- function call can name and that are being evaluated, innermost
+        -- first: the Id called, at the position of the call (see
+        -- withCallSite)
+        callSites      :: ![Id],
+
+        -- foreign function calls and ActionValues read without running
+        -- them (see ForeignState)
+        foreignState   :: !ForeignState,
 
         newClockId     :: !ClockId,  -- to generate unique ids for clocks
         newClockDomain :: !ClockDomain, -- to generate unique ids for clock families
@@ -631,6 +704,8 @@ initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
                       stateLocMap = M.empty,
                       commentsMap = M.empty,
                       ffcallNo = 0,
+                      callSites = [],
+                      foreignState = initForeignState,
                       newClockId = initClockId,
                       newClockDomain = initClockDomain,
                       newResetId = initResetId,
@@ -684,6 +759,8 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            go_comments_map :: [(Id,[String])],
                            go_backend_specific :: Bool,
                            go_ffcallNo :: Int,
+                           go_foreignCalls :: M.Map Integer CallInfo,
+                           go_methodPositions :: M.Map Id Position,
                            go_atfCache :: IATFCache,
                            goutput :: a }
 
@@ -741,6 +818,8 @@ runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
                      go_comments_map = M.toList (commentsMap gs'),
                      go_backend_specific = backend_specific gs',
                      go_ffcallNo = ffcallNo gs',
+                     go_foreignCalls = foreignCalls (foreignState gs'),
+                     go_methodPositions = methodPositions (foreignState gs'),
                      go_atfCache = atfCache gs',
                      goutput = retval
                     })
@@ -2346,6 +2425,284 @@ newFFCallNo = do s <- get
                  put (s { ffcallNo = n + 1 })
                  return n
 
+-- the cookie newFFCallNo will return next
+nextFFCallNo :: G Int
+nextFFCallNo = gets ffcallNo
+
+getsF :: (ForeignState -> a) -> G a
+getsF f = gets (f . foreignState)
+
+modifyF :: (ForeignState -> ForeignState) -> G ()
+modifyF f = modify (\ s -> s { foreignState = f (foreignState s) })
+
+-- The calls in the design whose evaluation is in progress and that a
+-- diagnostic can name, innermost first: the Id of the function or method
+-- called, at the position of the call (callSites in GState; see
+-- withCallSite).
+getCallSites :: G [Id]
+getCallSites = gets callSites
+
+-- the position of the innermost such call
+getCallPosition :: G Position
+getCallPosition = gets (maybe noPosition getIdPosition . listToMaybe . callSites)
+
+-- Evaluate a call of i at the position of i: when that is a position in
+-- the design, it is the call site while the call is evaluated, so that a
+-- library function reached from the design can be reported where the
+-- design calls it.  The previous call site is restored afterwards, so the
+-- call is not a tail call: it is used only for the few calls that a
+-- diagnostic names, none of which recurses (see isCallSiteDef in IExpand),
+-- and for primWithCallPosition.
+withCallSite :: Id -> G a -> G a
+withCallSite i m
+    | usablePosition (getIdPosition i) = do
+        old <- gets callSites
+        modify (\ s -> s { callSites = i : old })
+        res <- m
+        modify (\ s -> s { callSites = old })
+        return res
+    | otherwise = m
+
+-- Record the execution of a foreign function call with cookie n (see
+-- foreignCalls in ForeignState).
+noteForeignCall :: Integer -> CallInfo -> G ()
+noteForeignCall n info =
+  modifyF (\ s -> s { foreignCalls = M.insert n info (foreignCalls s) })
+
+-- THIS PASS DOES NOT WORK YET.  It runs, and it does nothing: a converted
+-- ActionValue_ that two rules run still shares one cookie and one TASK_
+-- register, and the Verilog is byte-identical to the Verilog built
+-- without the pass.  No second cookie is ever minted, which means
+-- scanCalls never reports a call as shared: either foreignCalls does not
+-- hold the cookie when the pass runs, or the application of the
+-- ActionValue to a world in the elaborated module is not the shape that
+-- scanCalls matches (IAps (ICon s (ICSel{})) _ [call] with s == idAVAction_
+-- and the cookie in ks).  Until that is fixed, a design whose rules share
+-- a converted call generates Verilog that disagrees with its Bluesim
+-- code, and nothing reports it.
+--
+-- What the pass is meant to do: a conversion of an ActionValue into an
+-- ActionValue_ or a PrimAction (toActionValue_, toAction_, toPrimAction,
+-- which splitIf and the like use) runs it once, in ActionWorld, so a
+-- foreign function call in it has one cookie, which every execution of
+-- the converted action shares.  When several rules or methods run the
+-- converted action, each is to be given a call of its own here, after the
+-- module is elaborated: the first (rules by the position of their names,
+-- then methods) keeps the cookie, and every other gets a fresh cookie for
+-- each such call, in its action and in the values it reaches, which are
+-- copied onto the heap where they mention the call (copying each cell
+-- once).  The executions in one rule or method still share the call;
+-- IForeignResults reports a use of its result where two of them can run
+-- in one cycle.  Every cell that the rules and the interface reach is
+-- evaluated by now.
+separateConvertedCalls :: [HEFace] -> G [HEFace]
+separateConvertedCalls ifcs = do
+  infos <- getsF foreignCalls
+  if M.null infos then return ifcs else do
+    IRules sps rs <- gets rules
+    let indexed_rs = zip [0 ..] rs
+        indexed_fs = zip [0 ..] ifcs
+        rule_order = sortBy (comparing (\ (_, r) -> (getPosition (irule_name r),
+                                                       getIdString (irule_name r))))
+                            indexed_rs
+        owners = [ (Left (n, r), [irule_body r]) | (n, r) <- rule_order ] ++
+                 [ (Right (n, f), methodRoots f) | (n, f) <- indexed_fs,
+                                                   not (isRdyId (ief_name f)) ]
+        (scans, memo) = runState (mapM (fmap mconcat . mapM (scanCalls (M.keysSet infos)) . snd)
+                                       owners)
+                                 IM.empty
+        separate _ [] = return []
+        separate seen (((owner, _), sc) : rest) = do
+          let shared = S.intersection (cs_runs sc) seen
+              seen' = S.union seen (cs_runs sc)
+          if S.null shared
+            then separate seen' rest
+            else do
+              let fresh k = do
+                    n <- toInteger <$> newFFCallNo
+                    let info = fromJustOrErr "separateConvertedCalls: call" (M.lookup k infos)
+                    noteForeignCall n info
+                    return (k, n)
+              m <- M.fromList <$> mapM fresh (S.toList shared)
+              owner' <- evalStateT (renameOwner m memo owner) IM.empty
+              (owner' :) <$> separate seen' rest
+    renamed <- separate S.empty (zip owners scans)
+    let rule_m = M.fromList [ (n, r) | Left (n, r) <- renamed ]
+        ifc_m = M.fromList [ (n, f) | Right (n, f) <- renamed ]
+        rs' = [ M.findWithDefault r n rule_m | (n, r) <- indexed_rs ]
+        ifcs' = [ M.findWithDefault f n ifc_m | (n, f) <- indexed_fs ]
+    modify (\ s -> s { rules = IRules sps rs' })
+    return ifcs'
+  where
+    methodRoots f = map fst (maybeToList (ief_value f)) ++
+                    [ irule_body r | Just (IRules _ mrs) <- [ief_body f], r <- mrs ]
+    renameOwner m memo (Left (n, r)) = do
+        body' <- renameCalls m memo (irule_body r)
+        return (Left (n, r { irule_body = body' }))
+    renameOwner m memo (Right (n, f)) = do
+        value' <- mapM (\ (e, t) -> (\ e' -> (e', t)) <$> renameCalls m memo e) (ief_value f)
+        let renameRule r = (\ e' -> r { irule_body = e' }) <$> renameCalls m memo (irule_body r)
+        body' <- mapM (\ (IRules ps mrs) -> IRules ps <$> mapM renameRule mrs) (ief_body f)
+        return (Right (n, f { ief_value = value', ief_body = body' }))
+
+-- The foreign calls (of the cookies in ks) that an expression runs (the
+-- action of a call) and those that it mentions (the action or the value
+-- of a call), for separateConvertedCalls
+data CallScan = CallScan { cs_runs :: !(S.Set Integer),
+                           cs_mentions :: !(S.Set Integer) }
+
+instance Semigroup CallScan where
+    CallScan r1 m1 <> CallScan r2 m2 = CallScan (S.union r1 r2) (S.union m1 m2)
+
+instance Monoid CallScan where
+    mempty = CallScan S.empty S.empty
+
+-- (each heap cell is scanned once, and the result recorded by its pointer)
+scanCalls :: S.Set Integer -> HExpr -> State (IM.IntMap CallScan) CallScan
+scanCalls ks = scan
+  where
+    scan (IAps (ICon s (ICSel { })) _ [call])
+        | s == idAVAction_, Just (k, args) <- callOf call, S.member k ks = do
+            c <- mconcat <$> mapM scan args
+            return (mappend c (CallScan (S.singleton k) (S.singleton k)))
+    scan (ICon _ (ICForeign { fcallNo = Just k }))
+        | S.member k ks = return (CallScan S.empty (S.singleton k))
+    scan (IAps f _ es) = mconcat <$> mapM scan (f : es)
+    scan (IRefT _ p _ r) = scanCell p r
+    scan (ICon _ (ICLazyArray { iArray = arr })) =
+        mconcat <$> mapM (\ (ArrayCell p r) -> scanCell p r) (Array.elems arr)
+    scan (ICon _ (ICUndet { imVal = Just e })) = scan e
+    scan (ILam _ _ e) = scan e
+    scan (ILAM _ _ e) = scan e
+    scan _ = return mempty
+    scanCell p r = do
+      done <- gets (IM.lookup p)
+      case done of
+        Just c -> return c
+        Nothing -> do
+          -- (a cell on a cycle mentions what the rest of the cycle does)
+          modify (IM.insert p mempty)
+          c <- case unsafeDerefHeap r of
+                 HUnev { hc_hexpr = e } -> scan e
+                 HWHNF { hc_pexpr = P _ e } -> scan e
+                 HNF { hc_pexpr = P _ e } -> scan e
+                 HLoop { } -> return mempty
+          modify (IM.insert p c)
+          return c
+    callOf (ICon _ (ICForeign { fcallNo = Just k })) = Just (k, [])
+    callOf (IAps (ICon _ (ICForeign { fcallNo = Just k })) _ es) = Just (k, es)
+    callOf _ = Nothing
+
+-- Replace the cookies of foreign calls by m in an expression, copying the
+-- heap cells that mention them (by scans, see scanCalls), each once
+renameCalls :: M.Map Integer Integer -> IM.IntMap CallScan -> HExpr ->
+               StateT (IM.IntMap HExpr) G HExpr
+renameCalls m scans = rn
+  where
+    ks = M.keysSet m
+    mentions p = case IM.lookup p scans of
+                   Just c -> not (S.null (S.intersection ks (cs_mentions c)))
+                   Nothing -> True
+    rn (IRefT t p poss r) = rnCell t p poss r
+    rn (IAps f ts es) = do
+      f' <- rn f
+      es' <- mapM rn es
+      return (IAps f' ts es')
+    rn e@(ICon i fc@(ICForeign { fcallNo = Just k })) =
+      return (case M.lookup k m of
+                Just n -> ICon i (fc { fcallNo = Just n })
+                Nothing -> e)
+    rn (ICon i ic@(ICLazyArray { iConType = arr_t, iArray = arr })) = do
+      let elem_t = case arr_t of
+                     ITAp c t | c == itPrimArray -> t
+                     _ -> internalError ("renameCalls: array type: " ++ ppReadable arr_t)
+          rnArrayCell ac@(ArrayCell p r) = do
+            e' <- rnCell elem_t p S.empty r
+            return (case e' of
+                      IRefT _ p' _ r' -> ArrayCell p' r'
+                      _ -> ac)
+      arr' <- mapM rnArrayCell arr
+      return (ICon i (ic { iArray = arr' }))
+    rn (ICon i ic@(ICUndet { imVal = Just e })) = do
+      e' <- rn e
+      return (ICon i (ic { imVal = Just e' }))
+    rn (ILam i t e) = ILam i t <$> rn e
+    rn (ILAM i k e) = ILAM i k <$> rn e
+    rn e = return e
+    rnCell t p poss r
+      | not (mentions p) = return (IRefT t p poss r)
+      | otherwise = do
+          done <- gets (IM.lookup p)
+          case done of
+            Just e' -> return e'
+            Nothing -> do
+              cell <- lift (getHeap r)
+              cell' <- case cell of
+                         HUnev { hc_hexpr = e } ->
+                             (\ e' -> cell { hc_hexpr = e' }) <$> rn e
+                         HWHNF { hc_pexpr = P pr e } ->
+                             (\ e' -> cell { hc_pexpr = P pr e' }) <$> rn e
+                         HNF { hc_pexpr = P pr e } ->
+                             (\ e' -> cell { hc_pexpr = P pr e' }) <$> rn e
+                         HLoop { } -> return cell
+              (p', r') <- lift (addHeapCell "converted-call" cell')
+              let e' = mkIRefT t p' poss r'
+              modify (IM.insert p e')
+              return e'
+
+-- Run m, which elaborates a method of the module's interface (see
+-- iExpandField), and give the position of the method's definition in the
+-- design: the position of the method's field in the interface that
+-- defines it, which the evaluator reaches when it selects the method from
+-- the module's interface, or, for a method that a library function makes
+-- (such as toGet), of the field of the subinterface that holds it (see
+-- noteMethodDefPosition); noPosition if neither is found.
+findMethodDefPosition :: G a -> G (a, Position)
+findMethodDefPosition m = do
+    old <- getsF methodDefSearch
+    modifyF (\ s -> s { methodDefSearch = Just (MDLooking Nothing) })
+    res <- m
+    found <- getsF methodDefSearch
+    modifyF (\ s -> s { methodDefSearch = old })
+    let pos = case found of
+                Just (MDLooking (Just p)) -> p
+                Just (MDFound (Just p)) -> p
+                _ -> noPosition
+    return (res, pos)
+
+-- Record pos as the position of the definition of the methods of the
+-- IEFaces is (for checkForeignResults).
+addMethodPosition :: [Id] -> Position -> G ()
+addMethodPosition is pos | usablePosition pos =
+    modifyF (\ s -> s { methodPositions =
+                          foldr (\ i -> M.insert i pos) (methodPositions s) is })
+addMethodPosition _ _ = return ()
+
+-- doSel selects the field f from a struct, and evaluates it with m: from
+-- an interface, a method (Just True) or a subinterface (Just False), which
+-- is computed only while findMethodDefPosition looks.  The selections that
+-- it looks at lead from the module's interface to the method: the first
+-- method selected is the method, at its position if that is in the
+-- design; before it, the last subinterface selected that has a position
+-- in the design holds the method.  The value of a subinterface is
+-- evaluated without looking, so that a selection made to compute it is
+-- not taken for one on the way to the method.
+noteMethodDefPosition :: Maybe Bool -> Id -> G a -> G a
+noteMethodDefPosition ifc_field f m = do
+    looking <- getsF methodDefSearch
+    case looking of
+      Just (MDLooking m_pos) | Just is_method <- ifc_field -> do
+        let pos = getIdPosition f
+            m_pos' = if usablePosition pos then Just pos else m_pos
+        if is_method
+          then do modifyF (\ s -> s { methodDefSearch = Just (MDFound m_pos') })
+                  m
+          else do modifyF (\ s -> s { methodDefSearch = Nothing })
+                  res <- m
+                  modifyF (\ s -> s { methodDefSearch = Just (MDLooking m_pos') })
+                  return res
+      _ -> m
+
 -- create a clock given an expression for the wires
 -- and (maybe) a family to add it to
 -- and a list of parent (Left) and child (Right) clocks
@@ -2703,6 +3060,27 @@ updBNotCache p e = do
   let cache' = M.insert p e (heapBNots s)
   put s { heapBNots = cache' }
 
+-- note that the module has made a world in which an ActionValue is not
+-- run (see notRunWorlds in ForeignState): where toHeap puts primPeekWorld
+-- () or primCondWorld () on the heap, as the argument of the function of
+-- an ActionValue that __value or primDeepSeqCond applies, or where conAp'
+-- evaluates one.  Both happen before the ActionValue is applied, so before
+-- any foreign function call in it.
+noteNotRunWorld :: G ()
+noteNotRunWorld = do
+  seen <- getsF notRunWorlds
+  when (not seen) $ modifyF (\ s -> s { notRunWorlds = True })
+
+-- whether the module has made a world in which an ActionValue is not run
+anyNotRunWorld :: G Bool
+anyNotRunWorld = getsF notRunWorlds
+
+-- primPeekWorld () or primCondWorld ()
+isNotRunWorld :: HExpr -> Bool
+isNotRunWorld (IAps (ICon _ (ICPrim _ PrimPeekWorld)) _ _) = True
+isNotRunWorld (IAps (ICon _ (ICPrim _ PrimCondWorld)) _ _) = True
+isNotRunWorld _ = False
+
 {-# INLINE getModuleName #-}
 getModuleName :: G String
 getModuleName = do
@@ -2844,7 +3222,23 @@ toHeap tag t (ICon i (ICDef t' e)) cell_name = do
   toHeap tag t e' cell_name
 toHeap _   _ e@(ICon _ _)      _ = return e
 toHeap _   _ e@(IRefT _ _ _ _) _ = return e
+-- primWithCallPosition e is evaluated with the call position where it is
+-- made: where it is put on the heap, unless it already has a position in
+-- the design (see conAp' in IExpand).  __value has it
+-- around primPeekWorld (), a world where an ActionValue is not run, as
+-- primCondWorld () is (see noteNotRunWorld).
+toHeap tag t e@(IAps (ICon i ic@(ICPrim _ PrimWithCallPosition)) ts es) cell_name = do
+  when (any isNotRunWorld es) noteNotRunWorld
+  if usablePosition (getIdPosition i)
+    then toHeapExpr tag t e cell_name
+    else do pos <- getCallPosition
+            addHeapUnev tag t (IAps (ICon (setIdPosition pos i) ic) ts es) cell_name
 toHeap tag t e cell_name = do
+  when (isNotRunWorld e) noteNotRunWorld
+  toHeapExpr tag t e cell_name
+
+toHeapExpr :: String -> IType -> HExpr -> Maybe Id -> G HExpr
+toHeapExpr tag t e cell_name = do
         -- these errors have never happened, disable checks for now.
         when (doDebugFreeVars && not (S.null (fVars e))) $
              internalError ("toHeap: fv " ++ ppReadable (fVars e) ++ ppReadable e)

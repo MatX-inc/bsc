@@ -105,6 +105,10 @@ isUsefulPosition :: Position -> Bool
 isUsefulPosition pos@(Position fs line column pred) =
     (not pred) -- && (not ((getFString fs) == "INTERNAL"))
 
+-- a position in the design: not noPosition, and not in a library
+usablePosition :: Position -> Bool
+usablePosition p = (p /= noPosition) && (isUsefulPosition p)
+
 
 -- if no useful position is found in the list, returns first non-empty pos.
 -- takes a default if no non-empty position is found

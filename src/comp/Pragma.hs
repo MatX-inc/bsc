@@ -4,6 +4,7 @@ module Pragma(
               -- Package and module pragmas
               Pragma(..), PProp(..), PPnm(..),
               getPragmaArgNames, getModulePragmaName,
+              foreignImportIds,
 
               -- Rule pragmas
               RulePragma(..), getRulePragmaName,
@@ -353,6 +354,13 @@ getPragmaArgNames (PPparam is)             = map getIdBaseString is
 getPragmaArgNames (PPdefault_clock_arg i)  = [getIdBaseString i]
 getPragmaArgNames (PPdefault_reset_arg i)  = [getIdBaseString i]
 getPragmaArgNames _ = []
+
+-- the definitions that import a foreign function (import "BDPI")
+foreignImportIds :: [Pragma] -> [Id]
+foreignImportIds ps =
+    [ i | Pproperties i pps <- ps, any isForeignImport pps ]
+  where isForeignImport (PPforeignImport {}) = True
+        isForeignImport _ = False
 
 getModulePragmaName :: PProp -> String
 getModulePragmaName PPverilog                = "synthesize"

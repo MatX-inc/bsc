@@ -104,7 +104,9 @@ module Id(
         addIdDisplayName,
         getIdInlinedPositions,
         addIdInlinedPositions,
-        removeIdInlinedPositions
+        removeIdInlinedPositions,
+        setForeignImportRefId,
+        isForeignImportRefId
          ) where
 
 import Data.Char(isDigit, digitToInt)
@@ -171,6 +173,10 @@ data IdProp = IdPCanFire
                                         -- a top-level nullary binding, which is
                                         -- what lifted dictionaries become
                                         -- (introduced by LiftDicts)
+              | IdPForeignImportRef     -- a reference to the definition of a
+                                        -- foreign function (import "BDPI"),
+                                        -- whose position inlining keeps
+                                        -- (marked by FixupDefs)
         deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
 
 -- #############################################################################
@@ -523,6 +529,9 @@ isRdyId idx = hasIdProp idx IdPReady
 isKeepId :: Id -> Bool
 isKeepId idx = hasIdProp idx IdP_keep
 
+isForeignImportRefId :: Id -> Bool
+isForeignImportRefId idx = hasIdProp idx IdPForeignImportRef
+
 isHideId :: Id -> Bool
 isHideId idx = hasIdProp idx IdP_hide
 
@@ -566,6 +575,9 @@ rmKeepId idx = rmIdProp idx IdP_keep
 
 setKeepId :: Id -> Id
 setKeepId idx = addIdProp idx IdP_keep
+
+setForeignImportRefId :: Id -> Id
+setForeignImportRefId idx = addIdProp idx IdPForeignImportRef
 
 rmHideId :: Id -> Id
 rmHideId idx = rmIdProp idx IdP_hide

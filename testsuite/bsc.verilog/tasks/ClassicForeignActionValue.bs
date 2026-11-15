@@ -1,0 +1,30 @@
+package ClassicForeignActionValue(sysClassicForeignActionValue) where
+
+-- A Classic foreign function that returns ActionValue or Action is called
+-- at each execution of the action made from it: a let-bound read of a
+-- character reads three characters, and a let-bound display displays twice
+foreign my_fgetc :: Bit 32 -> ActionValue (Bit 32) = "$fgetc"
+foreign my_show :: Bit 32 -> Action = "$display"
+
+{-# verilog sysClassicForeignActionValue #-}
+sysClassicForeignActionValue :: Module Empty
+sysClassicForeignActionValue =
+  module
+    s :: Reg (Bit 2) <- mkReg 0
+    fh :: Reg File <- mkRegU
+    rules
+      "open": when s == 0 ==> do
+        f <- $fopen "data.txt" "r"
+        fh := f
+        s := 1
+      "read": when s == 1 ==> do
+        let getc = my_fgetc (pack fh)
+            show7 = my_show 7
+        a <- getc
+        b <- getc
+        c <- getc
+        $display "read %d %d %d" a b c
+        show7
+        show7
+        s := 2
+      "done": when s == 2 ==> $finish 0

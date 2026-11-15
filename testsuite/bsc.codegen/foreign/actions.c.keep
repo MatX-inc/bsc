@@ -11,6 +11,28 @@ unsigned int my_time(unsigned char x)
   return (unsigned int) 10;
 }
 
+unsigned int my_count(unsigned char step)
+{
+  static unsigned int n = 0;
+  n += step;
+  return n;
+}
+
+unsigned int my_next(void)
+{
+  static unsigned int n = 0;
+  return ++n;
+}
+
+void my_poly_count(unsigned int* ret, unsigned char step, unsigned int n)
+{
+  static unsigned int count = 0;
+  unsigned int i;
+  count += step;
+  for (i = 0; i < n / (8*sizeof(unsigned int)); i++)
+    ret[i] = count + 100 * i;
+}
+
 void my_wide_time(unsigned int* ret)
 {
   unsigned long long now = 10llu;
@@ -35,4 +57,9 @@ void poly_action(unsigned int* ret, unsigned int* arg, unsigned int n)
 	n -= (8*sizeof(unsigned int));
     }
   }
+}
+
+unsigned char my_flag(unsigned char x)
+{
+  return x & 1;
 }

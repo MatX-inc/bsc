@@ -1,0 +1,7 @@
+checking package dependencies
+compiling BDPIActionValuePeekLink.bsv
+Foreign import file created: c_counter.ba
+VPI wrapper files created: vpi_wrapper_c_counter.{c,h}
+code generation for mkBDPIActionValuePeekLink starts
+Verilog file created: mkBDPIActionValuePeekLink.v
+All packages are up to date.

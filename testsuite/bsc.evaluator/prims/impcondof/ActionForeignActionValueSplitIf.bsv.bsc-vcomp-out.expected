@@ -1,0 +1,18 @@
+checking package dependencies
+compiling ActionForeignActionValueSplitIf.bsv
+code generation for sysActionForeignActionValueSplitIf starts
+Warning: "ActionForeignActionValueSplitIf.bsv", line 25, column 31: (S0028)
+  Support for primImpCondOf in this release is not complete or has not been
+  tested
+  During elaboration of the body of rule `r' at
+  "ActionForeignActionValueSplitIf.bsv", line 24, column 9.
+  During elaboration of `sysActionForeignActionValueSplitIf' at
+  "ActionForeignActionValueSplitIf.bsv", line 4, column 8.
+Error: "ActionForeignActionValueSplitIf.bsv", line 24, column 9: (G0139)
+  The result of the system task `$fgetc' called at
+  "ActionForeignActionValueSplitIf.bsv", line 18, column 30 is used by rule
+  `r', but the call is not made: its action is dropped where an ActionValue
+  that holds it is read without running it (for example by peekGet, mfix or
+  impCondOf), so the result does not exist. Use the result only where the call
+  is made, or make the call in a rule that writes its result to a register or
+  FIFO, and read that instead.

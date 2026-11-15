@@ -11,4 +11,8 @@ test_c_veri_worker MkGPSizedFIFO mkTestbench_MkGPSizedFIFO {} "bsv" 1 1 "mkTestb
 test_c_veri_worker MkGetPut mkTestbench_MkGetPut {} "bsv" 1 1 "mkTestbench_MkGetPut.v.out.expected" "" ""
 
 test_c_veri_worker PeekGet mkTestbench_PeekGet {} "bsv" 1 1 "mkTestbench_PeekGet.v.out.expected" "" ""
+# peekGet of an ActionValue of hardware only reads no foreign result
+if { $vtest == 1 } {
+find_n_error PeekGet.bsv.bsc-vcomp-out G0139 0
+}
 
