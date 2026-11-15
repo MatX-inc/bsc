@@ -61,7 +61,8 @@ import TopUtils
 import SystemCheck(doSystemCheck)
 import BuildSystem
 import IOUtil(getEnvDef, progArgs)
-import SpeedyString(snapshotInternState, renderInternTable)
+import SpeedyString(snapshotInternState, renderInternTable,
+                    restoreInternTable, allInternedStrings, sstringId)
 
 -- compiler libs
 --import FStringCompat
@@ -226,8 +227,36 @@ main = do
           enableAllocationLimit
       _ -> return ()
     args <- getArgs
+    initInternTrace args
     -- bsc can raise exception,  catch them here  print the message and exit out.
     bsCatch (hmain args) `CE.finally` (ctypeStatsDump >> dumpInternTable)
+
+-- Run before hmain so -trace-intern-load restores into an untouched
+-- SpeedyString table (before any Id or FString is interned) and
+-- -trace-intern-random validates $BSC_INTERN_SEED upfront.
+initInternTrace :: [String] -> IO ()
+initInternTrace args = do
+    bscopts <- getEnvDef "BSC_OPTIONS" ""
+    let allArgs = words bscopts ++ args
+        hasFlag f = ('-' : f) `elem` allArgs || ("--" ++ f) `elem` allArgs
+    when (hasFlag "trace-intern-random") $ do
+        rawSeed <- getEnvDef "BSC_INTERN_SEED" ""
+        case (if null rawSeed then Just (0 :: Integer) else readMaybe rawSeed) of
+          Just _  -> return ()
+          Nothing -> do
+            hPutStr stderr ("-trace-intern-random: invalid BSC_INTERN_SEED " ++ show rawSeed ++ "\n")
+            CE.throwIO (ExitFailure 1)
+    when (hasFlag "trace-intern-load") $ do
+        loadFile <- getEnvDef "BSC_INTERN_LOAD" ""
+        when (null loadFile) $ do
+            hPutStr stderr "-trace-intern-load: BSC_INTERN_LOAD is not set\n"
+            CE.throwIO (ExitFailure 1)
+        r <- restoreInternTable loadFile
+        case r of
+          Right () -> return ()
+          Left problem -> do
+            hPutStr stderr ("-trace-intern-load: " ++ loadFile ++ ": " ++ problem ++ "\n")
+            CE.throwIO (ExitFailure 1)
 
 -- Hidden flag -trace-intern-table: write the table to $BSC_INTERN_DUMP or
 -- <package>.intern.json after every output is written, interning nothing.
@@ -246,6 +275,24 @@ dumpInternTable = when ("-trace-intern-table" `elem` progArgs) $ do
             stale <- doesFileExist file
             when stale (removeFile file)
             CE.throwIO (ExitFailure 1)
+
+-- Hidden trace flag -trace-intern-order: list interned strings in Ord
+-- order (ascending 0 .. n - 1 normally, descending n - 1 .. 0 under
+-- -trace-intern-reverse, or permuted under -trace-intern-random),
+-- changing no artifact.
+printInternTable :: IO ()
+printInternTable = when ("-trace-intern-order" `elem` progArgs ||
+                         "--trace-intern-order" `elem` progArgs) $ do
+    ss <- allInternedStrings
+    let ordered = S.toAscList (S.fromList ss)
+        ids = case ordered of
+                [] -> "none"
+                (firstS : rest) ->
+                    let lastS = foldl' (\_ x -> x) firstS rest
+                    in  show (sstringId firstS) ++ ".." ++ show (sstringId lastS)
+    putStrLn ("intern order: " ++ show (length ordered) ++ " strings, ids " ++ ids)
+    mapM_ (\s -> putStrLn (show (sstringId s) ++ " " ++ show s)) ordered
+    hFlush stdout
 
 -- Hidden flag -check-bin-roundtrip: round-trip the signatures and the
 -- typechecked package through the format 2 encoding (GenBin.checkRoundTrip).
@@ -306,6 +353,7 @@ hmain args = do
         DBlueSrc flags src ->
             do { setFlags flags; doWarnings; showPreamble flags;
                  main' errh flags src;
+                 printInternTable;
                  exitOK errh }
         DVerLink flags top verSrcFiles abinFiles cSrcFiles ->
             do { setFlags flags; doWarnings; showPreamble flags;

@@ -1,0 +1,188 @@
+# Issue: Ord on SString/FString/Id follows string-intern arrival order, which
+# a `bsc -u` batch or an unrelated edit changes.
+# Fix: trace flags perturb or replay SString order without touching Flags,
+# .bi/.bup fingerprints, or dense table ids 0 .. internCount - 1:
+#   -trace-intern-reverse  reverses Ord SString
+#   -trace-intern-random   permutes Ord SString using $BSC_INTERN_SEED
+#   -trace-intern-load     restores $BSC_INTERN_LOAD before interning begins
+#   -trace-intern-order    lists all interned strings in Ord SString order
+# Probe: verify normal, reversed, seeded-random, and loaded-table runs on
+# InternOrder.bs, plus .ba -> .v regeneration parity.
+
+proc intern_listing { out } {
+    global srcdir
+    global subdir
+    set fh [open [file join [absolute $srcdir] $subdir $out]]
+    set count_hdr ""
+    set first_id ""
+    set last_id ""
+    set lines [list]
+    while { [gets $fh line] >= 0 } {
+        if { [regexp {^intern order: ([0-9]+) strings, ids ([0-9]+)\.\.([0-9]+)$} $line -> count lo hi] } {
+            set count_hdr $count
+            set first_id $lo
+            set last_id $hi
+            continue
+        }
+        if { $first_id ne "" && [regexp {^([0-9]+) (".*")$} $line -> id str] } {
+            lappend lines $str
+        }
+    }
+    close $fh
+    return [list $count_hdr $first_id $last_id $lines]
+}
+
+# Build a valid reversed-entry snapshot JSON from a canonical .intern.json
+# written by -trace-intern-table, keeping ids 0 .. N-1 dense.
+proc reverse_snapshot_json { src_json dst_json } {
+    global srcdir
+    global subdir
+    set dir [file join [absolute $srcdir] $subdir]
+    set in_fh [open [file join $dir $src_json] r]
+    fconfigure $in_fh -translation binary -encoding binary
+    set raw [read $in_fh]
+    close $in_fh
+
+    set raw_lines [split [string trimright $raw "\n"] "\n"]
+    set hdr [lindex $raw_lines 0]
+    set ftr [lindex $raw_lines end]
+    set spellings [list]
+    foreach row [lrange $raw_lines 1 end-1] {
+        set row_clean [string trimright $row ","]
+        if { ![regexp {^\[[0-9]+,(".*")\]$} $row_clean -> json_str] } {
+            error "unexpected intern-table row: $row"
+        }
+        lappend spellings $json_str
+    }
+    set rev_spellings [lreverse $spellings]
+    set out_rows [list]
+    set idx 0
+    set last_idx [expr { [llength $rev_spellings] - 1 }]
+    foreach s $rev_spellings {
+        set sep [expr { $idx < $last_idx ? "," : "" }]
+        lappend out_rows "\[$idx,$s\]$sep"
+        incr idx
+    }
+    set out_fh [open [file join $dir $dst_json] w]
+    fconfigure $out_fh -translation binary -encoding binary
+    puts -nonewline $out_fh "$hdr\n[join $out_rows "\n"]\n$ftr\n"
+    close $out_fh
+}
+
+set src InternOrder.bs
+set out [make_bsc_output_name $src]
+
+erase InternOrder.bo
+erase InternOrder.intern.json
+with_normal_intern_order {
+    compile_pass $src {-trace-intern-order -trace-intern-table}
+}
+move $out normal.out
+move InternOrder.intern.json normal.intern.json
+lassign [intern_listing normal.out] normal_cnt normal_first normal_last normal_strings
+
+erase InternOrder.bo
+with_normal_intern_order {
+    compile_pass $src {-trace-intern-order -trace-intern-reverse}
+}
+move $out reversed.out
+lassign [intern_listing reversed.out] reversed_cnt reversed_first reversed_last reversed_strings
+
+set expected_max [expr { [llength $normal_strings] - 1 }]
+
+if { $normal_first eq "0" && $normal_last eq "$expected_max" } {
+    pass "normal run orders dense ids 0..$expected_max"
+} else {
+    fail "normal run ids `$normal_first..$normal_last', expected 0..$expected_max"
+}
+if { $reversed_first eq "$expected_max" && $reversed_last eq "0" } {
+    pass "reversed run orders dense ids $expected_max..0"
+} else {
+    fail "reversed run ids `$reversed_first..$reversed_last', expected $expected_max..0"
+}
+if { [llength $normal_strings] > 100 && [lsort $normal_strings] eq [lsort $reversed_strings] } {
+    pass "normal and reversed runs intern the same [llength $normal_strings] strings"
+} else {
+    fail "normal and reversed runs intern different strings ([llength $normal_strings] vs [llength $reversed_strings])"
+}
+if { $reversed_strings eq [lreverse $normal_strings] } {
+    pass "the reversed Ord listing is the normal one read backwards"
+} else {
+    fail "the reversed Ord listing is not the normal one read backwards"
+}
+
+# Seeded random order: reproducible for a fixed seed, distinct across seeds,
+# and neither normal nor reversed.
+erase InternOrder.bo
+set ::env(BSC_INTERN_SEED) "1"
+with_normal_intern_order {
+    compile_pass $src {-trace-intern-order -trace-intern-random}
+}
+move $out random1a.out
+lassign [intern_listing random1a.out] _ _ _ random1a_strings
+
+erase InternOrder.bo
+with_normal_intern_order {
+    compile_pass $src {-trace-intern-order -trace-intern-random}
+}
+move $out random1b.out
+lassign [intern_listing random1b.out] _ _ _ random1b_strings
+
+erase InternOrder.bo
+set ::env(BSC_INTERN_SEED) "2"
+with_normal_intern_order {
+    compile_pass $src {-trace-intern-order -trace-intern-random}
+}
+unset ::env(BSC_INTERN_SEED)
+move $out random2.out
+lassign [intern_listing random2.out] _ _ _ random2_strings
+
+if { [lsort $random1a_strings] eq [lsort $normal_strings] &&
+     $random1a_strings eq $random1b_strings } {
+    pass "-trace-intern-random with BSC_INTERN_SEED=1 is reproducible over the same strings"
+} else {
+    fail "-trace-intern-random with BSC_INTERN_SEED=1 was not reproducible"
+}
+if { $random1a_strings ne $normal_strings &&
+     $random1a_strings ne $reversed_strings &&
+     $random1a_strings ne $random2_strings } {
+    pass "-trace-intern-random permutes order and distinguishes BSC_INTERN_SEED=1 from 2"
+} else {
+    fail "-trace-intern-random did not produce distinct non-trivial permutations"
+}
+
+# Invalid seed is rejected upfront.
+set ::env(BSC_INTERN_SEED) "not-an-integer"
+with_normal_intern_order {
+    compile_fail $src {-trace-intern-random}
+}
+unset ::env(BSC_INTERN_SEED)
+
+# Loading a permuted intern-table snapshot via -trace-intern-load +
+# BSC_INTERN_LOAD assigns the loaded table's exact arrival order.
+reverse_snapshot_json normal.intern.json scrambled.intern.json
+erase InternOrder.bo
+set ::env(BSC_INTERN_LOAD) [file join [absolute $srcdir] $subdir scrambled.intern.json]
+with_normal_intern_order {
+    set ::env(BSC_INTERN_LOAD) [file join [absolute $srcdir] $subdir scrambled.intern.json]
+    compile_pass $src {-trace-intern-order -trace-intern-load}
+}
+unset -nocomplain ::env(BSC_INTERN_LOAD)
+move $out loaded.out
+lassign [intern_listing loaded.out] _ loaded_first loaded_last loaded_strings
+
+if { $loaded_first eq "0" && $loaded_last eq "$expected_max" &&
+     $loaded_strings eq $reversed_strings } {
+    pass "-trace-intern-load restores the snapshot's exact arrival order"
+} else {
+    fail "-trace-intern-load did not reproduce the snapshot's arrival order"
+}
+
+# Missing BSC_INTERN_LOAD is rejected upfront; -no-trace-* is rejected as an
+# unknown flag.
+with_normal_intern_order {
+    compile_fail $src {-trace-intern-load}
+    compile_fail_error $src S0008 1 {-no-trace-intern-reverse}
+}
+
+check_verilog_regen $src mkInternOrder

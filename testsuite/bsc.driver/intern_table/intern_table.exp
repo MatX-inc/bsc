@@ -16,6 +16,17 @@ compile_backend_pass InternTable.bs {-trace-intern-table}
 unset ::env(BSC_INTERN_DUMP)
 compare_file InternTable.env.intern.json InternTable.default.intern.json
 
+# -trace-intern-load restores $BSC_INTERN_LOAD before bsc interns anything,
+# so re-compiling InternTable.bs with its own dumped table loaded leaves the
+# identical table on exit.
+erase InternTable.bo
+set ::env(BSC_INTERN_LOAD) [file join [absolute $srcdir] $subdir InternTable.default.intern.json]
+set ::env(BSC_INTERN_DUMP) "InternTable.reloaded.intern.json"
+compile_backend_pass InternTable.bs {-trace-intern-load -trace-intern-table}
+unset ::env(BSC_INTERN_LOAD)
+unset ::env(BSC_INTERN_DUMP)
+compare_file InternTable.reloaded.intern.json InternTable.default.intern.json
+
 # A program against the bsc library restores snapshots in fresh processes:
 # RestoreReject.hs runs the restore's rejection cases, one process each.
 # Untested without bluehs.

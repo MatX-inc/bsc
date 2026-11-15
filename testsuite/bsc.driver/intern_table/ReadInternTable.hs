@@ -11,6 +11,7 @@ import System.Environment(getArgs)
 import System.Exit(exitFailure)
 
 import InternRestore(decodeInternTable, readInternTable)
+import qualified SpeedyString as SS
 import SpeedyString(InternSnapshot(..), renderInternTable)
 
 main :: IO ()
@@ -20,30 +21,39 @@ main = do
     case r of
       Left problem -> do putStrLn ("FAIL: " ++ table ++ ": " ++ problem)
                          exitFailure
-      Right snap -> check "the table is not empty" (internNextId snap > 0)
+      Right snap -> do
+        check "the table is not empty" (internNextId snap > 0)
+        rSS <- SS.readInternTable table
+        check "SpeedyString.readInternTable agrees" (rSS == Right snap)
     missing <- readInternTable "no-such.intern.json"
     report "missing file" missing
     check "a missing file is rejected" (isLeft missing)
+    missingSS <- SS.readInternTable "no-such.intern.json"
+    check "SpeedyString.readInternTable rejects a missing file" (isLeft missingSS)
 
     let Right bytes = renderInternTable awkward
     check "awkward spellings round-trip"
-          (decodeInternTable bytes == Right awkward)
+          (decodeInternTable bytes == Right awkward &&
+           SS.decodeInternTable bytes == Right awkward)
     BLC.writeFile synthetic bytes
 
     let text = BLC.unpack bytes
     forM_ (variants text) $ \(what, t) -> do
-      let v = decodeInternTable (BB.toLazyByteString (BB.stringUtf8 t))
+      let raw = BB.toLazyByteString (BB.stringUtf8 t)
+          v = decodeInternTable raw
       report what v
-      check ("rejected: " ++ what) (isLeft v)
+      check ("rejected: " ++ what) (isLeft v && isLeft (SS.decodeInternTable raw))
 
     -- renderInternTable writes a surrogate Char as a lone escape, which
     -- JSON text cannot hold
     forM_ ["x\xDC80y", "\xD800", "\xDBFFz"] $ \s -> do
       let Right lone = renderInternTable (InternSnapshot 2 [(0, "a"), (1, s)])
           v = decodeInternTable lone
+          vSS = SS.decodeInternTable lone
       report ("lone surrogate in " ++ show s) v
       check "a lone surrogate escape is rejected, naming its line"
-            (either ("line 3 escapes a surrogate" `isPrefixOf`) (const False) v)
+            (either ("line 3 escapes a surrogate" `isPrefixOf`) (const False) v &&
+             either ("line 3 escapes a surrogate" `isPrefixOf`) (const False) vSS)
 
 -- Control characters, quote and backslash, DEL, Latin-1, a BMP symbol,
 -- U+FFFF, a character outside the BMP (a surrogate pair in JSON), and

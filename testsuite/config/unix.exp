@@ -4277,3 +4277,153 @@ if [info exists FORCE_INITIALIZE] then {
 # can assume that if bsc produces a .cxx file CCache has seen before, it
 # should produce exactly the same object/executable too.
 unset -nocomplain env(CCACHE_DISABLE)
+
+# ---------------------------------------------------------------------------
+# Determinism probes (testsuite/bsc.batching)
+#
+# Compiled artifacts must not depend on what else the process compiled first
+# (a `bsc -u` batch, a persistent worker) nor on the order in which strings
+# were interned.  Each fixed issue has a directory under bsc.batching with a
+# directed probe built from one of these shapes.
+
+# The .bo of PROBE must be the same compiled alone (no dependency scan) and
+# compiled through ROOT, whose imports name SCRAMBLE before PROBE so that the
+# relevant names are interned in the opposite order.  The dumps are compared,
+# hash included; without internal checks (dumpbo) the comparison is reported
+# unsupported.
+proc batching_bo_pair { probe root scramble } {
+    set bo "[file rootname $probe].bo"
+    set oneshot "[file rootname $probe].oneshot.dumpbo-out"
+    erase $bo
+    erase "[file rootname $scramble].bo"
+    erase "[file rootname $root].bo"
+    compile_pass $probe {} 1
+    if { [do_internal_checks] } {
+        dumpbo $bo
+        move [make_dumpbo_output_name $bo] $oneshot
+    }
+    erase $bo
+    compile_pass $root
+    if { [do_internal_checks] } {
+        dumpbo $bo
+        compare_file [make_dumpbo_output_name $bo] $oneshot
+    } else {
+        unsupported "`$bo' one-shot and batched dumps compared (internal checks off)"
+    }
+}
+
+# The Verilog of MOD (synthesized from SRC) must be the same compiled alone
+# and compiled through TOP (module TOPMOD), whose imports name the SCRAMBLERS
+# before SRC.  OPTIONS go to both compiles.
+proc batching_verilog_pair { src mod top topmod scramblers {options ""} } {
+    erase "[file rootname $src].bo"
+    compile_verilog_pass $src $mod $options
+    move "$mod.v" "$mod.oneshot.v"
+    erase "[file rootname $src].bo"
+    foreach s $scramblers {
+        erase "[file rootname $s].bo"
+    }
+    compile_verilog_pass $top $topmod $options
+    compare_file "$mod.v" "$mod.oneshot.v"
+}
+
+# Run BODY with any intern-order perturbation trace flags temporarily stripped
+# from BSC_OPTIONS (and BSC_INTERN_LOAD unset) so baseline runs inside a
+# perturbed gate pass do not need -no-trace-* flags.
+proc with_normal_intern_order { body } {
+    set had_opts [info exists ::env(BSC_OPTIONS)]
+    if { $had_opts } {
+        set saved_opts $::env(BSC_OPTIONS)
+        set filtered [list]
+        foreach tok $saved_opts {
+            if { $tok ni {-trace-intern-reverse --trace-intern-reverse
+                          -trace-intern-random  --trace-intern-random
+                          -trace-intern-load    --trace-intern-load} } {
+                lappend filtered $tok
+            }
+        }
+        set ::env(BSC_OPTIONS) [join $filtered " "]
+    }
+    set had_load [info exists ::env(BSC_INTERN_LOAD)]
+    if { $had_load } {
+        set saved_load $::env(BSC_INTERN_LOAD)
+        unset ::env(BSC_INTERN_LOAD)
+    }
+    set code [catch { uplevel 1 $body } res opts]
+    if { $had_opts } {
+        set ::env(BSC_OPTIONS) $saved_opts
+    } else {
+        unset -nocomplain ::env(BSC_OPTIONS)
+    }
+    if { $had_load } {
+        set ::env(BSC_INTERN_LOAD) $saved_load
+    } else {
+        unset -nocomplain ::env(BSC_INTERN_LOAD)
+    }
+    return -options $opts $res
+}
+
+# The Verilog of MOD must be the same with and without -trace-intern-reverse,
+# which reverses Ord on interned strings (FString, Id).
+proc reverse_intern_same_verilog { src mod {options ""} } {
+    erase "[file rootname $src].bo"
+    with_normal_intern_order {
+        compile_verilog_pass $src $mod $options
+    }
+    move "$mod.v" "$mod.normal.v"
+    erase "[file rootname $src].bo"
+    with_normal_intern_order {
+        compile_verilog_pass $src $mod "$options -trace-intern-reverse"
+    }
+    compare_file "$mod.v" "$mod.normal.v"
+}
+
+# The .bo of SRC must dump the same with and without -trace-intern-reverse.
+proc reverse_intern_same_bo { src {options ""} } {
+    set bo "[file rootname $src].bo"
+    set normal "[file rootname $src].normal.dumpbo-out"
+    erase $bo
+    with_normal_intern_order {
+        compile_pass $src $options
+    }
+    if { [do_internal_checks] } {
+        dumpbo $bo
+        move [make_dumpbo_output_name $bo] $normal
+    }
+    erase $bo
+    with_normal_intern_order {
+        compile_pass $src "$options -trace-intern-reverse"
+    }
+    if { [do_internal_checks] } {
+        dumpbo $bo
+        compare_file [make_dumpbo_output_name $bo] $normal
+    } else {
+        unsupported "`$bo' normal and reversed dumps compared (internal checks off)"
+    }
+}
+
+# Regenerating MOD.v from MOD.ba in a fresh `bsc -verilog -c` process (both
+# normally and with -trace-intern-reverse) must match the .v written by the
+# original compile.
+proc check_verilog_regen { src mod {options ""} } {
+    global srcdir
+    global subdir
+    set here [absolute $srcdir]
+    erase "[file rootname $src].bo"
+    erase "$mod.ba"
+    compile_verilog_pass $src $mod "-elab $options"
+    foreach {tag extra} {normal "" reversed "-trace-intern-reverse"} {
+        set dir "vregen_${mod}_${tag}"
+        mkdir $dir
+        set out "$mod.bsc-vregen-$tag-out"
+        set opts "-no-show-timestamps -no-show-version -verilog -c $mod -vdir $dir $extra"
+        set ok [with_normal_intern_order { gen_basic_output $opts $out }]
+        if { $ok } {
+            pass "-verilog -c $mod ($tag) generates"
+            compare_file "$dir/$mod.v" "$mod.v" "check_verilog_regen ($tag)"
+        } else {
+            fail "-verilog -c $mod ($tag) should generate"
+        }
+        file delete -force [file join $here $subdir $dir]
+    }
+}

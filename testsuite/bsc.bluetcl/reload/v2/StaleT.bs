@@ -1,0 +1,8 @@
+package StaleT(S, T(..)) where
+
+type S = Bit 16
+
+struct T =
+    a :: S
+    b :: Bit 4
+  deriving (Bits, Eq)
