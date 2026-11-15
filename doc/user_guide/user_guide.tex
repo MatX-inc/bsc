@@ -1730,6 +1730,11 @@ simulator, it does not support the values {\tt X} and {\tt Z}.
 For final synthesis runs, the use of {\tt X} (or {\tt 0})
 is strongly suggested to give the best synthesis results.
 
+With {\bf\tt -split-undetermined-vals}, the compiler first picks values
+for some unspecified bits itself, from the other arm of a conditional
+expression (see Section~\ref{flag-splitundeterminedvals}).  This flag then
+sets only the unspecified values that remain.
+
 The {\bf\tt -remove-dollar} flag causes identifiers in Verilog output
 to substitute underscores instead of dollar signs to separate instance
 names from port names.  If this substitution causes a name collision,
@@ -2173,6 +2178,8 @@ with {\bf\tt -split-if}, since it may improve the generated schedule.
 -opt-undetermined-vals      aggressive optimization of undetermined values
 -sat-stp                    use STP SMT for disjoint testing and SAT 
 -sat-yices                  use Yices SMT for disjoint testing and SAT
+-split-undetermined-vals    take undetermined bits from the other arm
+                            of an if-expression (for both backends)
 \end{centerboxverbatim}
 
 % The {\bf\tt -O} flag turns \emph{on} several compiler optimizations.
@@ -2190,6 +2197,24 @@ permits the Verilog back end of the compiler to make better decisions
 about don't-care values.  This flag is \emph{off} by default.  Turning this
 flag on may produce better hardware in Verilog, but can result in the
 Bluesim and Verilog simulations producing different intermediate values.
+
+\index{-split-undetermined-vals@\te{-split-undetermined-vals} (compiler flag)}
+\label{flag-splitundeterminedvals}
+The {\bf\tt -split-undetermined-vals} flag picks better values for some
+don't-care bits, but still picks them once, at the point where the back
+ends diverge, so that Bluesim and Verilog use the same values.  When one
+arm of a conditional expression has don't-care bits, for example the
+padding of a tagged union, the value is split into bit ranges, and each
+don't-care range takes the value of the same bits of the other arm, so that
+the multiplexer is no longer needed for those bits.
+Don't-care bits that cannot be filled this way are set by
+{\bf\tt -unspecified-to}.  This flag is \emph{off} by default.  It can be
+used with or without {\bf\tt -opt-undetermined-vals}, but it has no effect
+when {\bf\tt -opt-undetermined-vals} is used with
+{\bf\tt -unspecified-to X} or {\tt Z}, which leave the don't-care values
+to the synthesis tool.  A bit taken from the other arm copies that arm's
+value even where the arm is not selected, so it can differ between Bluesim
+and Verilog when that value is invalid (see Section~\ref{bluesim-back-end}).
 
 \index{-sat-stp@\te{-sat-stp} (compiler flag)}
 \index{-sat-yices@\te{-sat-yices} (compiler flag)}
@@ -3969,6 +3994,15 @@ value of a \te{Maybe\#(a)} type in a VCD waveform.  This
 is not a bug, as the user has explicitly requested that the compiler
 optimize the don't care values for each backend by specifying the
 \te{opt-undetermined-vals} flag.
+
+\item With the \te{split-undetermined-vals} flag, a don't care bit in one
+arm of a conditional expression can take the value of the same bit of the
+other arm.  The values are chosen once for both back ends, but the other
+arm's value can itself be invalid when that arm is not selected: for
+example, the value of an \te{RWire} that is not written, a \te{RegFile}
+read with an address out of range, or the first element of an empty FIFO.
+Bluesim and Verilog may then show different values, or Verilog may show
+\te{X}, in those don't care bits.
 
 
 
