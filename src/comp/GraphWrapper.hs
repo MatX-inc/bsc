@@ -3,7 +3,7 @@ module GraphWrapper (
                   makeGraph, addNodes, addEdge, addEdgesWithNodes,
                   graphNodes, graphEdges, graphNeighbors,
                   findCycles, tSort, tSortInt,
-                  findReachables, findReachablesIO,
+                  findReachables, findReachablesIO, findReachableTargetsIO,
                   transposeGraph,
                   hasPath,
                   findPath,
@@ -33,6 +33,7 @@ import qualified Data.List as L
 import qualified Data.Graph as G
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.IntSet as IS
 
 import PPrint
 import Eval
@@ -227,16 +228,28 @@ findReachablesIO g@(Graph graph ordmap lookuptable _) vs = do
 findReachables :: Ord a => Graph a -> [a] -> [[ (a, [a])]]
 findReachables g vs = unsafePerformIO $ findReachablesIO g vs
 
+-- For each starting node, the targets (in the given order) that are among
+-- the nodes findReachablesIO would return for it, without building paths.
+findReachableTargetsIO :: Ord a => Graph a -> [a] -> [a] -> IO [[a]]
+findReachableTargetsIO g@(Graph graph ordmap _ _) vs ts = do
+    g_immut <- freeze graph
+    let int_ts = [ (t, i) | t <- ts, Just i <- [M.lookup t ordmap] ]
+        targets v = let reached = IS.fromList (G.reachable g_immut v)
+                    in  [ t | (t, i) <- int_ts, i `IS.member` reached ]
+    return (map (targets . vToInt g) vs)
+
 -- ----------
 
 -- This is like "preorderF" from Data.Graph, except we record the path
 
 -- the path is constructed in reverse
-preorder_withPath :: [a] -> G.Tree a -> [(a,[a])]
-preorder_withPath path (G.Node a ts) = (a,(a:path)) : preorderF_withPath (a:path) ts
-
+-- (accumulated: concatenating per level copies each entry once per level
+-- above it, which is quadratic in depth)
 preorderF_withPath :: [a] -> G.Forest a -> [(a,[a])]
-preorderF_withPath path ts = concat (map (preorder_withPath path) ts)
+preorderF_withPath path ts = go path ts []
+  where go p ns rest = foldr (\ (G.Node a cs) r -> let p' = a : p
+                                                    in  (a, p') : go p' cs r)
+                             rest ns
 
 -- This is like "reachable" from Data.Graph, except with path included
 
