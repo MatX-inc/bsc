@@ -138,7 +138,6 @@ library
     AProofs
     ARankMethCalls
     ARemoveAssumps
-    ARenameIO
     ASchedule
     AScheduleInfo
     ASourceTypes

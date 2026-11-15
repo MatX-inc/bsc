@@ -8,6 +8,8 @@ import PPrint
 import IntLit(IntLit(..))
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Flags(Flags)
+import Position(noPosition)
 import BackendNamingConventions
 import ErrorUtil(internalError)
 
@@ -26,11 +28,15 @@ import ErrorUtil(internalError)
 --
 -- The register part of the CReg module is retained as a RegN/RegUN/RegA
 -- instance.  This is separately inlined in the Verilog generation,
--- depending on the -inline-reg flag.
+-- depending on the -inline-reg flag.  Its ports are named as AState
+-- names the ports of a state instance (statePortId): "cr$D_IN", "cr$EN"
+-- and "cr" (or "cr$Q_OUT" when registers are not inlined).  The ports of
+-- the CReg itself keep the method spelling, as those of any inlined
+-- instance do.
 --
 
-aInlineCReg :: ASPackage -> ASPackage
-aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
+aInlineCReg :: Flags -> ASPackage -> ASPackage
+aInlineCReg flags pkg@(ASPackage { aspkg_state_instances = vs,
                              aspkg_state_outputs = svars,
                              aspkg_values = defs,
                              aspkg_inlined_ports = ips,
@@ -116,7 +122,7 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
                                       [ADef arg_id dataTy (ASAny dataTy Nothing) []]
                     in  en_def ++ arg_def
 
-                makeReadResExpr 0 = ASPort dataTy (regReadResId i)
+                makeReadResExpr 0 = ASPort dataTy reg_rd
                 makeReadResExpr n =
                     let prev_en_e = ASDef aTBool (cregWriteEnId i (n-1))
                         prev_arg_e = ASDef dataTy (cregWriteArgId i (n-1))
@@ -134,11 +140,18 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
 
                 new_reg_avi = cregToReg avi
 
-                new_reg_ports = [(regReadResId i, dataTy)]
+                -- the ports of the new Reg instance, named as AState
+                -- names the ports of a state instance
+                regPort = statePortId flags new_reg_avi i
+                reg_rd  = regPort (regReadId noPosition)  Nothing (MethodResult Nothing)
+                reg_en  = regPort (regWriteId noPosition) Nothing MethodEnable
+                reg_din = regPort (regWriteId noPosition) Nothing (MethodArg 1 Nothing)
+
+                new_reg_ports = [(reg_rd, dataTy)]
 
                 new_reg_defs =
-                    [ADef (regWriteEnId i) (ATBit 1) aTrue [],
-                     ADef (regWriteArgId i) dataTy (makeReadResExpr ports) []]
+                    [ADef reg_en (ATBit 1) aTrue [],
+                     ADef reg_din dataTy (makeReadResExpr ports) []]
             in
                 (i,
                  old_creg_ports,

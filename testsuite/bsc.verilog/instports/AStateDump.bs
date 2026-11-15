@@ -1,0 +1,29 @@
+package AStateDump where
+
+import FIFOF
+
+-- A register written from two rules and a guarded FIFOF whose notFull is
+-- also read directly: in the -dastate dump the register's mux defines the
+-- port r$D_IN (the MUX_ value names keep the method spelling r$write_1),
+-- the FIFO's enable defs are f$ENQ / f$DEQ, and the state outputs list
+-- FULL_N once although notFull (rule watch) and i_notFull (the enq guard)
+-- both read it.
+{-# verilog sysAStateDump #-}
+sysAStateDump :: Module Empty
+sysAStateDump =
+    module
+        f :: FIFOF (Bit 8) <- mkFIFOF
+        r :: Reg (Bit 8) <- mkReg 0
+        nf :: Reg Bool <- mkReg False
+        ne :: Reg Bool <- mkReg False
+        rules
+            "rA": when r[0:0] == 0 ==> action
+                r := r + 1
+                f.enq r
+            "rB": when r[0:0] == 1 ==>
+                r := r + 3
+            "watch": when True ==> action
+                nf := f.notFull
+                ne := f.notEmpty
+            "drain": when True ==>
+                f.deq
