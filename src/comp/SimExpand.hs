@@ -111,7 +111,11 @@ simExpand errh flags topname fabis = do
                      guard (not (null x))
                      return x
 
-    simscheds <- simExpandSched modinfos_used_by_name hiermap instmap topname
+    -- see simPruneSubtree: merge only the root and its primitive instances.
+    let m_graph = if not (simPruneSubtree flags) then Nothing else
+                    let isPrim (_, m) = m `elem` prim_names
+                    in Just (M.adjust (\(is, nis) -> (filter isPrim is, nis)) topname hiermap)
+    simscheds <- simExpandSched' m_graph modinfos_used_by_name hiermap instmap topname
 
     return $ SimSystem { ssys_packages    = pkg_map
                        , ssys_schedules   = simscheds
@@ -250,7 +254,13 @@ simExpandABin errh flags (abi,ver) = do
 
 simExpandSched :: [(String, (ABinModInfo,String))] -> HierMap -> InstModMap ->
                   String -> IO [SimSchedule]
-simExpandSched abis0 hiermap instmap topmod = do
+simExpandSched = simExpandSched' Nothing
+
+-- With a pruned hierarchy, merge the schedule over it instead.
+simExpandSched' :: Maybe HierMap ->
+                   [(String, (ABinModInfo,String))] -> HierMap -> InstModMap ->
+                   String -> IO [SimSchedule]
+simExpandSched' m_graph_hiermap abis0 hiermap instmap topmod = do
 
     let abis = [ (n,mi) | (n,(mi,_)) <- abis0 ]
 
@@ -258,7 +268,7 @@ simExpandSched abis0 hiermap instmap topmod = do
     -- merge the schedules
 
     combscheds_by_domain -- :: [(AClock, CombSchedInfo)]
-        <- mergeSchedules abis hiermap instmap topmod
+        <- mergeSchedules m_graph_hiermap abis hiermap instmap topmod
 
     -- ----------
     -- create the SimSchedule
@@ -720,9 +730,10 @@ substOutputClockInDomainInfo parent_clk child_clk parent_dom_info =
 
 -- ----------
 
-mergeSchedules :: [(String, ABinModInfo)] -> HierMap -> InstModMap ->
+mergeSchedules :: Maybe HierMap ->
+                  [(String, ABinModInfo)] -> HierMap -> InstModMap ->
                   String -> IO [(AClock, CombSchedInfo)]
-mergeSchedules abis hiermap instmap topmod = do
+mergeSchedules m_graph_hiermap abis hiermap instmap topmod = do
     -- ----------
     -- trace
 
@@ -736,10 +747,12 @@ mergeSchedules abis hiermap instmap topmod = do
     -- ----------
 
     let pu_map = mkParentUseModMap abis
-        smap = combineSchedInfos abis hiermap instmap pu_map topmod M.empty
-        combschedinfo = case (M.lookup topmod smap) of
-                            Just x -> x
-                            Nothing -> internalError "combschedinfo"
+        topCSI hm =
+            case (M.lookup topmod (combineSchedInfos abis hm instmap pu_map
+                                                     topmod M.empty)) of
+              Just x -> x
+              Nothing -> internalError "SimExpand.mergeSchedules: combschedinfo"
+        combschedinfo = maybe (topCSI hiermap) topCSI m_graph_hiermap
 
     -- ----------
     -- trace of the result
