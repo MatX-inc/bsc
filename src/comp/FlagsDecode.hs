@@ -568,6 +568,7 @@ traceflags = [
           "outlaw-sv-kws-as-classic-ids",
           "show-qualifiers",
           "show-raw-id",
+          "sim-link-top-only",
           "warn-meth-arg-mismatch"
          ]
 
