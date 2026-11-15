@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValuePeekInst.bsv
 code generation for mkBDPIActionValuePeekInst starts
-Error: "BDPIActionValuePeekInst.bsv", line 9, column 19: (G0129)
+Error: "BDPIActionValuePeekInst.bsv", line 9, column 19: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekInst.bsv", line 6, column 29 is used by the
   instantiation of `r', but the call is not made: the ActionValue that makes

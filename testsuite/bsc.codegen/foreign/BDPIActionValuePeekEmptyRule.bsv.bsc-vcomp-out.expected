@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValuePeekEmptyRule.bsv
 code generation for mkBDPIActionValuePeekEmptyRule starts
-Error: "BDPIActionValuePeekEmptyRule.bsv", line 9, column 9: (G0129)
+Error: "BDPIActionValuePeekEmptyRule.bsv", line 9, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekEmptyRule.bsv", line 6, column 29 is used by the
   condition of rule `never', but the call is not made: the ActionValue that

@@ -75,18 +75,18 @@ test_c_veri_bsv_multi BDPIActionValueDynSel mkBDPIActionValueDynSel $actionvalue
 # declaration (here also one returning ActionValue_ (), which is Action_).
 # The error names the function that the design declares, and the function
 # it is linked to when that differs.
-compile_fail_error BDPIActionValue_.bsv T0159
+compile_fail_error BDPIActionValue_.bsv T0168
 compare_file BDPIActionValue_.bsv.bsc-out
-compile_fail_error BDPIActionValue_Link.bsv T0159
+compile_fail_error BDPIActionValue_Link.bsv T0168
 compare_file BDPIActionValue_Link.bsv.bsc-out
-compile_fail_error ClassicActionValue_.bs T0159 3
+compile_fail_error ClassicActionValue_.bs T0168 3
 compare_file ClassicActionValue_.bs.bsc-out
 
 # The result of a call of a foreign function that returns an ActionValue
 # exists only in a cycle in which the action that makes the call runs.  It
 # can be used (by state, a system task, another foreign call, or a
 # condition of any of these) only in the rule or method that makes the
-# call, under at least the conditions under which it is made (G0129).
+# call, under at least the conditions under which it is made (G0139).
 # This is decided on the elaborated design, so the tests below are
 # compiled with each of these options, and give the same output with each
 set peek_options { {} {-keep-method-conds} {-aggressive-conditions} {-split-if} }
@@ -140,40 +140,40 @@ peek_pass BDPIActionValueSplitIfDeadArm.bsv
 # toActionValue_ makes the call where it converts the action, and g.get
 # runs that call; a use of the result outside the conditions of g.get is
 # an error, in a rule (also in the other arm of the if) or in a method
-peek_fail_error BDPIActionValueConvertCondSameRule.bsv G0129 1
-peek_fail_error BDPIActionValueConvertCondDisjoint.bsv G0129 1
-peek_fail_error BDPIActionValueConvertMethod.bsv G0129 1
+peek_fail_error BDPIActionValueConvertCondSameRule.bsv G0139 1
+peek_fail_error BDPIActionValueConvertCondDisjoint.bsv G0139 1
+peek_fail_error BDPIActionValueConvertMethod.bsv G0139 1
 # (the conditions are compared as written, without reasoning about them:
 # a call in both arms of an if is not a call outside the if)
-peek_fail_error BDPIActionValueConvertRunTwice.bsv G0129 1
+peek_fail_error BDPIActionValueConvertRunTwice.bsv G0139 1
 
 # peekGet reads the value of an ActionValue without running it, so the
 # call in the action is not made and its result does not exist.  A value
 # computed from it is used where it reaches the elaborated module: the
 # body of a rule (of a $display, here) ...
-peek_fail_error BDPIActionValuePeek.bsv G0129 1
-peek_fail_error BDPIActionValuePeekBranch.bsv G0129 1
+peek_fail_error BDPIActionValuePeek.bsv G0139 1
+peek_fail_error BDPIActionValuePeekBranch.bsv G0139 1
 # ... after an action in the action (a register write, whose world the
 # bookkeeping of -keep-method-conds wraps) as before it ...
-peek_fail_error BDPIActionValuePeekAfterWrite.bsv G0129 1
+peek_fail_error BDPIActionValuePeekAfterWrite.bsv G0139 1
 # ... after actions that a dynamic index chooses (a FIFO enq or deq, a
 # register write), or an undetermined action, which passes on the world it
 # is given (whatever the options for undetermined values) ...
-peek_fail_error BDPIActionValuePeekDynSel.bsv G0129 3
-peek_fail_error BDPIActionValuePeekUndet.bsv G0129 3
+peek_fail_error BDPIActionValuePeekDynSel.bsv G0139 3
+peek_fail_error BDPIActionValuePeekUndet.bsv G0139 3
 foreach opts { {-opt-undetermined-vals -unspecified-to X} {-unspecified-to 0} } {
     erase "BDPIActionValuePeekUndet.bo"
-    compile_verilog_fail_error BDPIActionValuePeekUndet.bsv G0129 3 {} \
+    compile_verilog_fail_error BDPIActionValuePeekUndet.bsv G0139 3 {} \
         "-no-use-dpi $opts"
     if { $vtest == 1 } {
         compare_file BDPIActionValuePeekUndet.bsv.bsc-vcomp-out
     }
 }
 # ... whatever the optimizations ...
-peek_fail_error BDPIActionValuePeekRule.bsv G0129 1
+peek_fail_error BDPIActionValuePeekRule.bsv G0139 1
 foreach opts { {-opt-undetermined-vals -unspecified-to X} {-unspecified-to 0} } {
     erase "BDPIActionValuePeekRule.bo"
-    compile_verilog_fail_error BDPIActionValuePeekRule.bsv G0129 1 {} \
+    compile_verilog_fail_error BDPIActionValuePeekRule.bsv G0139 1 {} \
         "-no-use-dpi $opts"
     if { $vtest == 1 } {
         compare_file BDPIActionValuePeekRule.bsv.bsc-vcomp-out
@@ -183,22 +183,22 @@ foreach opts { {-opt-undetermined-vals -unspecified-to X} {-unspecified-to 0} } 
 # (reported where it is defined, or at its subinterface when a library
 # function defines it), the body of a method, or an argument of an
 # instantiation ...
-peek_fail_error BDPIActionValuePeekRuleCond.bsv G0129 1
-peek_fail_error BDPIActionValuePeekEmptyRule.bsv G0129 1
-peek_fail_error BDPIActionValuePeekMethod.bsv G0129 1
-peek_fail_error BDPIActionValuePeekSubifc.bsv G0129 1
-peek_fail_error BDPIActionValuePeekMethodBody.bsv G0129 1
-peek_fail_error BDPIActionValuePeekInst.bsv G0129 1
+peek_fail_error BDPIActionValuePeekRuleCond.bsv G0139 1
+peek_fail_error BDPIActionValuePeekEmptyRule.bsv G0139 1
+peek_fail_error BDPIActionValuePeekMethod.bsv G0139 1
+peek_fail_error BDPIActionValuePeekSubifc.bsv G0139 1
+peek_fail_error BDPIActionValuePeekMethodBody.bsv G0139 1
+peek_fail_error BDPIActionValuePeekInst.bsv G0139 1
 # ... in the order of the calls in the source, for several results used in
 # one place (here read in the other order) ...
-peek_fail_error BDPIActionValuePeekOrder.bsv G0129 2
+peek_fail_error BDPIActionValuePeekOrder.bsv G0139 2
 # ... and each read is a read: two reads of one ActionValue are two
 # executions of the call, whose difference is not 0 (one error for the
 # two, which are at one position), in a loop or in a function as well,
 # while one read used twice is one value
-peek_fail_error BDPIActionValuePeekTwice.bsv G0129 1
-peek_fail_error BDPIActionValuePeekTwiceRun.bsv G0129 1
-peek_fail_error BDPIActionValuePeekLoop.bsv G0129 2
+peek_fail_error BDPIActionValuePeekTwice.bsv G0139 1
+peek_fail_error BDPIActionValuePeekTwiceRun.bsv G0139 1
+peek_fail_error BDPIActionValuePeekLoop.bsv G0139 2
 peek_pass BDPIActionValuePeekOnce.bsv
 # A when on the result, in the action or in the rule, or a method condition
 # on it, is an implicit condition on a value that the action makes (G0122)
@@ -236,7 +236,7 @@ peek_pass BDPIActionValuePeekUnreach.bsv
 # one it does not fold (x ^ x on two reads) uses the result
 peek_pass BDPIActionValuePeekFold.bsv
 peek_pass BDPIActionValuePeekGuard.bsv
-peek_fail_error BDPIActionValuePeekNoFold.bsv G0129 1
+peek_fail_error BDPIActionValuePeekNoFold.bsv G0139 1
 # splitIf and the like make their action with toPrimAction, where the
 # calls in it are made; a peek that drops that action and does not use
 # the results uses nothing
@@ -245,16 +245,16 @@ peek_pass BDPIActionValueConvertUnused.bsv
 # where the dropped action's result is used (by a peek, or by impCondOf),
 # it is that of a call that the design does not make, even where another
 # rule runs the action
-peek_fail_error BDPIActionValueConvert.bsv G0129 2
-peek_fail_error BDPIActionValueConvertRunAndPeek.bsv G0129 1
+peek_fail_error BDPIActionValueConvert.bsv G0139 2
+peek_fail_error BDPIActionValueConvertRunAndPeek.bsv G0139 1
 # mfix reads the value of an ActionValue in the same way, where mfix is
-peek_fail_error BDPIActionValueMFix.bsv G0129 1
-peek_fail_error BDPIActionValueMFixAfterWrite.bsv G0129 1
-peek_fail_error BDPIActionValueMFixDynSel.bsv G0129 1
+peek_fail_error BDPIActionValueMFix.bsv G0139 1
+peek_fail_error BDPIActionValueMFixAfterWrite.bsv G0139 1
+peek_fail_error BDPIActionValueMFixDynSel.bsv G0139 1
 # mfix of an ActionValue of hardware only reads no foreign result
 compile_verilog_pass HWActionValueMFix.bsv
 if { $vtest == 1 } {
-find_n_error HWActionValueMFix.bsv.bsc-vcomp-out G0129 0
+find_n_error HWActionValueMFix.bsv.bsc-vcomp-out G0139 0
 }
 # and peekGet or mfix of an ActionValue of hardware only elaborates it as
 # running it does: the temporaries have the same names

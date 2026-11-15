@@ -8,7 +8,7 @@ Warning: "ActionForeignActionValueSplitIfRun.bsv", line 30, column 31: (S0028)
   "ActionForeignActionValueSplitIfRun.bsv", line 29, column 9.
   During elaboration of `sysActionForeignActionValueSplitIfRun' at
   "ActionForeignActionValueSplitIfRun.bsv", line 4, column 8.
-Error: "ActionForeignActionValueSplitIfRun.bsv", line 29, column 9: (G0129)
+Error: "ActionForeignActionValueSplitIfRun.bsv", line 29, column 9: (G0139)
   The result of the system task `$fgetc' called at
   "ActionForeignActionValueSplitIfRun.bsv", line 19, column 30 is used by rule
   `r' outside the rule or method and the conditions under which the call is

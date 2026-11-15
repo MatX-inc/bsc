@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValuePeekLoop.bsv
 code generation for mkBDPIActionValuePeekLoop starts
-Error: "BDPIActionValuePeekLoop.bsv", line 16, column 9: (G0129)
+Error: "BDPIActionValuePeekLoop.bsv", line 16, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekLoop.bsv", line 9, column 29 is used by rule `loop', but
   the call is not made: the ActionValue that makes it is read without running
@@ -9,7 +9,7 @@ Error: "BDPIActionValuePeekLoop.bsv", line 16, column 9: (G0129)
   peekGet, mfix or impCondOf), so the result does not exist. Use the result
   only where the call is made, or make the call in a rule that writes its
   result to a register or FIFO, and read that instead.
-Error: "BDPIActionValuePeekLoop.bsv", line 23, column 9: (G0129)
+Error: "BDPIActionValuePeekLoop.bsv", line 23, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekLoop.bsv", line 9, column 29 is used by rule `helper',
   but the call is not made: the ActionValue that makes it is read without

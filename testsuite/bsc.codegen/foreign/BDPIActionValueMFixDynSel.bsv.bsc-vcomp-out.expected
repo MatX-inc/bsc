@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValueMFixDynSel.bsv
 code generation for mkBDPIActionValueMFixDynSel starts
-Error: "BDPIActionValueMFixDynSel.bsv", line 23, column 9: (G0129)
+Error: "BDPIActionValueMFixDynSel.bsv", line 23, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValueMFixDynSel.bsv", line 18, column 19 is used by rule `go',
   but the call is not made: the ActionValue that makes it is read without

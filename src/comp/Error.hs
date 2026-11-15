@@ -3043,7 +3043,7 @@ getErrorText (WTransitiveIncoherentMatch pred root_pred root_inst) =
 -- ActionValue or Action is made into an action that calls the function at
 -- each execution.
 getErrorText (EForeignActionValue_Res f link t) =
-    (Type 159, empty,
+    (Type 168, empty,
      s2par ("The " ++ foreignCallName f link ++ " has result type " ++
             ishow t ++ ".  A foreign function cannot return " ++
             "ActionValue_: a value of that type is a single call of " ++
@@ -4041,7 +4041,7 @@ getErrorText (WRuleUndetPred is_meth rule poss) =
 -- rule or method that makes the call, under the conditions under which it
 -- is made (see IForeignResults).
 getErrorText (EForeignResultUsed f link call_pos user made) =
-    (Generate 129, empty,
+    (Generate 139, empty,
      s2par ("The result of the " ++ foreignCallName f link ++ " called" ++
             atUsefulPosition call_pos ++ " is used by " ++ user ++
             usedWhere made ++ "  Use the result only where the call is " ++

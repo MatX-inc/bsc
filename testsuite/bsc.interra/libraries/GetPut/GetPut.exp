@@ -13,6 +13,6 @@ test_c_veri_worker MkGetPut mkTestbench_MkGetPut {} "bsv" 1 1 "mkTestbench_MkGet
 test_c_veri_worker PeekGet mkTestbench_PeekGet {} "bsv" 1 1 "mkTestbench_PeekGet.v.out.expected" "" ""
 # peekGet of an ActionValue of hardware only reads no foreign result
 if { $vtest == 1 } {
-find_n_error PeekGet.bsv.bsc-vcomp-out G0129 0
+find_n_error PeekGet.bsv.bsc-vcomp-out G0139 0
 }
 

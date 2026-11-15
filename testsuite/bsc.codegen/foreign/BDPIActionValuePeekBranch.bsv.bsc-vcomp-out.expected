@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValuePeekBranch.bsv
 code generation for mkBDPIActionValuePeekBranch starts
-Error: "BDPIActionValuePeekBranch.bsv", line 14, column 9: (G0129)
+Error: "BDPIActionValuePeekBranch.bsv", line 14, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekBranch.bsv", line 10, column 29 is used by rule `go',
   but the call is not made: the ActionValue that makes it is read without

@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValueConvertCondSameRule.bsv
 code generation for mkBDPIActionValueConvertCondSameRule starts
-Error: "BDPIActionValueConvertCondSameRule.bsv", line 14, column 9: (G0129)
+Error: "BDPIActionValueConvertCondSameRule.bsv", line 14, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValueConvertCondSameRule.bsv", line 10, column 61 is used by rule
   `go' outside the conditions under which the call is made (it is made in this

@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValuePeekRuleCond.bsv
 code generation for mkBDPIActionValuePeekRuleCond starts
-Error: "BDPIActionValuePeekRuleCond.bsv", line 10, column 9: (G0129)
+Error: "BDPIActionValuePeekRuleCond.bsv", line 10, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekRuleCond.bsv", line 7, column 29 is used by the
   condition of rule `go', but the call is not made: the ActionValue that makes

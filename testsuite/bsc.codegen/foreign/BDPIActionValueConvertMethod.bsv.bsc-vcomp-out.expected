@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValueConvertMethod.bsv
 code generation for mkBDPIActionValueConvertMethod starts
-Error: "BDPIActionValueConvertMethod.bsv", line 18, column 34: (G0129)
+Error: "BDPIActionValueConvertMethod.bsv", line 18, column 34: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValueConvertMethod.bsv", line 14, column 61 is used by method
   `get_peek' outside the conditions under which the call is made (it is made

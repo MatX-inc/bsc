@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValuePeekUndet.bsv
 code generation for mkBDPIActionValuePeekUndet starts
-Error: "BDPIActionValuePeekUndet.bsv", line 33, column 9: (G0129)
+Error: "BDPIActionValuePeekUndet.bsv", line 33, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekUndet.bsv", line 19, column 42 is used by rule `go1',
   but the call is not made: its action is dropped where an ActionValue that
@@ -9,7 +9,7 @@ Error: "BDPIActionValuePeekUndet.bsv", line 33, column 9: (G0129)
   impCondOf), so the result does not exist. Use the result only where the call
   is made, or make the call in a rule that writes its result to a register or
   FIFO, and read that instead.
-Error: "BDPIActionValuePeekUndet.bsv", line 36, column 9: (G0129)
+Error: "BDPIActionValuePeekUndet.bsv", line 36, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekUndet.bsv", line 24, column 42 is used by rule `go2',
   but the call is not made: the ActionValue that makes it is read without
@@ -17,7 +17,7 @@ Error: "BDPIActionValuePeekUndet.bsv", line 36, column 9: (G0129)
   example by peekGet, mfix or impCondOf), so the result does not exist. Use
   the result only where the call is made, or make the call in a rule that
   writes its result to a register or FIFO, and read that instead.
-Error: "BDPIActionValuePeekUndet.bsv", line 39, column 9: (G0129)
+Error: "BDPIActionValuePeekUndet.bsv", line 39, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekUndet.bsv", line 29, column 42 is used by rule `go3',
   but the call is not made: its action is dropped where an ActionValue that

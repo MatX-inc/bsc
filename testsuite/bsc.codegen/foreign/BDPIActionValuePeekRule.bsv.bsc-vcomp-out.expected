@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValuePeekRule.bsv
 code generation for mkBDPIActionValuePeekRule starts
-Error: "BDPIActionValuePeekRule.bsv", line 13, column 9: (G0129)
+Error: "BDPIActionValuePeekRule.bsv", line 13, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekRule.bsv", line 8, column 29 is used by rule `r', but
   the call is not made: the ActionValue that makes it is read without running

@@ -256,14 +256,14 @@ compare_file DynSelTime.bsv.bsc-vcomp-out
 
 # peekGet reads the value of an ActionValue without running it, so the
 # system tasks in the action are not called: a result of one that is used
-# is an error (G0129), and one that the value does not use is not used (a
+# is an error (G0139), and one that the value does not use is not used (a
 # Get that logs with $time, or that logs no result).  The same with each
 # of these options (compiled afresh).
 test_c_veri_bsv PeekTask
 foreach opts { {} {-keep-method-conds} {-aggressive-conditions} {-split-if} } {
 erase_many "PeekTask*.bo"
 compile_verilog_pass PeekTask.bsv {} $opts
-compile_verilog_fail_error PeekTaskUsed.bsv G0129 1 {} $opts
+compile_verilog_fail_error PeekTaskUsed.bsv G0139 1 {} $opts
 compile_verilog_pass PeekTaskLog.bsv {} $opts
 compile_verilog_pass PeekTaskNoResult.bsv {} $opts
 if { $vtest == 1 } {

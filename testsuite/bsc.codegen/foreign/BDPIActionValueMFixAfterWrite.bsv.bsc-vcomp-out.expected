@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValueMFixAfterWrite.bsv
 code generation for mkBDPIActionValueMFixAfterWrite starts
-Error: "BDPIActionValueMFixAfterWrite.bsv", line 17, column 9: (G0129)
+Error: "BDPIActionValueMFixAfterWrite.bsv", line 17, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValueMFixAfterWrite.bsv", line 12, column 19 is used by rule `r',
   but the call is not made: the ActionValue that makes it is read without

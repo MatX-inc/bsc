@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValueConvertRunAndPeek.bsv
 code generation for mkBDPIActionValueConvertRunAndPeek starts
-Error: "BDPIActionValueConvertRunAndPeek.bsv", line 19, column 9: (G0129)
+Error: "BDPIActionValueConvertRunAndPeek.bsv", line 19, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValueConvertRunAndPeek.bsv", line 12, column 61 is used by rule
   `go' outside the rule or method and the conditions under which the call is

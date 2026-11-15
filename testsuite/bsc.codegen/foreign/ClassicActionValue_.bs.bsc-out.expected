@@ -1,18 +1,18 @@
 checking package dependencies
 compiling ClassicActionValue_.bs
-Error: "ClassicActionValue_.bs", line 6, column 8: (T0159)
+Error: "ClassicActionValue_.bs", line 6, column 8: (T0168)
   The foreign function `my_fgetc' (the system task `$fgetc') has result type
   `ActionValue_ (Bit 32)'. A foreign function cannot return ActionValue_: a
   value of that type is a single call of the function, which every execution
   of an action made from it would share. Declare the result as ActionValue or
   Action instead, and the function is called anew at each execution.
-Error: "ClassicActionValue_.bs", line 7, column 8: (T0159)
+Error: "ClassicActionValue_.bs", line 7, column 8: (T0168)
   The foreign function `my_fclose' (the system task `$fclose') has result type
   `ActionValue_ ()'. A foreign function cannot return ActionValue_: a value of
   that type is a single call of the function, which every execution of an
   action made from it would share. Declare the result as ActionValue or Action
   instead, and the function is called anew at each execution.
-Error: "ClassicActionValue_.bs", line 8, column 8: (T0159)
+Error: "ClassicActionValue_.bs", line 8, column 8: (T0168)
   The foreign function `my_c_count' (imported from `c_count') has result type
   `ActionValue_ (Bit 32)'. A foreign function cannot return ActionValue_: a
   value of that type is a single call of the function, which every execution

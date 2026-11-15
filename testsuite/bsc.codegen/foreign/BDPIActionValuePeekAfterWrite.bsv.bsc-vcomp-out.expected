@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValuePeekAfterWrite.bsv
 code generation for mkBDPIActionValuePeekAfterWrite starts
-Error: "BDPIActionValuePeekAfterWrite.bsv", line 17, column 9: (G0129)
+Error: "BDPIActionValuePeekAfterWrite.bsv", line 17, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekAfterWrite.bsv", line 13, column 41 is used by rule
   `go', but the call is not made: the ActionValue that makes it is read

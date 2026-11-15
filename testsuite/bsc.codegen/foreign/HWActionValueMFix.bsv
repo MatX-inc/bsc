@@ -6,7 +6,7 @@ module sysHWActionValueMFix ();
    Reg#(Bit#(32)) r <- mkReg(0);
 
    // mfix over an ActionValue of hardware only (a FIFO): no foreign call,
-   // so no G0129
+   // so no G0139
    function ActionValue#(Tuple2#(Bit#(32), Bit#(32))) loop(Tuple2#(Bit#(32), Bit#(32)) x);
       actionvalue
          f.deq;

@@ -39,35 +39,35 @@ find_regexp sysActionForeignFuncArgs.v \
 
 # impCondOf does not run its argument, so a system task with a value in it
 # is not called, and its result does not exist: a condition that depends
-# on the result is an error (G0129), and one that does not is kept.  The
+# on the result is an error (G0139), and one that does not is kept.  The
 # same with each of these options (compiled afresh).
 foreach opts { {} {-keep-method-conds} {-aggressive-conditions} {-split-if} } {
 erase_many "ActionForeignActionValue*.bo"
-compile_verilog_fail_error ActionForeignActionValue.bsv G0129 7 {} $opts
+compile_verilog_fail_error ActionForeignActionValue.bsv G0139 7 {} $opts
 if { $vtest == 1 } {
 compare_file ActionForeignActionValue.bsv.bsc-vcomp-out
 }
 
 # also when the call follows actions that a dynamic index chooses, or an
 # undetermined action in an if
-compile_verilog_fail_error ActionForeignActionValueWorlds.bsv G0129 2 {} $opts
+compile_verilog_fail_error ActionForeignActionValueWorlds.bsv G0139 2 {} $opts
 if { $vtest == 1 } {
 compare_file ActionForeignActionValueWorlds.bsv.bsc-vcomp-out
 }
 # and where splitIf makes its action with toPrimAction, which makes the
 # call: its result decides the condition, and impCondOf drops the action
-compile_verilog_fail_error ActionForeignActionValueSplitIf.bsv G0129 1 {} $opts
+compile_verilog_fail_error ActionForeignActionValueSplitIf.bsv G0139 1 {} $opts
 if { $vtest == 1 } {
 compare_file ActionForeignActionValueSplitIf.bsv.bsc-vcomp-out
 }
 # also where another rule runs the action, since the call is made once for
 # every execution, and in the condition of the rule that runs it, which is
 # evaluated before the action runs
-compile_verilog_fail_error ActionForeignActionValueSplitIfRun.bsv G0129 1 {} $opts
+compile_verilog_fail_error ActionForeignActionValueSplitIfRun.bsv G0139 1 {} $opts
 if { $vtest == 1 } {
 compare_file ActionForeignActionValueSplitIfRun.bsv.bsc-vcomp-out
 }
-compile_verilog_fail_error ActionForeignActionValueSplitIfGuard.bsv G0129 1 {} $opts
+compile_verilog_fail_error ActionForeignActionValueSplitIfGuard.bsv G0139 1 {} $opts
 if { $vtest == 1 } {
 compare_file ActionForeignActionValueSplitIfGuard.bsv.bsc-vcomp-out
 }

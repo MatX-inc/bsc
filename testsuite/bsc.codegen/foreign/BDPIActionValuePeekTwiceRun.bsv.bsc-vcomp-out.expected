@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValuePeekTwiceRun.bsv
 code generation for mkBDPIActionValuePeekTwiceRun starts
-Error: "BDPIActionValuePeekTwiceRun.bsv", line 17, column 9: (G0129)
+Error: "BDPIActionValuePeekTwiceRun.bsv", line 17, column 9: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekTwiceRun.bsv", line 7, column 31 is used by rule `go',
   but the call is not made: the ActionValue that makes it is read without

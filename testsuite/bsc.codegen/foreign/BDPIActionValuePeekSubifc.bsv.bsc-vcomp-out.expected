@@ -1,7 +1,7 @@
 checking package dependencies
 compiling BDPIActionValuePeekSubifc.bsv
 code generation for mkBDPIActionValuePeekSubifc starts
-Error: "BDPIActionValuePeekSubifc.bsv", line 17, column 14: (G0129)
+Error: "BDPIActionValuePeekSubifc.bsv", line 17, column 14: (G0139)
   The result of the foreign function `my_count' called at
   "BDPIActionValuePeekSubifc.bsv", line 10, column 33 is used by method
   `g_get', but the call is not made: the ActionValue that makes it is read
