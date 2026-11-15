@@ -2206,7 +2206,10 @@ ends diverge, so that Bluesim and Verilog use the same values.  When one
 arm of a conditional expression has don't-care bits, for example the
 padding of a tagged union, the value is split into bit ranges, and each
 don't-care range takes the value of the same bits of the other arm, so that
-the multiplexer is no longer needed for those bits.
+the multiplexer is no longer needed for those bits.  Where the condition
+implies that a constant field of one arm, such as a tag, is equal to the
+same bits of the other arm, those bits are taken from the other arm too, so
+a value that is decoded and encoded again need not be multiplexed.
 Don't-care bits that cannot be filled this way are set by
 {\bf\tt -unspecified-to}.  This flag is \emph{off} by default.  It can be
 used with or without {\bf\tt -opt-undetermined-vals}, but it has no effect

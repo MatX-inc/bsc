@@ -170,3 +170,31 @@ compare_file sysUndet_FillCaseChain.linkflag.cxx sysUndet_FillCaseChain.cxx
 }
 
 # -------------------------
+# Under -split-undetermined-vals, a constant arm that the condition selects
+# only when the other arm has the same bits becomes the other arm.  The
+# conditions of the enclosing if-expressions count too, and so do those of
+# a chain of defs where each def is used only as an arm of the next.
+
+test_c_veri_bsv_modules_options Undet_FillReencode {mkUndet_FillReencode} \
+    {-split-undetermined-vals}
+
+if { $vtest == 1 } {
+find_n_strings mkUndet_FillReencode.v {assign cond = cond_x ;} 1
+find_n_strings mkUndet_FillReencode.v \
+    {(nest_x[4:3] == 2'b0) ? nest_x : nest_y ;} 1
+find_n_strings mkUndet_FillReencode.v \
+    {= chain_x[3] ? chain_z : chain_x ;} 1
+}
+
+# -------------------------
+# A dynamic bit selection in the condition of a filled if-expression
+# (checking the implication used to loop)
+
+compile_verilog_pass Undet_FillDynSelCond.bsv mkUndet_FillDynSelCond \
+    {-split-undetermined-vals}
+if { $vtest == 1 } {
+find_n_strings mkUndet_FillDynSelCond.v \
+    {assign out = { out_x[out_i] ? 3'b001 : out_y[4:2], out_y[1:0] } ;} 1
+}
+
+# -------------------------
