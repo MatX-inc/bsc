@@ -38,10 +38,12 @@ module IForeignResults(checkForeignResults) where
 import Control.Monad(zipWithM)
 import Control.Monad.State(State, evalState, gets, modify)
 import qualified Data.Array as Array
+import qualified Data.IntMap as IM
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.List(minimumBy)
+import Data.List(minimumBy, sortBy)
+import Data.Maybe(mapMaybe, maybeToList)
 import Data.Ord(comparing)
 
 import Error(internalError, EMsg, ErrMsg(..), ForeignCallMade(..))
@@ -106,13 +108,15 @@ data CNode = CNAp CKey [IType] [CKey]
 
 -- The state of the check, local to one call of checkForeignResults:
 -- the key of each def's body and the results that each def uses, both
--- computed once per def (the defs are acyclic), and the table that
--- interns nodes, with the next free key.
+-- computed once per def (the defs are acyclic), the table that interns
+-- nodes, with the next free key, and, for each key of a structure that
+-- holds an undetermined value, the position of one (for diagnostics).
 data KeyState = KeyState {
         ks_def_keys :: M.Map Id CKey,
         ks_def_uses :: M.Map Id Uses,
         ks_nodes :: M.Map CNode CKey,
-        ks_next :: !CKey
+        ks_next :: !CKey,
+        ks_undet :: IM.IntMap Position
     }
 
 type KM = State KeyState
@@ -129,14 +133,22 @@ condKey (ICon i (ICValue { iValDef = d })) = do
         k <- condKey d
         modify (\ s -> s { ks_def_keys = M.insert i k (ks_def_keys s) })
         return k
-condKey (ICon _ (ICUndet { })) = newKey
+condKey (ICon i (ICUndet { })) = do
+    k <- newKey
+    modify (\ s -> s { ks_undet = IM.insert k (getIdPosition i) (ks_undet s) })
+    return k
 condKey e@(ICon _ (ICLazyArray { })) =
     internalError ("IForeignResults.condKey: " ++ ppReadable e)
 condKey (ICon i ic) = intern (CNCon i ic)
 condKey (IAps f ts es) = do
     k_f <- condKey f
     k_es <- mapM condKey es
-    intern (CNAp k_f ts k_es)
+    k <- intern (CNAp k_f ts k_es)
+    undets <- gets ks_undet
+    case mapMaybe (\ k_part -> IM.lookup k_part undets) (k_f : k_es) of
+      (pos : _) -> modify (\ s -> s { ks_undet = IM.insert k pos (ks_undet s) })
+      [] -> return ()
+    return k
 condKey e = internalError ("IForeignResults.condKey: " ++ ppReadable e)
 
 intern :: CNode -> KM CKey
@@ -167,7 +179,7 @@ checkForeignResults infos meth_poss imod
     | otherwise = foreignResultMsgs meth_poss imod (evalState check ks0)
   where
     ks0 = KeyState { ks_def_keys = M.empty, ks_def_uses = M.empty,
-                     ks_nodes = M.empty, ks_next = 0 }
+                     ks_nodes = M.empty, ks_next = 0, ks_undet = IM.empty }
     check = do
         items <- moduleItems imod
         let -- (in the order of the walk)
@@ -177,13 +189,15 @@ checkForeignResults infos meth_poss imod
                 any (\ (o', pk) -> o' == o && pk `S.isSubsetOf` S.union p c)
                     (M.findWithDefault [] k calls)
             bad o p m_self uses =
-                [ (o, info, callMade o k_calls (ci_kind info))
-                | (k, c) <- M.toList uses,
-                  Just k /= m_self,
-                  not (inScope o p k c),
-                  Just info <- [M.lookup k infos],
-                  let k_calls = M.findWithDefault [] k calls ]
-            use (IUse o p m_self e) = bad o p m_self <$> exprUses infos e
+                sequence
+                  [ (\ made -> (o, info, made)) <$>
+                        callMade o (S.union p c) k_calls (ci_kind info)
+                  | (k, c) <- M.toList uses,
+                    Just k /= m_self,
+                    not (inScope o p k c),
+                    Just info <- [M.lookup k infos],
+                    let k_calls = M.findWithDefault [] k calls ]
+            use (IUse o p m_self e) = bad o p m_self =<< exprUses infos e
             use (ICall { }) = return []
         concat <$> mapM use items
 
@@ -423,14 +437,26 @@ exprUses infos = go
 -- ---------------
 -- Diagnostics
 
--- Where the call of a result used outside its scope is made: in the
--- owner of the use under other conditions, else in the first owner that
--- makes it, else nowhere (with the read that drops it, if known).
-callMade :: Owner -> [(Owner, Path)] -> CallKind -> ForeignCallMade
-callMade o calls kind
-    | any ((== o) . fst) calls = ForeignCallMadeHere (ownerKind o)
-    | ((o', _) : _) <- calls = ForeignCallMadeIn (ownerName o')
-    | otherwise = ForeignCallNotMade (readPosition kind)
+-- Where the call of a result used outside its scope (under the conditions
+-- s) is made: in the owner of the use under other conditions (which
+-- differ, perhaps, because a condition of the call holds an undetermined
+-- value, each occurrence of which is a different condition), else in the
+-- first owner that makes it, else nowhere (with the read that drops it,
+-- if known).
+callMade :: Owner -> Path -> [(Owner, Path)] -> CallKind -> KM ForeignCallMade
+callMade o s calls kind
+    | any ((== o) . fst) calls = do
+        undets <- gets ks_undet
+        let missing = [ c | (o', pk) <- calls, o' == o, c <- S.toList (S.difference pk s) ]
+            condKeys (CIf k _) = [k]
+            condKeys (CSel k _) = [k]
+            condKeys (CCase k m_v) = k : maybeToList m_v
+            undet_poss = mapMaybe (\ k -> IM.lookup k undets) (concatMap condKeys missing)
+        return (case sortBy (comparing posKey) undet_poss of
+                  (pos : _) -> ForeignCallMadeHereUndet (ownerKind o) pos
+                  [] -> ForeignCallMadeHere (ownerKind o))
+    | ((o', _) : _) <- calls = return (ForeignCallMadeIn (ownerName o'))
+    | otherwise = return (ForeignCallNotMade (readPosition kind))
 
 readPosition :: CallKind -> Maybe Position
 readPosition (CKPeek pos) | usablePosition pos = Just pos
@@ -490,8 +516,9 @@ foreignResultMsgs meth_poss imod bad =
 madeKey :: ForeignCallMade -> (Int, Maybe (String, Int, Int), String)
 madeKey (ForeignCallNotMade (Just p)) = (0, Just (posKey p), "")
 madeKey (ForeignCallNotMade Nothing) = (1, Nothing, "")
-madeKey (ForeignCallMadeHere s) = (2, Nothing, s)
-madeKey (ForeignCallMadeIn s) = (3, Nothing, s)
+madeKey (ForeignCallMadeHereUndet s p) = (2, Just (posKey p), s)
+madeKey (ForeignCallMadeHere s) = (3, Nothing, s)
+madeKey (ForeignCallMadeIn s) = (4, Nothing, s)
 
 posKey :: Position -> (String, Int, Int)
 posKey p = (getPositionFile p, getPositionLine p, getPositionColumn p)

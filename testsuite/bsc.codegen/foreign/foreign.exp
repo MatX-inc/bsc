@@ -188,6 +188,11 @@ foreach opts { {-opt-undetermined-vals -unspecified-to X} {-unspecified-to 0} } 
         compare_file BDPIActionValuePeekUndet.bsv.bsc-vcomp-out
     }
 }
+# A condition that holds a don't-care value is a different value at each
+# place that uses it, so a result used under it is not used under the
+# condition of the call: the message says that this is why the conditions
+# differ, and where the don't-care value is
+peek_fail_error BDPIActionValueUndetCond.bsv G0139 1
 # ... whatever the optimizations ...
 peek_fail_error BDPIActionValuePeekRule.bsv G0139 1
 foreach opts { {-opt-undetermined-vals -unspecified-to X} {-unspecified-to 0} } {

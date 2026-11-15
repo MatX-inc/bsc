@@ -1243,11 +1243,13 @@ data ErrMsg =
 
 -- Where the call of a foreign function whose result is used outside the
 -- call's scope is made (see EForeignResultUsed): in another rule or method
--- (named), in the user itself under other conditions (the user's kind,
--- "rule" or "method"), or nowhere, with the position of the read that does
--- not run the call, when it is known.
+-- (named); in the user itself (the user's kind, "rule" or "method") under
+-- other conditions, which differ, perhaps, because one of them holds a
+-- don't-care value (its position); or nowhere, with the position of the
+-- read that does not run the call, when it is known.
 data ForeignCallMade = ForeignCallMadeIn String
                      | ForeignCallMadeHere String
+                     | ForeignCallMadeHereUndet String Position
                      | ForeignCallNotMade (Maybe Position)
         deriving (Eq, Show)
 
@@ -4196,6 +4198,13 @@ getErrorText (EForeignResultUsed f link call_pos user made) =
         usedWhere (ForeignCallMadeHere kind) =
             " outside the conditions under which the call is made (it is " ++
             "made in this " ++ kind ++ " under other conditions).  The " ++
+            "result exists only in a cycle in which the call is made."
+        usedWhere (ForeignCallMadeHereUndet kind pos) =
+            " outside the conditions under which the call is made (it is " ++
+            "made in this " ++ kind ++ " under other conditions, which " ++
+            "differ because the conditions of the call hold a don't-care " ++
+            "value" ++ atUsefulPosition pos ++ ", and each use of a " ++
+            "don't-care value can be given a different value).  The " ++
             "result exists only in a cycle in which the call is made."
         usedWhere (ForeignCallNotMade (Just read_pos)) =
             ", but the call is not made: the ActionValue that makes it is " ++
