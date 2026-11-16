@@ -42,6 +42,9 @@ module TypeLinks(
         tlCopy, tlCoerce, tlStoredValue, tlFixValue,
         tlArgsReset, tlArgPush, tlStored, tlRedex,
         tlOutPayload, tlFallUnpack, tlPreRewrite, tlUnpackAt,
+        -- events (Y, Z, W)
+        tlOpEvent, tlOrdEvent, tlConLit, tlTagLit, tlSlotLit, tlElemEvent,
+        tlConcatEvent, tlSetBits,
         -- decided conditionals
         tlCondBegin, tlCondTake, tlCondEnd, tlCondDecided,
         -- roots
@@ -67,13 +70,13 @@ import Numeric(showHex)
 import System.Environment(lookupEnv)
 import System.IO(IOMode(..), BufferMode(..), openBinaryFile, hSetBuffering)
 import System.IO.Unsafe(unsafePerformIO)
-import System.Mem.StableName(StableName, makeStableName, eqStableName)
+import System.Mem.StableName(StableName, makeStableName, eqStableName, hashStableName)
 
 import FStringCompat(FString, getFString)
 import FileNameUtil(getRelativeFilePath)
 import Position(Position(..), noPosition)
 import Id(Id, getIdString, getIdBaseString, getIdPosition)
-import PreIds(idArrow, idBit, idPrimPair)
+import PreIds(idArrow, idBit, idPrimPair, idBool)
 import IntLit(IntLit(..))
 import Prim(PrimOp(..))
 import CType(TISort(..), StructSubType(..))
@@ -95,6 +98,8 @@ data End = ECell !Int             -- a heap cell
          | EUndet                 -- a don't-care
          | EUnit                  -- known to carry nothing (a unit value, no actions)
          | ENone                  -- absent or unreadable
+         | ELitId !Int            -- a literal the evaluator named (Y con, tag, ord, slot)
+         | EArr !Int              -- an array that is in no cell (Y arr)
 
 tlCellEnd :: Int -> End
 tlCellEnd = ECell
@@ -148,6 +153,8 @@ linkable (ECell _) = True
 linkable (ENode _) = True
 linkable (ENamed _) = True
 linkable (ELeaf _ _ _) = True
+linkable (ELitId _) = True
+linkable (EArr _) = True
 linkable _ = False
 
 recHeld :: Rec -> Bool
@@ -321,7 +328,35 @@ ctHNoReady = 58     -- methods with no ready port
 ctHArgUnread = 59   -- argument ports of methods that no record names
 ctO = 60
 ctClass0 = 61       -- cells by class: ctClass0 + class
-nCounters = ctClass0 + nClasses
+nCounters = ctY0 + 12
+
+-- the event records (Y, Z, W, U), counted in the event view's own array and
+-- written as "# count ev.<name>" lines after every other count line
+ctY0, ctY, ctZ, ctW, ctU, ctYSkip, ctYTop, ctYLit, ctYArr, ctYCanon,
+  ctYUndet, ctWFinal, ctYConst :: Int
+ctY0 = ctClass0 + nClasses
+ctY = ctY0
+ctZ = ctY0 + 1
+ctW = ctY0 + 2      -- literals named in an A F or Z record (W)
+ctU = ctY0 + 3
+ctYSkip = ctY0 + 4  -- operations on a dictionary, a function or an action, not written
+ctYTop = ctY0 + 5   -- whole operations pushed into several values (Y with op suffix "*")
+ctYLit = ctY0 + 6   -- literals named (l<n>)
+ctYArr = ctY0 + 7   -- arrays in no cell given a node (r<n>)
+ctYCanon = ctY0 + 8 -- operations left on a canonical value (Y on an application of the op itself)
+ctYUndet = ctY0 + 9 -- literals not named: their type has no Bits instance, or is Bool
+ctWFinal = ctY0 + 10 -- named literals that are a final cell's whole value (W c -1)
+ctYConst = ctY0 + 11 -- operations whose result is a constant or a don't-care, not written
+
+evCounterNames :: [(Int, String)]
+evCounterNames =
+    [ (ctY, "Y"), (ctZ, "Z"), (ctW, "W"), (ctU, "U"), (ctYSkip, "Y-skip"),
+      (ctYTop, "Y-top"), (ctYLit, "Y-literals"), (ctYArr, "Y-array-nodes"),
+      (ctYCanon, "Y-canonical"), (ctYUndet, "Y-literal-not-named"), (ctWFinal, "W-final"),
+      (ctYConst, "Y-constant-result"),
+      (ctErr, "read-failed"), (ctDeferred, "deferred"), (ctInline, "inline-absent"),
+      (ctSkipConst, "skip-no-link"), (ctNoHead, "no-kind"), (ctSkipDictSel, "skip-dict-sel"),
+      (ctNormRec, "norm-records"), (ctNormType, "norm-types"), (ctNormLeft, "norm-left") ]
 
 counterNames :: [(Int, String)]
 counterNames =
@@ -420,8 +455,34 @@ data TLog = TLog {
     -- the records that are written after every other record (R, then O,
     -- then H), each with its counter, newest first
     tl_late :: !(IORef [(Int, B.Builder)]),
-    tl_counts :: !(IOUArray Int Int)
+    tl_counts :: !(IOUArray Int Int),
+    -- The event view (Y, Z, W, U records).  It is this log with its own
+    -- type table, inline-node counter, held records and counters, so that
+    -- no event takes a type id, a node number or a named end's id that a
+    -- record of the other views would have taken first: every other line
+    -- of the file is as it would be without the events.  The letter of an
+    -- inline node: 'a' here, 'e' in the event view.
+    tl_nodeC :: !Char,
+    tl_ev    :: TLog,
+    -- literals the evaluator named, by the object's stable name; the next
+    -- literal's number
+    tl_lits  :: !(IORef (IM.IntMap [(AnySN, Int)])),
+    tl_nlit  :: !(IORef Int),
+    -- arrays (the cell table of an array value) and the end each is: the
+    -- cell that holds it, or a node of its own; the next node's number
+    tl_arrs  :: !(IORef (IM.IntMap [(AnySN, End)])),
+    tl_narr  :: !(IORef Int),
+    -- whether a type has an instance of Bits (the symbol table's answer,
+    -- given by tlSetBits; Nothing when it cannot tell)
+    tl_bits  :: !(IORef (IType -> Maybe Bool))
   }
+
+-- a stable name of an object of any type
+data AnySN = forall x. AnySN (StableName x)
+
+lookupSN :: StableName x -> [(AnySN, v)] -> Maybe v
+lookupSN _ [] = Nothing
+lookupSN sn ((AnySN s, v) : rest) = if eqStableName s sn then Just v else lookupSN sn rest
 
 -- The switch: with BSC_TYPELINKS=0 in the environment no log is kept and
 -- no file is written.  Read once, at the first use.
@@ -477,7 +538,19 @@ tlNewLog mfile = do
   posList <- newIORef []
   late <- newIORef []
   counts <- newArray (0, nCounters - 1) 0
-  return (TLog { tlOn = maybe False (const True) mh,
+  lits <- newIORef IM.empty
+  nlit <- newIORef 0
+  arrs <- newIORef IM.empty
+  narr <- newIORef 0
+  bits <- newIORef (const Nothing)
+  -- the event view's own type table, nodes, held records and counters
+  etids <- newIORef IM.empty
+  etypes <- newIORef []
+  netypes <- newIORef 0
+  enode <- newIORef 0
+  edefer <- newIORef []
+  ecounts <- newArray (0, nCounters - 1) 0
+  let l = TLog { tlOn = maybe False (const True) mh,
                  tl_out = maybe (error "TypeLinks: no file") id mh,
                  tl_tids = tids, tl_types = types, tl_ntypes = ntypes,
                  tl_norm = norm, tl_cls = cls,
@@ -490,7 +563,14 @@ tlNewLog mfile = do
                  tl_prerwApps = prerwApps, tl_prerwKeys = prerwKeys,
                  tl_prerwRes = prerwRes, tl_heads = heads,
                  tl_posTab = posTab, tl_posList = posList,
-                 tl_late = late, tl_counts = counts })
+                 tl_late = late, tl_counts = counts,
+                 tl_nodeC = 'a', tl_ev = ev,
+                 tl_lits = lits, tl_nlit = nlit, tl_arrs = arrs, tl_narr = narr,
+                 tl_bits = bits }
+      ev = l { tl_tids = etids, tl_types = etypes, tl_ntypes = netypes,
+               tl_node = enode, tl_defer = edefer, tl_counts = ecounts,
+               tl_nodeC = 'e', tl_ev = ev }
+  return l
 
 -- The value a rewrite gave (the name of that very object: the cell that
 -- stores it is told by identity, with no comparison of expressions), the
@@ -734,7 +814,9 @@ namedId l kname name own width = do
 
 endB :: TLog -> End -> IO B.Builder
 endB _ (ECell p) = return (cellB p)
-endB _ (ENode n) = return (B.char7 'a' <> B.intDec n)
+endB l (ENode n) = return (B.char7 (tl_nodeC l) <> B.intDec n)
+endB _ (ELitId n) = return (B.char7 'l' <> B.intDec n)
+endB _ (EArr n) = return (B.char7 'r' <> B.intDec n)
 endB _ (ENamed n) = return (B.char7 'n' <> B.intDec n)
 endB l (ELeaf k i t) = do n <- leafId l k i t
                           return (B.char7 'n' <> B.intDec n)
@@ -790,11 +872,19 @@ writeRec l (RA vw node kind name tid nts ends) = do
           NmOf k n -> return (integerB k <> B.char7 '.' <> integerB n)
           NmNum n -> return (B.intDec n)
   eb <- endsB l ends
+  -- the event view's records have a letter of their own (Y: an operation
+  -- of the evaluator, Z: an inline expression of one)
+  let lead = case vw of
+               'Y' -> B.string7 "Y "
+               'Z' -> B.string7 "Z "
+               _ -> B.string7 "A " <> B.char7 vw <> sp
   put l (case vw of
            'R' -> ctAR
            'S' -> ctAS
+           'Y' -> ctY
+           'Z' -> ctZ
            _ -> ctAF)
-        (B.string7 "A " <> B.char7 vw <> sp <> nb <> sp <> B.string7 kind <> sp <>
+        (lead <> nb <> sp <> B.string7 kind <> sp <>
          nm <> sp <> B.intDec (written tid) <> sp <> B.intDec (length nts) <>
          mconcat [ sp <> nargB t | t <- nts ] <> sp <> B.intDec (length ends) <> eb)
 writeRec l (RV p e) = do
@@ -977,7 +1067,8 @@ describeSel :: TLog -> Char -> Int -> End -> Maybe IType -> Maybe [End] -> Maybe
 describeSel l vw depth node mft mends msel e0 = do
   let (h0, ts, es) = flatAp e0
       n = length es
-      -- every argument's end; the conditional kinds stop at their arms
+      -- every argument's end; the conditional kinds stop at their arms in
+      -- the live views (not in the final view, nor in an event's Z record)
       ends stop = case mends of
                     Just xs -> return xs
                     Nothing -> argEnds l vw depth stop es
@@ -986,12 +1077,12 @@ describeSel l vw depth node mft mends msel e0 = do
       endsArms = case (mends, msel) of
                    (Just xs, _) -> return xs
                    (Nothing, Just s) -> do
-                       b <- argEnds l vw depth (vw /= 'F') (drop 1 es)
+                       b <- argEnds l vw depth (vw /= 'F' && vw /= 'Z') (drop 1 es)
                        bump l ctDecided
                        return (s : b)
                    (Nothing, Nothing) -> do
                        a <- argEnds l vw depth False (take 1 es)
-                       b <- argEnds l vw depth (vw /= 'F') (drop 1 es)
+                       b <- argEnds l vw depth (vw /= 'F' && vw /= 'Z') (drop 1 es)
                        return (a ++ b)
       -- In the live views a record none of whose ends is a cell, a node
       -- or a leaf links nothing and is not written (a constant structure,
@@ -1008,6 +1099,9 @@ describeSel l vw depth node mft mends msel e0 = do
                              case (node, name) of
                                (ENode _, NmPrim op) -> preRewriteInline l node op nts xs
                                _ -> return ()
+                         -- the arguments that are literals the evaluator
+                         -- named (W)
+                         when (vw == 'F' || vw == 'Z') $ litLinks l node es
                          return True
       tyArg k = case drop k ts of
                   (t : _) -> Just t
@@ -1032,8 +1126,9 @@ describeSel l vw depth node mft mends msel e0 = do
             xs <- ends False
             done <- out "con" nm (resTid ic) [] xs
             -- the constructor of a one-constructor type: where this
-            -- application is written
-            when done $
+            -- application is written (not for an event's expression,
+            -- which takes no number in the table of positions)
+            when (done && vw /= 'Z') $
                 case nm of
                   NmOf _ 1 -> headPosition l vw node hi
                   _ -> return ()
@@ -1276,6 +1371,8 @@ tlCellWHNF :: TLog -> Int -> IType -> String -> Bool -> IExpr a -> IO ()
 tlCellWHNF l p t how withValue e = safely l $ do
   logged <- newCell l p t how
   when (logged && withValue) $ storedValue l p e
+  -- an array's cell (whose class is not logged): its slots (Y arr)
+  when withValue $ arrayHeld l p e
 
 -- -----
 -- Hooks: links
@@ -1308,6 +1405,8 @@ tlStoredValue :: TLog -> Int -> IExpr a -> IO ()
 tlStoredValue l p e = safely l $ do
   skip <- skippedCell l p
   unless skip $ storedValue l p e
+  -- an array's cell (whose class is not logged): its slots (Y arr)
+  arrayHeld l p e
 
 storedValue :: TLog -> Int -> IExpr a -> IO ()
 storedValue l p e0 = do
@@ -1422,6 +1521,380 @@ tlOutPayload l out tys res mscrut = safely l $ do
               _ -> return ()
         _ -> return ()
     _ -> return ()
+
+-- -----
+-- Hooks: events (Y, Z, W)
+--
+-- An event is an operation of the evaluator on a typed value, written with
+-- its result: "Y <result> <op> <name> <tid> <nts> <ts>* <n> <ends>*", the
+-- layout of an A record without the view.  The first end is the value the
+-- operation was applied to.  An end that is an inline expression is a node
+-- e<n> of the event view, described by a Z record (the same layout); a
+-- literal the evaluator named is l<n>; an array that is in no cell is r<n>.
+-- The type ids of Y and Z records are the event view's own: a U row at the
+-- end gives each one's main T row.  W <node> <k> l<n>: argument k (counted
+-- over the expression arguments) of the node of an A F or Z record is the
+-- named literal; k = -1: the final cell's whole value is.
+--
+-- ops: sel k.n, out k.n, is k.n (the field, payload or test of constructor
+-- k of n, on one value in view); the same with "*" (the whole operation,
+-- which the evaluator pushed into the arms of a conditional or the
+-- elements of an array, so ran more than once); ord k.n (the tag of a
+-- value that is constructor k) and ord - (the bits of a value held as
+-- chr); con k.n (the literal that the constructor k of no argument is);
+-- tag k.n (the literal a test compares the bits with); elem i.n (slot i of
+-- an array of n slots); arr n (an array's slot cells, in order); hold (a
+-- cell holds the array written before as the end); slot i (a literal that
+-- is the slot number i, compared with the index of a dynamic update);
+-- concat (a concat as evaluated, before a rewrite made it the result);
+-- rewrite <op> (an application of the primitive op as evaluated, before a
+-- rewrite made it the result).  An operation whose result is a constant
+-- or a don't-care is not written, nor one on a dictionary, a function or
+-- an action, nor ord of a Bool.
+
+-- the symbol table's test of whether a type has an instance of Bits
+tlSetBits :: TLog -> (IType -> Maybe Bool) -> IO ()
+tlSetBits l f = writeIORef (tl_bits l) f
+
+-- A literal of the type t is named only when t has an instance of Bits (a
+-- type that has no bits, a list for one, makes no wire) and is not Bool
+-- (whose literal is its value, with nothing more to name).
+nameable :: TLog -> IType -> IO Bool
+nameable l t = reading l False $ do
+  t' <- evaluate t
+  f <- readIORef (tl_bits l)
+  case headOf t' of
+    ITCon i _ _ | i == idBool -> return False
+    _ -> evaluate (f t' == Just True)
+
+-- an end that is a constant, a don't-care or nothing: an operation with
+-- such a result makes no wire, and its event is not written
+constEnd :: End -> Bool
+constEnd (ELit _ _) = True
+constEnd EConst = True
+constEnd EUndet = True
+constEnd EUnit = True
+constEnd _ = False
+
+-- the event view's end of an expression: a named literal, else a cell,
+-- leaf or constant as it is, else an inline application described to the
+-- depth (a node of the event view)
+evEnd :: TLog -> Int -> IExpr a -> IO End
+evEnd ev depth e = do
+  ml <- litOf ev e
+  case ml of
+    Just n -> return (ELitId n)
+    Nothing -> argEnd ev 'Z' depth False e
+
+-- the value an operation was applied to: its own expression when the
+-- evaluator had it as a cell or leaf, else the value as matched
+valueEnd :: TLog -> Maybe (IExpr a) -> IExpr a -> IO End
+valueEnd ev mown v = do
+  own <- case mown of
+           Just x -> endOf ev x
+           Nothing -> return ENone
+  case own of
+    ENone -> evEnd ev liveDepth v
+    _ -> return own
+
+-- the class of a type, with no type id taken
+typeClass :: TLog -> IType -> IO Int
+typeClass l t = reading l clsOther (do t' <- evaluate t
+                                       evaluate (classOf t'))
+
+-- the number of a literal the evaluator named, when e is one
+litOf :: TLog -> IExpr a -> IO (Maybe Int)
+litOf l e0 = do
+  m <- readIORef (tl_lits l)
+  -- (a failed read is counted in the event view, whichever view asks)
+  if IM.null m then return Nothing else reading (tl_ev l) Nothing $ do
+    e <- evaluate e0
+    case e of
+      ICon _ (ICInt {}) -> do
+          sn <- makeStableName e
+          return (lookupSN sn (IM.findWithDefault [] (hashStableName sn) m))
+      _ -> return Nothing
+
+-- Name the literal e (when it is a literal): its number, and its value as
+-- an end.  A literal named before keeps its number.
+regLit :: TLog -> IExpr a -> IO (Maybe (Int, End))
+regLit l e0 = reading l Nothing $ do
+  e <- evaluate e0
+  case e of
+    ICon i ic@(ICInt {}) -> do
+        sn <- makeStableName e
+        m <- readIORef (tl_lits l)
+        let h = hashStableName sn
+            bucket = IM.findWithDefault [] h m
+        v <- conEnd l i ic
+        case lookupSN sn bucket of
+          Just n -> return (Just (n, v))
+          Nothing -> do
+            n <- readIORef (tl_nlit l)
+            writeIORef (tl_nlit l) $! n + 1
+            writeIORef (tl_lits l) $! IM.insert h ((AnySN sn, n) : bucket) m
+            bump l ctYLit
+            return (Just (n, v))
+    _ -> return Nothing
+
+-- W: the arguments of the node's record that are named literals
+litLinks :: TLog -> End -> [IExpr a] -> IO ()
+litLinks l node es = do
+  m <- readIORef (tl_lits l)
+  unless (IM.null m) $
+    forM_ (zip [0 :: Int ..] es) $ \ (k, e) -> do
+      ml <- litOf l e
+      case ml of
+        Just n -> do nb <- endB l node
+                     put (tl_ev l) ctW (B.string7 "W " <> nb <> sp <> B.intDec k <> sp <>
+                                        B.char7 'l' <> B.intDec n)
+        Nothing -> return ()
+
+-- An operation (the head hd, a selector ICSel, a match-out ICOut or a test
+-- ICIs, at the type arguments tys) on one value: mown the value's own
+-- expression (a cell or leaf) when the evaluator had one, v the value as
+-- matched; mpart the field or payload as it was in the value (when it is
+-- a cell, that cell is the result), res the result.  With top, the whole
+-- operation of a conAp' clause, which ran on several values (the arms of a
+-- conditional, the elements of an array): mown and v are the operand as
+-- given.  Not written for a dictionary, a function or an action.
+tlOpEvent :: TLog -> Bool -> IExpr a -> [IType] -> Maybe (IExpr a) -> IExpr a ->
+             Maybe (IExpr a) -> IExpr a -> IO ()
+tlOpEvent l top hd tys mown v mpart res = safely ev $ do
+  h <- evaluate hd
+  case h of
+    ICon _ ic0 -> do
+      ic <- evaluate ic0
+      minfo <- reading ev Nothing $ case ic of
+                 ICSel { selNo = k, numSel = m } -> do
+                     k' <- evaluate k
+                     m' <- evaluate m
+                     return (Just ("sel", k', m'))
+                 ICOut { conTagInfo = cti } -> info "out" cti
+                 ICIs { conTagInfo = cti } -> info "is" cti
+                 _ -> return Nothing
+      mparts <- reading ev Nothing (evaluate (arrowParts (instLead (iConType ic) tys)))
+      case (minfo, mparts) of
+        (Just (op, k, m), Just (st, rt)) -> do
+          scls <- typeClass ev st
+          rcls <- typeClass ev rt
+          if clsSkipped scls || clsSkipped rcls then bump ev ctYSkip else do
+            -- the result first: a constant result writes nothing (no Z
+            -- record of the value is left behind)
+            re <- case mpart of
+                    Just x -> do r <- reading ev (Right ENone) (endOrInline ev x)
+                                 case r of
+                                   Right (ECell p) -> return (ECell p)
+                                   _ -> evEnd ev liveDepth res
+                    Nothing -> evEnd ev liveDepth res
+            if constEnd re then bump ev ctYConst else do
+              ve <- valueEnd ev mown v
+              tt@(TidT tid _) <- reading ev noTid (tidOfT ev (Just st))
+              when top $ bump ev ctYTop
+              emit ev (atType tt (RA 'Y' re (if top then op ++ "*" else op) (NmOf k m) tid [] [ve]))
+        _ -> return ()
+    _ -> return ()
+  where
+    ev = tl_ev l
+    info op cti = do k <- evaluate (conNo cti)
+                     m <- evaluate (numCon cti)
+                     return (Just (op, k, m))
+
+-- ord of a value of the type f (handleOrd): of a constructor in view, the
+-- new literal res is its tag; of a value held as chr, res is its bits
+tlOrdEvent :: TLog -> IType -> Maybe (IExpr a) -> IExpr a -> IExpr a -> IO ()
+tlOrdEvent l f mown v res = safely ev $ do
+  v' <- evaluate v
+  arm <- reading ev Nothing $ case flatAp v' of
+           (ICon _ (ICCon { conTagInfo = cti }), _, _) -> do
+               k <- evaluate (conNo cti)
+               m <- evaluate (numCon cti)
+               return (Just (Just (k, m)))
+           (ICon _ (ICPrim { primOp = PrimChr }), _, _) -> return (Just Nothing)
+           _ -> return Nothing
+  case arm of
+    Nothing -> return ()
+    Just (Just (k, m)) -> do
+      ok <- nameable ev f
+      if not ok then bump ev ctYUndet else do
+        ml <- regLit ev res
+        case ml of
+          Just (n, lv) -> do
+            ve <- valueEnd ev mown v'
+            tt@(TidT tid _) <- reading ev noTid (tidOfT ev (Just f))
+            emit ev (atType tt (RA 'Y' (ELitId n) "ord" (NmOf k m) tid [] [ve, lv]))
+          Nothing -> return ()
+    Just Nothing -> do
+      -- the bits of a Bool are its value: nothing to name
+      isBool <- reading ev False $ do
+                  f' <- evaluate f
+                  case headOf f' of
+                    ITCon i _ _ -> return (i == idBool)
+                    _ -> return False
+      re <- if isBool then return EConst else evEnd ev liveDepth res
+      if constEnd re then bump ev ctYConst else do
+        ve <- valueEnd ev mown v'
+        tt@(TidT tid _) <- reading ev noTid (tidOfT ev (Just f))
+        emit ev (atType tt (RA 'Y' re "ord" (NmStr "-") tid [] [ve]))
+  where ev = tl_ev l
+
+-- the constructor of no argument (constructor info cti) of the type t
+-- became res, chr of a literal: that literal is the constructor
+tlConLit :: TLog -> IType -> ConTagInfo -> IExpr a -> IO ()
+tlConLit l t cti res = safely ev $ do
+  r <- evaluate res
+  case flatAp r of
+    (ICon _ (ICPrim { primOp = PrimChr }), _, [x]) -> namedLit ev "con" t cti x
+    _ -> return ()
+  where ev = tl_ev l
+
+-- the literal a test (the head hd, ICIs, at the type arguments tys)
+-- compares the bits of a value held as chr with
+tlTagLit :: TLog -> IExpr a -> [IType] -> IExpr a -> IO ()
+tlTagLit l hd tys lit = safely ev $ do
+  h <- evaluate hd
+  case h of
+    ICon _ ic0 -> do
+      ic <- evaluate ic0
+      case ic of
+        ICIs { conTagInfo = cti } -> do
+          mparts <- reading ev Nothing (evaluate (arrowParts (instLead (iConType ic) tys)))
+          case mparts of
+            Just (st, _) -> namedLit ev "tag" st cti lit
+            Nothing -> return ()
+        _ -> return ()
+    _ -> return ()
+  where ev = tl_ev l
+
+namedLit :: TLog -> String -> IType -> ConTagInfo -> IExpr a -> IO ()
+namedLit ev op t cti x = do
+  ok <- nameable ev t
+  ml <- if ok then regLit ev x else do bump ev ctYUndet
+                                       return Nothing
+  case ml of
+    Just (n, lv) -> do
+      k <- evaluate (conNo cti)
+      m <- evaluate (numCon cti)
+      tt@(TidT tid _) <- reading ev noTid (tidOfT ev (Just t))
+      emit ev (atType tt (RA 'Y' (ELitId n) op (NmOf k m) tid [] [lv]))
+    Nothing -> return ()
+
+-- the literal lit is the slot number i, compared with the index of a
+-- dynamic update of an array of elements of the type t
+tlSlotLit :: TLog -> IType -> Integer -> IExpr a -> IO ()
+tlSlotLit l t i lit = safely ev $ do
+  ml <- regLit ev lit
+  case ml of
+    Just (n, lv) -> do
+      tt@(TidT tid _) <- reading ev noTid (tidOfT ev (Just t))
+      emit ev (atType tt (RA 'Y' (ELitId n) "slot" (NmStr (show i)) tid [] [lv]))
+    Nothing -> return ()
+  where ev = tl_ev l
+
+-- Arrays.  The end of an array value is the cell that holds it, or else a
+-- node of its own; each is written once with its slot cells (Y arr), and
+-- known after that by the array's cell table (its stable name).
+
+-- the cell p holds the array value e (from a cell's stored value; the
+-- cell's class is not logged, so this is apart from storedValue)
+arrayHeld :: TLog -> Int -> IExpr a -> IO ()
+arrayHeld l p e0 = safely ev $ do
+  e <- evaluate e0
+  case e of
+    ICon _ (ICLazyArray { iConType = at, iArray = arr0 }) -> do
+      arr <- evaluate arr0
+      sn <- makeStableName arr
+      m <- readIORef (tl_arrs ev)
+      let h = hashStableName sn
+      case lookupSN sn (IM.findWithDefault [] h m) of
+        -- an array written before (held by another cell, or a node of
+        -- its own): this cell holds that array (Y hold), with no slots
+        Just en -> emit ev (RA 'Y' (ECell p) "hold" (NmStr "-") (-1) [] [en])
+        Nothing -> do
+          writeIORef (tl_arrs ev) $! IM.insertWith (++) h [(AnySN sn, ECell p)] m
+          arrayRecord ev (ECell p) at arr
+    _ -> return ()
+  where ev = tl_ev l
+
+arrayEnd :: TLog -> IExpr a -> IO End
+arrayEnd ev av = reading ev ENone $ do
+  a <- evaluate av
+  case a of
+    ICon _ (ICLazyArray { iConType = at, iArray = arr0 }) -> do
+      arr <- evaluate arr0
+      sn <- makeStableName arr
+      m <- readIORef (tl_arrs ev)
+      let h = hashStableName sn
+      case lookupSN sn (IM.findWithDefault [] h m) of
+        Just en -> return en
+        Nothing -> do
+          n <- readIORef (tl_narr ev)
+          writeIORef (tl_narr ev) $! n + 1
+          bump ev ctYArr
+          let en = EArr n
+          writeIORef (tl_arrs ev) $! IM.insertWith (++) h [(AnySN sn, en)] m
+          arrayRecord ev en at arr
+          return en
+    _ -> return ENone
+
+arrayRecord :: TLog -> End -> IType -> ILazyArray a -> IO ()
+arrayRecord ev en at arr = do
+  tt@(TidT tid _) <- reading ev noTid (tidOfT ev (Just at))
+  let slots = [ ECell (ac_ptr c) | c <- Array.elems arr ]
+  emit ev (atType tt (RA 'Y' en "arr" (NmNum (length slots)) tid [] slots))
+
+-- slot i of the array value av is the cell p
+tlElemEvent :: TLog -> IExpr a -> Integer -> Int -> IO ()
+tlElemEvent l av i p = safely ev $ do
+  ae <- arrayEnd ev av
+  a <- evaluate av
+  case a of
+    ICon _ (ICLazyArray { iConType = at, iArray = arr }) -> do
+      let n = Array.rangeSize (Array.bounds arr)
+      tt@(TidT tid _) <- reading ev noTid (tidOfT ev (Just at))
+      emit ev (atType tt (RA 'Y' (ECell p) "elem" (NmOf i (toInteger n)) tid [] [ae]))
+    _ -> return ()
+  where ev = tl_ev l
+
+-- The evaluator's rewrite turned a concat of no don't-care operand into
+-- the application res (two neighbouring extracts of one word into one):
+-- the concat as evaluated (ts its type arguments, heaped its operands).
+--
+-- More generally (any primitive op of that clause, "rewrite <op>"): the
+-- evaluator's rewrite turned the application of op to the operands heaped
+-- into the application res.  A rewrite rebuilds the operands' values in
+-- the result (an OR of shifted words becomes a concat of the words), so
+-- this is the only record that ties a result's parts to the operands'
+-- cells.  A concat with exactly one don't-care operand is tlPreRewrite's.
+tlConcatEvent :: TLog -> PrimOp -> [IType] -> [IExpr a] -> [IExpr a] -> IExpr a -> IO ()
+tlConcatEvent l op ts vals heaped res = safely ev $ do
+  undets <- mapM isUndet vals
+  r <- evaluate res
+  let oneUndet = length (filter id undets) == 1
+  case r of
+    IAps _ _ _ | not (op == PrimConcat && oneUndet) -> do
+      nts <- mapM (numArg ev) ts
+      re <- evEnd ev liveDepth r
+      -- a result with nothing to link (an application of constants only,
+      -- which the event view does not describe) ties nothing: not written
+      case re of
+        ENone -> bump ev ctYConst
+        _ | constEnd re -> bump ev ctYConst
+        _ -> do
+          xs <- mapM (evEnd ev liveDepth) heaped
+          if op == PrimConcat
+            then emit ev (RA 'Y' re "concat" (NmStr "-") (-1) nts xs)
+            else emit ev (RA 'Y' re "rewrite" (NmPrim op) (-1) nts xs)
+    _ -> return ()
+  where ev = tl_ev l
+        isUndet v = reading ev False $ do
+            v' <- evaluate v
+            case v' of
+              ICon _ ic0 -> do ic <- evaluate ic0
+                               case ic of
+                                 ICUndet {} -> return True
+                                 _ -> return False
+              _ -> return False
 
 -- The evaluator's rewrite turned a concat with a don't-care operand into
 -- res (for example, "select 4 8 16 w ++ _" into "select 8 4 16 w": the
@@ -1710,7 +2183,15 @@ tlFinalExpr l node e0 = safely l $ do
         case (node, en) of
           (_, ENone) -> return ()
           (ECell _, EUnit) -> return ()
-          (ECell c, _) -> emit l (RV c en)
+          (ECell c, _) -> do
+              emit l (RV c en)
+              -- the value is a literal the evaluator named (W c -1)
+              ml <- litOf l e
+              case ml of
+                Just n -> do bump (tl_ev l) ctWFinal
+                             put (tl_ev l) ctW (B.string7 "W " <> cellB c <> B.string7 " -1 l" <>
+                                                B.intDec n)
+                Nothing -> return ()
           _ -> emit l (RA 'F' node "other" (NmStr "alias") (-1) [] [en])
     _ -> return ()
 
@@ -1924,6 +2405,15 @@ tlFinalEnd :: TLog -> (String -> String -> Maybe IType) ->
               (IType -> Maybe [(Integer, Integer, Integer)]) ->
               (IType -> Maybe Bool) -> [String] -> IO ()
 tlFinalEnd l declared fieldsOf encOf bitsOf methods = do
+  -- the event view's held records (an event that names a leaf, or whose
+  -- type had to be normalized): written after every other record has
+  -- taken its named ends' ids, so that a leaf named only by an event gets
+  -- an id after all the others
+  let ev = tl_ev l
+  safely ev $ do
+    rs <- readIORef (tl_defer ev)
+    writeIORef (tl_defer ev) []
+    forM_ (reverse rs) $ \ r -> safely ev (writeRec ev r)
   safely l $ do
     leafs <- reverse <$> readIORef (tl_leafl l)
     forM_ leafs $ \ (n, kname, name, own, width) -> safely l $ do
@@ -2036,6 +2526,21 @@ tlFinalEnd l declared fieldsOf encOf bitsOf methods = do
     rs <- reverse <$> readIORef (tl_late l)
     forM_ [ctR, ctO, ctH] $ \ kind ->
         forM_ rs $ \ (ct, b) -> when (ct == kind) $ put l ct b
+  -- the event view's types (U): its id, the main T row's id of the same
+  -- normalized type (-1: no record of the other views has the type), the
+  -- class, and the type
+  safely ev $ do
+    ets <- reverse <$> readIORef (tl_types ev)
+    mtids <- readIORef (tl_tids l)
+    forM_ (zip [0 :: Int ..] ets) $ \ (etid, t) -> safely ev $ do
+      cls <- reading ev clsOther (evaluate (classOf t))
+      let c = tCode t
+          mtid = case IM.lookup c mtids of
+                   Just v | c >= 0 && v >= 0 -> v `shiftR` 4
+                   _ -> -1
+      s <- reading ev "?" (evaluate (let x = take spellMax (spell t) in length x `seq` x))
+      put ev ctU (B.string7 "U " <> B.intDec etid <> sp <> B.intDec mtid <> sp <>
+                  B.string7 (clsName cls) <> sp <> B.stringUtf8 s)
   safely l $ do
     forM_ counterNames $ \ (k, name) -> do
       v <- readArray (tl_counts l) k
@@ -2065,6 +2570,10 @@ tlFinalEnd l declared fieldsOf encOf bitsOf methods = do
     forM_ lateCounterNames $ \ (k, name) -> do
       v <- readArray (tl_counts l) k
       cline name v
+    -- the event view's counts, after every other count line
+    forM_ evCounterNames $ \ (k, name) -> do
+      v <- readArray (tl_counts ev) k
+      cline ("ev." ++ name) v
   B.closeOut (tl_out l) `catch` \ (_ :: SomeException) -> return ()
 
 -- The field records: for every type of class data, struct or dcon (a
