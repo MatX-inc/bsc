@@ -96,10 +96,13 @@ import TypeLinks(TLog, tlNewLog, tlOn, tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlStoredValue, tlFixValue, tlArgsReset, tlStored, tlRedex,
                  tlCondBegin, tlCondEnd, tlCondDecided, tlOutPayload,
                  tlFallUnpack, tlPreRewrite, tlUnpackAt,
+                 tlOpEvent, tlOrdEvent, tlConLit, tlTagLit, tlSlotLit,
+                 tlElemEvent, tlConcatEvent, tlSetBits,
                  tlRoot, tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr,
                  tlFinalTuple, tlNamed, tlRootAliases, tlAlias, tlClosedExpr,
                  tlClosed, tlUnitExpr, tlInstance, tlInstArg, tlInstReset,
                  tlOutReset, tlMethod, tlFinalEnd)
+import Data.IORef(IORef, newIORef, modifyIORef', readIORef)
 import TypeLinksDecl(tlFieldTypes, tlConEncodings, tlBitsInstance,
                      tlAlwaysMethod, tlParamTypes)
 import ISyntaxXRef(mapIExprPosition)
@@ -328,6 +331,9 @@ iExpandTL tl_file errh flags symt alldefs atf_cache is_noinlined_func pps def@(I
   -- execute the static elaboration
   -- go is of type GOutput X, where X is the large tuple output of iExpandModuleDef
   tl_log <- tlNewLog (fst <$> tl_file)
+  -- which types have an instance of Bits: a literal is named (Y con, tag,
+  -- ord) only for those
+  tlSetBits tl_log (tlBitsInstance symt)
   go <- runG errh flags symt alldefs atf_cache mi is_noinlined_func pps tl_log $
             iExpandModuleDef def
   -- trace the steps and heap size
@@ -4629,7 +4635,8 @@ conAp' _ (ICIs { conTagInfo = cti }) i as =
       [ E e ] -> do
           let tys = takeT as
               ty = itBit1
-          evalStaticOp' True True False e ty (doIs i tys cti)
+          tlWholeOp i tys e [] $ \ cnt ->
+              evalStaticOp' True True False e ty (tlCounting cnt (doIs i tys cti))
       _ -> internalError ("conAp': ICIs: " ++ ppReadable (mkAp i as))
 conAp' c (ICOut { iConType = outty, conTagInfo = cti }) o as = do
     case dropT as of
@@ -4645,7 +4652,8 @@ conAp' c (ICOut { iConType = outty, conTagInfo = cti }) o as = do
               toHeapArg a = return a
           as'' <- mapM toHeapArg as'
 -}
-          evalStaticOp' True True False e resType (doOut o c tys ty cti as')
+          tlWholeOp o tys e as' $ \ cnt ->
+              evalStaticOp' True True False e resType (tlCounting cnt (doOut o c tys ty cti as'))
       _ -> internalError ("conAp': ICOut: " ++ ppReadable (mkAp o as))
 conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
     case dropT as of
@@ -4661,7 +4669,8 @@ conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
               toHeapArg a = return a
           as'' <- mapM toHeapArg as'
 -}
-          evalStaticOp' True True False e resType (doSel sel c tys ty n as')
+          tlWholeOp sel tys e as' $ \ cnt ->
+              evalStaticOp' True True False e resType (tlCounting cnt (doSel sel c tys ty n as'))
       _ -> internalError ("conAp': ICSel: " ++ ppReadable (mkAp sel as))
 
 -- constructors are non-strict
@@ -4671,7 +4680,11 @@ conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
 -- improveIf
 conAp' i (ICCon ict cti) _ as | hasNoArg = do
     norm <- getTypeNormalizer
-    evalAp "ICCon Enum" icPrimChr (T sizeNum :  T (norm resultType) :  E bitExpr : as')
+    let res_t = norm resultType
+    r <- evalAp "ICCon Enum" icPrimChr (T sizeNum :  T res_t :  E bitExpr : as')
+    -- the literal is this constructor (type links: Y con)
+    when (null as') $ tlIO (\ l -> tlConLit l res_t cti (tlRes r))
+    return r
   where sizeNum    = mkNumConT (tagSize cti)
         bitExpr    = mkAp icPrimIntegerToBit [T sizeNum, E (iMkLit itInteger (conTag cti))]
         (hasNoArg, resultType, argsToDrop) =
@@ -4876,8 +4889,15 @@ conAp' _ (ICPrim _ PrimGetModuleName) _ as = internalError ("PrimGetModuleName "
 -- ord C_n  -->  n
 -- ord (if c t e)  -->  if c (ord t) (ord e)
 -- ord _  -->  _
-conAp' _ (ICPrim _ PrimOrd) o [T f, T sz, E e] = evalStaticOp e (aitBit sz) handleOrd
-  where handleOrd (IAps (ICon _ (ICPrim _ PrimChr)) _ [e']) = eval1 e'
+conAp' _ (ICPrim _ PrimOrd) o [T f, T sz, E e] =
+    -- evalStaticOp, with the value's own expression for the type links
+    -- (Y ord)
+    evalStaticOp' True True True e (aitBit sz) handleOrd'
+  where handleOrd' ee (p, v) = addPredG p $ do
+            r <- handleOrd v
+            tlIO (\ l -> tlOrdEvent l f (uhOwn ee) v (tlRes r))
+            return r
+        handleOrd (IAps (ICon _ (ICPrim _ PrimChr)) _ [e']) = eval1 e'
         handleOrd (IAps (ICon _ (ICCon { conTagInfo = cti })) _ _) =
             return $ pExpr $ iMkLitAt (getIExprPosition e) (aitBit sz) (conTag cti)
         handleOrd e' = nfError "primOrd" e'
@@ -5497,6 +5517,11 @@ conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
                       PrimConcat -> tlIO (\ l -> tlPreRewrite l [ t | T t <- as' ] [ x | E x <- as' ]
                                                               [ x | E x <- ees ] e')
                       _ -> return ()
+                    -- every rewrite here: the application as evaluated,
+                    -- with its operands' ends (type links: Y concat,
+                    -- Y rewrite)
+                    tlIO (\ l -> tlConcatEvent l op [ t | T t <- as' ] [ x | E x <- as' ]
+                                               [ x | E x <- ees ] e')
                     return (P p e')
                   _ -> bldAp' "Prim 2" fe ees
 
@@ -5582,7 +5607,7 @@ conAp' sel_i sel_c@(ICPrim _ PrimArrayDynSelect) _
   -- links; taken before anything is evaluated)
   tl_own <- tlTakeCond
   (idx_e', _) <- evalUH idx_e
-  let handleDynSel (ICon arr_i (ICLazyArray arr_ty arr Nothing)) = do
+  let handleDynSel av@(ICon arr_i (ICLazyArray arr_ty arr Nothing)) = do
         -- check for constant index
         case idx_e' of
           ICon _ (ICInt { iVal = IntLit { ilValue = n } }) -> do
@@ -5593,8 +5618,12 @@ conAp' sel_i sel_c@(ICPrim _ PrimArrayDynSelect) _
                   then let pos =  getPosition sel_i
                            u = undefKindToInteger UDontCare
                        in  doBuildUndefined elem_ty pos u as'
-                  else let (ArrayCell ptr ref) = arr Array.! n
-                       in  evalAp "DynSel const" (IRefT elem_ty ptr S.empty ref) as'
+                  else do
+                       let (ArrayCell ptr ref) = arr Array.! n
+                       -- slot n of this array is the cell (type links:
+                       -- Y elem)
+                       when (null as') $ tlIO (\ l -> tlElemEvent l av n ptr)
+                       evalAp "DynSel const" (IRefT elem_ty ptr S.empty ref) as'
           _ -> do
             -- check if they're all the same
             -- (this will also convert selection from 1-element arrays
@@ -5942,6 +5971,9 @@ doArraySelect f (T elem_t : E arr_e : E idx_e : as) = do
         let handleArraySelect ic@(ICon _ (ICLazyArray { iArray = arr })) =
                 if iArrayInRange arr index then do
                   (p, r) <- iArraySelect arr index
+                  -- slot index of this array is the cell p (type links:
+                  -- Y elem)
+                  when (null as) $ tlIO (\ l -> tlElemEvent l ic index p)
                   evalAp "array-select" (IRefT elem_t p S.empty r) as
                 else
                   -- this is the same as the "paradox handling" in doOut
@@ -5959,6 +5991,8 @@ doArraySelect f (T elem_t : E arr_e : E idx_e : as) = do
                     idx_bits_e = ICon idx_i (idx_ic { iConType = upd_idx_t })
                     eq_e = iePrimEQ (ITNum upd_idx_sz) upd_idx_e idx_bits_e
                     if_e = ieIf elem_t eq_e upd_val_e res0
+                -- the literal is the slot number (type links: Y slot)
+                tlIO (\ l -> tlSlotLit l elem_t index idx_bits_e)
                 -- despite the name, this is actually 1 greater than the max
                 let max_upd_idx = 2 ^ upd_idx_sz
                     res = if (max_upd_idx > index) then if_e else res0
@@ -6630,19 +6664,56 @@ pushBNot' pos fe visited e = do
 
 -----------------------------------------------------------------------------
 
+-- Type links, events (Y): the value's own expression when the evaluator
+-- had it as a cell or leaf; a result's expression.
+uhOwn :: UHCell -> Maybe HExpr
+uhOwn (UHExpr x) = Just x
+uhOwn (UHLater _ _ _) = Nothing
+
+tlRes :: PExpr -> HExpr
+tlRes (P _ x) = x
+
+-- A handler that counts its runs (when the log is on).
+tlCounting :: Maybe (IORef Int) -> (UHCell -> (HPred, HExpr) -> G PExpr) ->
+              UHCell -> (HPred, HExpr) -> G PExpr
+tlCounting Nothing h = h
+tlCounting (Just cnt) h = \ ee pe -> do
+    liftIO (modifyIORef' cnt (+ 1))
+    h ee pe
+
+-- A selection, match-out or test (the head hd at the type arguments tys)
+-- of the operand e, run by act with a counter of its handler's runs.  When
+-- the handler did not run exactly once (the evaluator pushed the operation
+-- into the arms of a conditional or the elements of an array), the whole
+-- operation is an event of its own (Y with "*"): its result from the
+-- operand as given.  Not when there are more arguments (as).
+tlWholeOp :: HExpr -> [IType] -> HExpr -> [Arg] -> (Maybe (IORef Int) -> G PExpr) -> G PExpr
+tlWholeOp hd tys e as act = do
+  mcnt <- tlIOR (\ _ -> newIORef (0 :: Int))
+  r <- act mcnt
+  case mcnt of
+    Just cnt | null as -> do
+        k <- liftIO (readIORef cnt)
+        when (k /= 1) $
+            tlIO (\ l -> tlOpEvent l True hd tys (Just e) e Nothing (tlRes r))
+    _ -> return ()
+  return r
+
 doIs :: HExpr -> [IType] -> ConTagInfo ->
         UHCell -> (HPred,  HExpr) -> G PExpr
-doIs is tys cti ee (p, e) =
-    case e of
+doIs is tys cti ee (p, e) = do
+  r <- case e of
         -- C? (C' e)  -->  True/False
         IAps (ICon _ (ICCon { conTagInfo = cti' })) _ [_] ->
             addPredG p $
             return $ pExpr $ iMkBool (conNo cti == conNo cti')
 
         -- C_n? (primChr e) --> e == conTag
-        IAps (ICon _ (ICPrim _ PrimChr)) [sz,_] [e] ->
+        IAps (ICon _ (ICPrim _ PrimChr)) [sz,_] [e] -> do
+            -- the literal is this constructor's tag (type links: Y tag)
+            tlIO (\ l -> tlTagLit l is tys n_lit)
             addPredG p $
-            eval1 (iePrimEQ sz e n_lit)
+              eval1 (iePrimEQ sz e n_lit)
           where pos = getIExprPosition e
                 n_lit = iMkLitAt pos (aitBit sz) (conTag cti)
 
@@ -6655,10 +6726,28 @@ doIs is tys cti ee (p, e) =
 
         -- otherwise fail
         _ -> internalError ("doIs: " ++ ppReadable (is, e))
+  -- the test on this value and its result (type links: Y is)
+  tlIO (\ l -> tlOpEvent l False is tys (uhOwn ee) e Nothing (tlRes r))
+  return r
 
 doOut :: HExpr -> Id -> [IType] -> IType -> ConTagInfo -> [Arg] ->
          UHCell -> (HPred, HExpr) -> G PExpr
-doOut out c tys ty cti as ee (p, e) =
+doOut out c tys ty cti as ee (p, e) = do
+  r <- doOut' out c tys ty cti as ee (p, e)
+  -- the payload read from this value and its result (type links: Y out;
+  -- the payload as it was in a constructor in view is the part)
+  when (null as) $
+      tlIO (\ l -> tlOpEvent l False out tys (uhOwn ee) e
+                             (case e of
+                                IAps (ICon _ (ICCon { conTagInfo = cti' })) _ [e']
+                                  | conNo cti == conNo cti' -> Just e'
+                                _ -> Nothing)
+                             (tlRes r))
+  return r
+
+doOut' :: HExpr -> Id -> [IType] -> IType -> ConTagInfo -> [Arg] ->
+          UHCell -> (HPred, HExpr) -> G PExpr
+doOut' out c tys ty cti as ee (p, e) =
     case e of
         -- outC (C e)  -->  e / _   (not error, because it's "convenient" -- L)
         IAps (ICon _ (ICCon { conTagInfo = cti' })) _ [e'] ->
@@ -6711,7 +6800,7 @@ doSel sel s tys ty n as ee (p, e) =
             -- if method conditions are not being preserved,
             -- just return the default result
             flags <- getFlags
-            if (not (methodConditions flags))
+            r <- if (not (methodConditions flags))
               then dflt_res
               else do
                 -- see if the selector has any positions that need preserving
@@ -6740,12 +6829,20 @@ doSel sel s tys ty n as ee (p, e) =
                         args = (T ty : E poss_e : E field_e : as)
                     --traceM("doSel IFC: " ++ ppReadable s)
                     addPredG p $ evalAp "sel k ifc" icon args
+            -- the field of this value and its result (type links: Y sel;
+            -- the field as it was in the tuple is the part)
+            when (null as) $
+                tlIO (\ l -> tlOpEvent l False sel tys (uhOwn ee) e (Just field_e) (tlRes r))
+            return r
 
         -- XXX evalStaticOp can't do this for us because of "as"
         -- _.s  -->  _
         ICon u (ICUndet { iuKind = k })  -> do
              let kind_integer = undefKindToInteger k
-             addPredG p $ doBuildUndefined ty (getPosition u) kind_integer as
+             r <- addPredG p $ doBuildUndefined ty (getPosition u) kind_integer as
+             when (null as) $
+                 tlIO (\ l -> tlOpEvent l False sel tys (uhOwn ee) e Nothing (tlRes r))
+             return r
 
         -- select clocks out of state variables
         ICon id (ICStateVar {iVar = v}) | ty == itClock -> do

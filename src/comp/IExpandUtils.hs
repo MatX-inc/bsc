@@ -9,7 +9,7 @@ module IExpandUtils(
         HExpr, HeapData(..), HClock, HReset, HInout, HStateVar, HRules, HWireSet, HDef, HRule, HEFace,
         runG, G, GOutput(..),
         capNextPtr, capEvent, capRepack, capLink, capMove,
-        tlIO, tlHeaped, tlTakeCond,
+        tlIO, tlIOR, tlHeaped, tlTakeCond,
         errG, errsG, deferErrors, eWarning, eWarnings, getElabProgressContext,
         eNoNF, addRules,
         pushTopModuleSchedNameScope, pushTopValueSchedNameScope, pushModuleSchedNameScope,
@@ -666,6 +666,15 @@ tlIO act = G $ \ st@(GS r _) -> do
   let l = tlLog r
   when (tlOn l) $ act l
   return ((), st)
+
+-- Run an action with the log when it is on, and give its result (Nothing
+-- when the log is off).
+{-# INLINE tlIOR #-}
+tlIOR :: (TLog -> IO a) -> G (Maybe a)
+tlIOR act = G $ \ st@(GS r _) -> do
+  let l = tlLog r
+  x <- if tlOn l then Just <$> act l else return Nothing
+  return (x, st)
 
 -- The cell whose own conditional the evaluator is entering (-1: none, or
 -- the log is off); see TypeLinks, decided conditionals.
