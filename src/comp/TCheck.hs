@@ -583,8 +583,10 @@ tiExpr as td exp@(Cinterface pos (Just ti) ds) = do
         mkFieldPair d = let i = getLName d
                         in  (i, Cletseq [d] (CVar i))
         ifc = CStruct (Just True) ti (map mkFieldPair ds)
-    -- check that ti actually names an interface (not a struct)
-    case findType sy ti of
+    -- check that ti actually names an interface (not a struct);
+    -- CVParserImperative synthesizes Cinterface noPosition for an empty
+    -- module body, where the user wrote no interface keyword.
+    when (pos /= noPosition) $ case findType sy ti of
       Just (TypeInfo { ti_sort = TIstruct SStruct _ }) ->
         twarn (getPosition ti, WInterfaceSyntaxUsedForStruct (pfpString ti))
       _ -> return ()
