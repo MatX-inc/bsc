@@ -133,6 +133,7 @@ library
     ANoInline
     AOpt
     APaths
+    APrimitiveSourceTypes
     APrims
     AProofs
     ARankMethCalls
