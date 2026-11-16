@@ -23,7 +23,9 @@ BUILD_ORDER= \
 # Find files to build tags
 SRCS = $(shell find . -name "*.bsv")
 
-.PHONY: all build tconcheck install clean full_clean
+BLOOGLEDIR = $(LIBDIR)/bloogle
+
+.PHONY: all build tconcheck install clean full_clean bloogle
 
 all: install TAGS
 
@@ -37,7 +39,11 @@ TCONCHECK ?= $(BINDIR)/tconcheck
 tconcheck: build
 	$(TCONCHECK) $(BUILDDIR)
 
-install: build tconcheck
+bloogle: build
+	install -d $(BLOOGLEDIR)
+	$(BO2BLOOGLE) bluespec $(BUILDDIR)/*.bo > $(BLOOGLEDIR)/bluespec.txt
+
+install: build bloogle tconcheck
 	install -d $(INSTALLDIR)
 	install -m644 $(BUILDDIR)/* $(INSTALLDIR)
 
