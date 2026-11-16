@@ -15,6 +15,7 @@ module TIMonad(
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
         GSeg(..), GTree(..), Givens, mkGivens, givensSegs, givensList, givensOnList,
         givensAppend,
+        ClassIdx, classIdxLookup,
         classKey, getExplGivens, getTopExplSeg,
         getSolvedPool, addSolvedPool, pushSolvedPool, popSolvedPool,
         getPoolDepositsOK, withoutSolvedPool,
@@ -25,7 +26,8 @@ module TIMonad(
         numEqCls,
         updAssumpPos,
         recordPackageUse,
-        incrementSatStack, decrementSatStack, getSatStack, mkTSSatElement, TSSatElement,
+        incrementSatStack, decrementSatStack, getSatStack, getSatStackIdx,
+              mkTSSatElement, TSSatElement,
               pushSatStackContext, popSatStackContext
         , tiRecoveringFromError
         , tiRecoveringFromErrorxx
@@ -132,8 +134,17 @@ mkTSSatElement :: (Maybe [TyVar]) -> Givens -> VPred -> TSSatElement
 -- refer right back to this predicate.
 mkTSSatElement _ _ (VPred i (PredWithPositions p _ _)) = EPred (CVar i) p
 
-type TSSatStack = SizedStack TSSatElement
+-- One context of the sat stack: its goals (newest first), their index by
+-- class, and the context prior to the newest push.
+data TSSatStack = TSSatStack !(SizedStack TSSatElement) !(ClassIdx TSSatElement)
+                             !(Maybe TSSatStack)
 type TSSuperSatStack = SizedStack TSSatStack
+
+emptySatStack :: TSSatStack
+emptySatStack = TSSatStack (mkSizedStack []) (ClassIdx IM.empty) Nothing
+
+satElementKey :: TSSatElement -> Int
+satElementKey (EPred _ (IsIn c _)) = classKey c
 
 -- a stack that keeps track of its depth
 data SizedStack a = SizedStack Int [a]
@@ -191,7 +202,7 @@ initRecoverState = TStateRecover {
     tsCurSubst = nullSubst,
     tsBoundTyVarStack = [],
     tsExplPreds = [],
-    tsSatStack = mkSizedStack [mkSizedStack []],
+    tsSatStack = mkSizedStack [emptySatStack],
     tsNumProven = S.empty,
     tsNumRefuted = S.empty,
     tsSolvedPool = [],
@@ -584,7 +595,21 @@ instance Types EPred where
 instance PPrint EPred where
     pPrint d p (EPred e q) = pparen (p>0) (pparen True (pPrint d 0 e) <> text":" <> pPrint d 10 q)
 
--- Givens with an index by class
+-- Indexes by class
+newtype ClassIdx a = ClassIdx (IM.IntMap [a])
+
+classIdxLookup :: ClassIdx a -> Int -> [a]
+classIdxLookup (ClassIdx m) k
+  | IM.null m = []
+  | otherwise = IM.findWithDefault [] k m
+
+classIdxFromList :: [(Int, a)] -> ClassIdx a
+classIdxFromList kxs =
+    ClassIdx (IM.map reverse (IM.fromListWith (++) [ (k, [x]) | (k, x) <- kxs ]))
+
+classIdxPush :: Int -> a -> ClassIdx a -> ClassIdx a
+classIdxPush k x (ClassIdx m) = ClassIdx (IM.alter (Just . maybe [x] (x :)) k m)
+
 data GTree = GTree { gtKey :: !Int, gtReach :: !IS.IntSet, gtSubs :: [GTree] }
 
 classKey :: Class -> Int
@@ -598,15 +623,14 @@ classTree c = GTree k (IS.insert k (IS.unions (map gtReach subs))) subs
 data GSeg = GSeg {
     gsList  :: [EPred],
     gsTrees :: Array Int GTree,
-    gsIdx   :: IM.IntMap [Int]
+    gsIdx   :: ClassIdx Int
   }
 
 mkGSeg :: [EPred] -> GSeg
 mkGSeg ps = GSeg ps trees idx
   where trees = listArray (0, length ps - 1) [ classTree c | EPred _ (IsIn c _) <- ps ]
-        idx = IM.map reverse $
-              IM.fromListWith (++) [ (k, [i]) | (i, t) <- assocs trees,
-                                                k <- IS.toList (gtReach t) ]
+        idx = classIdxFromList [ (k, i) | (i, t) <- assocs trees,
+                                          k <- IS.toList (gtReach t) ]
 
 newtype Givens = Givens [GSeg]
 
@@ -871,31 +895,41 @@ updAssumpPos i (i' :>: s) = setIdPosition (getIdPosition i) i' :>: s
 incrementSatStack :: TSSatElement -> TI ()
 incrementSatStack x = do
   superstack <- gets tsSatStack
-  let oldstack = sizedStackPeek superstack
+  let old@(TSSatStack oldstack idx _) = sizedStackPeek superstack
   flags <- getFlags
   case (sizedStackPush (maxTIStackDepth flags) oldstack x) of
     Nothing -> (err(noPosition,ETypeStackOverflow))
-    Just newstack ->
-        modify (\ts -> ts { tsSatStack =
-                              sizedStackModify superstack (const newstack)})
+    Just newstack -> do
+        let ctx = TSSatStack newstack (classIdxPush (satElementKey x) x idx) (Just old)
+        ctx `seq` modify (\ts -> ts { tsSatStack =
+                                        sizedStackModify superstack (const ctx)})
 
 decrementSatStack :: TI ()
 decrementSatStack = do
   superstack <- gets tsSatStack
-  modify (\ts -> ts { tsSatStack =
-                        sizedStackModify superstack sizedStackPop })
+  let ctx = case sizedStackPeek superstack of
+              TSSatStack _ _ (Just below) -> below
+              _ -> internalError "decrementSatStack: stack underflow"
+  ctx `seq` modify (\ts -> ts { tsSatStack =
+                                  sizedStackModify superstack (const ctx)})
 
 getSatStack :: TI [EPred]
 getSatStack = do
   superstack <- gets tsSatStack
   case (sizedStackPeek superstack) of
-    (SizedStack _ l) -> return l
+    TSSatStack (SizedStack _ l) _ _ -> return l
+
+getSatStackIdx :: TI (ClassIdx EPred)
+getSatStackIdx = do
+  superstack <- gets tsSatStack
+  case (sizedStackPeek superstack) of
+    TSSatStack _ idx _ -> return idx
 
 pushSatStackContext :: TI ()
 pushSatStackContext = do
   superstack <- gets tsSatStack
   flags <- getFlags
-  case (sizedStackPush (maxTIStackDepth flags) superstack (mkSizedStack [])) of
+  case (sizedStackPush (maxTIStackDepth flags) superstack emptySatStack) of
     Nothing -> err (noPosition, ETypeSuperStackOverflow)
     Just newstack ->
         modify (\ts -> ts { tsSatStack = newstack })
