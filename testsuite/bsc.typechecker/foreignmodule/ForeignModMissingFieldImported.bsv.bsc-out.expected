@@ -1,0 +1,6 @@
+checking package dependencies
+compiling ./ForeignModMissingFieldImported_Ifc.bsv
+compiling ForeignModMissingFieldImported.bsv
+Error: "ForeignModMissingFieldImported.bsv", line 3, column 1: (T0105)
+  This foreign module import is missing the field `m2' of its interface
+  `ForeignModMissingFieldImported_Ifc::IFC'
