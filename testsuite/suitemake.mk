@@ -182,6 +182,14 @@ localcheck: $(LOCALCHECKPREREQUISITES)
 # treated as tests.
 tool ?= bsc
 
+# TESTDIRS (space-separated directory prefixes, e.g. "bsc.mcd
+# bsc.lib/BRAM") restricts the run to tests under those directories;
+# empty runs everything.  Used by CI to shard the suite across jobs.
+# The empty-list guard below makes a TESTDIRS value that matches
+# nothing loudly fatal rather than a silent zero-test run.
+TESTDIRS ?=
+export TESTDIRS
+
 # This creates the file 'all_tests.mk', that is used by the 'run-tests'
 # target in the 'parallel.mk' file.  It also checks for duplicates
 # which can cause problems.
