@@ -198,8 +198,14 @@ cmp (TDefMonad _) _  = GT
 instance Eq Type where
     x == y  =  cmp x y == EQ
 
+-- A generated type variable (see TIMonad.newTVar) is named after its
+-- number, so the number alone identifies it.  Not looking at its name
+-- matters: the name is made (and interned, for good) only when first
+-- looked at, and the type checker generates millions of variables for
+-- a large package, nearly all of which are otherwise never named.
 instance Eq TyVar where
-    TyVar i n _ == TyVar i' n' _  =  (n, i) == (n', i')
+    TyVar i n _ == TyVar i' n' _  =
+        n == n' && (n /= noTyVarNo || i == i')
 
 -- TyCon comparison and the one-tycon-per-qualified-name invariant
 --
@@ -240,11 +246,10 @@ instance Ord Type where
     compare x y = cmp x y
 
 instance Ord TyVar where
-    TyVar i n _ <= TyVar i' n' _  =  (n, i) <= (n', i')
-    TyVar i n _ <  TyVar i' n' _  =  (n, i) <  (n', i')
-    TyVar i n _ >= TyVar i' n' _  =  (n, i) >= (n', i')
-    TyVar i n _ >  TyVar i' n' _  =  (n, i) >  (n', i')
-    TyVar i n _ `compare` TyVar i' n' _  =  (n, i) `compare` (n', i')
+    compare (TyVar i n _) (TyVar i' n' _) =
+        case compare n n' of
+          EQ | n == noTyVarNo -> compare i i'
+          o -> o
 
 instance Ord TyCon where
     -- lexicographic on (base, qual); within a (base, qual) bucket either
