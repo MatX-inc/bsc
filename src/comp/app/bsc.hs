@@ -13,7 +13,7 @@ import System.FilePath(takeDirectory)
 import System.IO(hFlush, stdout, hPutStr, stderr, hGetContents, hClose, hSetBuffering, BufferMode(LineBuffering))
 import System.IO(hSetEncoding, utf8)
 import System.Posix.Files(fileMode,  unionFileModes, ownerExecuteMode, groupExecuteMode, setFileMode, getFileStatus, fileAccess)
-import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory)
+import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory, removeFile)
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
 import Data.Char(isSpace, ord)
 import Data.List(nub, partition, intersperse, sort,
@@ -30,6 +30,9 @@ import Control.Concurrent.MVar(newEmptyMVar, putMVar, takeMVar)
 import qualified Control.Exception as CE
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.ByteString.Lazy as BL
+import Data.IORef(IORef, newIORef, readIORef, writeIORef)
+import System.IO.Unsafe(unsafePerformIO)
 
 import ListMap(lookupWithDefault)
 import SCC(scc)
@@ -375,6 +378,8 @@ compilePackage
     pwd <- getCurrentDirectory
     let name = createEncodedFullFilePath name_orig pwd
         dumpnames = (Just (baseName (dropSuf name)), Just (getIdString (unQualId pkgId)), Nothing)
+
+    writeIORef internDumpFile (Just (putInDir (bdir flags) name "intern.json"))
 
     clkTime <- getClockTime
     epochTime <- getPOSIXTime
