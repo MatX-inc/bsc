@@ -1,0 +1,16 @@
+package UnderscoreName where
+
+-- A user definition whose name genuinely begins with an underscore is
+-- reported exactly as written.
+_foo :: Maybe Bool -> Bool
+_foo (Just x) = x
+
+-- An instance method is internally renamed with an underscore prefix;
+-- its warning reports the source spelling.
+class UC a where
+  uconv :: a -> Maybe Bool -> Bool
+
+data UT = UT
+
+instance UC UT where
+  uconv _ (Just x) = x

@@ -1,0 +1,19 @@
+checking package dependencies
+compiling PatFun.bs
+Warning: "PatFun.bs", line 8, column 12: (T0165)
+  Pattern matching in the clauses for `missingBlue' is not exhaustive. The
+  following pattern is not covered:
+    Blue _
+Warning: "PatFun.bs", line 14, column 9: (T0166)
+  This pattern in the clauses for `dupWild' can never match, because the
+  preceding patterns cover all of its cases:
+    Just x
+Warning: "PatFun.bs", line 18, column 13: (T0165)
+  Pattern matching in the clauses for `missingTuple' is not exhaustive. The
+  following pattern is not covered:
+    (False, _)
+Warning: "PatFun.bs", line 22, column 11: (T0165)
+  Pattern matching in the clauses for `missingInt' is not exhaustive. The
+  following pattern is not covered:
+    v when v is not one of {0, 1}
+All packages are up to date.

@@ -1,0 +1,12 @@
+checking package dependencies
+compiling IncompleteCase.bsv
+Warning: "IncompleteCase.bsv", line 8, column 12: (T0165)
+  Pattern matching in this case expression is not exhaustive. The following
+  pattern is not covered:
+    tagged Blue .*
+Warning: "IncompleteCase.bsv", line 15, column 12: (T0165)
+  Pattern matching in this case expression is not exhaustive. The following
+  patterns are not covered:
+    tagged Valid (tagged Invalid)
+    tagged Valid (tagged Valid False)
+All packages are up to date.

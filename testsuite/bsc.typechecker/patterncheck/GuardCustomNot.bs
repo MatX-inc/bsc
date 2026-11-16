@@ -1,0 +1,14 @@
+package GuardCustomNot where
+
+import qualified GuardCustomNotProvider
+
+data CustomNotTag = CustomNotA | CustomNotB
+  deriving (Eq, Bits)
+
+-- Both CustomNotA clauses require g=True because the qualified custom `not'
+-- is the identity function.  Treating it as Prelude.not would incorrectly
+-- conclude that these clauses are exhaustive.
+customNotIsOpaque :: CustomNotTag -> Bool -> Bit 2
+customNotIsOpaque CustomNotA g when g = 0
+customNotIsOpaque CustomNotA g when GuardCustomNotProvider.not g = 1
+customNotIsOpaque CustomNotB _ = 2
