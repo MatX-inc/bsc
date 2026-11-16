@@ -139,6 +139,7 @@ data Flags = Flags {
         showStats :: Bool,
         showUpds :: Bool,
         simplifyCSyntax :: Bool,
+        splitUndetVals :: Bool,
         strictMethodSched :: Bool,
         suppressWarnings :: MsgListFlag,
         svaRuntimeChecks :: Bool,
