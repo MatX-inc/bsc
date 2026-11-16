@@ -520,6 +520,7 @@ describeFlags showHidden =
 
 traceflags :: [String]
 traceflags = [
+          "check-bin-roundtrip",
           "debug-eval-free-vars",
           "no-use-layout",
           "trace-aopt",
