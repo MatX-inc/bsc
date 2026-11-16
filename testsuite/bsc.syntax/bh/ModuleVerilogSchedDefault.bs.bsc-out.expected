@@ -18,4 +18,5 @@ Warning: "ModuleVerilogSchedDefault.bs", line 20, column 0: (G0010)
     "pop" cannot fire before "push": calls to f.deq vs. f.enq
     "push" cannot fire before "pop": calls to f.enq vs. f.deq
 Verilog file created: sysModuleVerilogSchedDefault.v
+Elaborated module file created: sysModuleVerilogSchedDefault.ba
 All packages are up to date.
