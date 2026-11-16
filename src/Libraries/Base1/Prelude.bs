@@ -4680,7 +4680,7 @@ primitive primNoInline :: List (List String) -> List String -> a -> a
 -- Convert bewtween a field in an interface that is being synthesized,
 -- and a field in the corresponding field in the generated wrapper interface.
 -- Also takes the name of the field for error reporting purposes.
-class (WrapField :: $ -> * -> * -> *) name f w | name f -> w where
+class no_orphan (WrapField :: $ -> * -> * -> *) name f w | name f -> w where
   -- Given a proxy value for the field name, and the values of the prefix, arg_names and result pragmas,
   -- converts a synthesized interface field value to its wrapper interface field.
   toWrapField :: StrArg name -> String -> List String -> String -> f -> w
@@ -4748,7 +4748,7 @@ fromWrapNoInline name argNames x =
                        (outputPortNames (_ :: m) pos name)
                        x)
 
-class WrapMethod m w | m -> w where
+class no_orphan WrapMethod m w | m -> w where
   -- Convert a synthesized interface method to its wrapper interface method.
   toWrapMethod :: m -> w
 
@@ -4830,7 +4830,7 @@ instance (WrapPorts (PortsOf a) pb, TupleSize (PortsOf a) n,
   saveMethodPortTypes _ pos modName _ result =
     savePortTypes (_ :: PortsOf a) modName $ checkPortNames pos (_ :: a) result
 
-class WrapPorts p pb | p -> pb where
+class no_orphan WrapPorts p pb | p -> pb where
   -- Convert from a tuple of Port values to a tuple of bits.
   packPorts :: p -> pb
   -- Convert from a tuple of bits to a tuple of Port values.
@@ -4875,7 +4875,7 @@ instance WrapPorts () () where
   filterZeroWidthPorts _ _ = error "filterZeroWidthPorts: non-empty port names list"
 
 -- Helper class to conditionally convert Bit 0 to ()
-class NonEmptyBits n pb | n -> pb where
+class no_orphan NonEmptyBits n pb | n -> pb where
   toNonEmptyBits :: Bit n -> pb
   fromNonEmptyBits :: pb -> Bit n
 
@@ -4917,7 +4917,7 @@ checkPortNames pos proxy base =
       " ports, but " +++ integerToString (listLength pn) +++ " port names were given"
     else pn
 
-class SplitPorts a p | a -> p where
+class no_orphan SplitPorts a p | a -> p where
   type PortsOf a = p
   -- Convert a value to a tuple of values corresponding to ports.
   splitPorts :: a -> p
@@ -4957,7 +4957,7 @@ instance (SplitTuplePorts (a, b) r) => SplitPorts (a, b) r where
   unsplitPorts = unsplitTuplePorts
   portNames = splitTuplePortNames 1
 
-class SplitTuplePorts a p | a -> p where
+class no_orphan SplitTuplePorts a p | a -> p where
   splitTuplePorts :: a -> p
   unsplitTuplePorts :: p -> a
   splitTuplePortNames :: Integer -> a -> String -> List String

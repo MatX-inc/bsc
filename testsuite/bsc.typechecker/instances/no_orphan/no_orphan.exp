@@ -60,3 +60,11 @@ compile_fail_error BitsOrphan.bs T0127
 compare_file BitsOrphan.bs.bsc-out
 compile_pass_warning BitsOrphan.bs T0127 1 {-demote-errors T0127}
 compare_file BitsOrphan.bs.bsc-out BitsOrphan.bs.demote.bsc-out.expected
+
+# The Prelude also declares SplitPorts no_orphan (as well as WrapField,
+# WrapMethod, WrapPorts, SplitTuplePorts and NonEmptyBits), and this
+# error cannot be demoted
+compile_fail_error SplitPortsOrphan.bs T0127
+compare_file SplitPortsOrphan.bs.bsc-out
+compile_fail_error SplitPortsOrphan.bs T0127 1 {-demote-errors T0127}
+compare_file SplitPortsOrphan.bs.bsc-out SplitPortsOrphan.bs.demote.bsc-out.expected

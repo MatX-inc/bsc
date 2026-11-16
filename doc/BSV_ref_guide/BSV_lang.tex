@@ -4553,8 +4553,11 @@ defines the typeclass or one of the instance's source types.  To give
 a type a different instance, wrap it in a new type defined alongside
 the instance.  Like the coherence words, \texttt{no\_orphan} is
 recognized only in this position.  The Standard Prelude declares
-\te{Bits} \texttt{no\_orphan}, because its instances determine the
-port widths and bit layouts of generated hardware.  For now, and
+\te{Bits} and \te{SplitPorts} \texttt{no\_orphan}, because their
+instances determine the ports and bit layouts of generated hardware,
+and likewise the classes the compiler uses to build a synthesized
+module's ports (\te{WrapField}, \te{WrapMethod}, \te{WrapPorts},
+\te{SplitTuplePorts} and \te{NonEmptyBits}).  For now, and
 for \te{Bits} only, the error can be demoted to a warning with
 \texttt{-demote-errors T0127}, so that existing code can migrate.
 This will change in a future release, which will make an orphan
