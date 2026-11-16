@@ -94,7 +94,7 @@ Command: browseinst detail 8
 X(BSVModule)   = mkTest
 X(BSVPath)     = y _element_0
 X(DEBUG)       = BLeaf _element_0 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -110,7 +110,7 @@ Command: browseinst detail 9
 X(BSVModule)   = mkTest
 X(BSVPath)     = y _element_1
 X(DEBUG)       = BLeaf _element_1 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -126,7 +126,7 @@ Command: browseinst detail 10
 X(BSVModule)   = mkTest
 X(BSVPath)     = y _element_2
 X(DEBUG)       = BLeaf _element_2 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -142,7 +142,7 @@ Command: browseinst detail 11
 X(BSVModule)   = mkTest
 X(BSVPath)     = y _element_3
 X(DEBUG)       = BLeaf _element_3 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -177,7 +177,7 @@ Command: browseinst detail 12
 X(BSVModule)   = mkTest
 X(BSVPath)     = zw _element_0
 X(DEBUG)       = BLeaf _element_0 RegN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -193,7 +193,7 @@ Command: browseinst detail 13
 X(BSVModule)   = mkTest
 X(BSVPath)     = zw _element_1
 X(DEBUG)       = BLeaf _element_1 RegN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -209,7 +209,7 @@ Command: browseinst detail 14
 X(BSVModule)   = mkTest
 X(BSVPath)     = zw _element_2
 X(DEBUG)       = BLeaf _element_2 RegN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -225,7 +225,7 @@ Command: browseinst detail 15
 X(BSVModule)   = mkTest
 X(BSVPath)     = zw _element_3
 X(DEBUG)       = BLeaf _element_3 RegN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -241,7 +241,7 @@ Command: browseinst detail 16
 X(BSVModule)   = mkTest
 X(BSVPath)     = zw _element_4
 X(DEBUG)       = BLeaf _element_4 RegN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -309,7 +309,7 @@ Command: browseinst detail 5
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop
 X(DEBUG)       = BINode Loop Just (Tuple2#(Integer, Vector::Vector#(4, Reg#(Int#(32)))))
-X(IfcPosition) = %/Libraries/Prelude.bs 3039 10 {Library Prelude}
+X(IfcPosition) = %/Libraries/Prelude.bs 3075 10 {Library Prelude}
 X(Interface)   = Tuple2#(Integer, Vector::Vector#(4, Reg#(Int#(32))))
 X(LocalPath)   = Loop
 X(Name)        = Loop
@@ -323,7 +323,7 @@ Command: browseinst detail 19
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop x_0
 X(DEBUG)       = BLeaf x_0 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -339,7 +339,7 @@ Command: browseinst detail 20
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop x_1
 X(DEBUG)       = BLeaf x_1 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -355,7 +355,7 @@ Command: browseinst detail 21
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop x_2
 X(DEBUG)       = BLeaf x_2 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -371,7 +371,7 @@ Command: browseinst detail 22
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop x_3
 X(DEBUG)       = BLeaf x_3 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -391,7 +391,7 @@ Command: browseinst detail 6
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop
 X(DEBUG)       = BINode Loop Just (Tuple3#(Integer, Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32)))))
-X(IfcPosition) = %/Libraries/Prelude.bs 3039 10 {Library Prelude}
+X(IfcPosition) = %/Libraries/Prelude.bs 3075 10 {Library Prelude}
 X(Interface)   = Tuple3#(Integer, Vector::Vector#(4, Reg#(Int#(32))), Vector::Vector#(4, Reg#(Int#(32))))
 X(LocalPath)   = Loop
 X(Name)        = Loop
@@ -421,7 +421,7 @@ Command: browseinst detail 27
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop Body_0 aa_0
 X(DEBUG)       = BLeaf aa_0 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -437,7 +437,7 @@ Command: browseinst detail 28
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop Body_0 bb_0
 X(DEBUG)       = BLeaf bb_0 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -469,7 +469,7 @@ Command: browseinst detail 29
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop Body_1 aa_1
 X(DEBUG)       = BLeaf aa_1 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -485,7 +485,7 @@ Command: browseinst detail 30
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop Body_1 bb_1
 X(DEBUG)       = BLeaf bb_1 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -517,7 +517,7 @@ Command: browseinst detail 31
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop Body_2 aa_2
 X(DEBUG)       = BLeaf aa_2 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -533,7 +533,7 @@ Command: browseinst detail 32
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop Body_2 bb_2
 X(DEBUG)       = BLeaf bb_2 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -565,7 +565,7 @@ Command: browseinst detail 33
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop Body_3 aa_3
 X(DEBUG)       = BLeaf aa_3 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -581,7 +581,7 @@ Command: browseinst detail 34
 X(BSVModule)   = mkTest
 X(BSVPath)     = Loop Body_3 bb_3
 X(DEBUG)       = BLeaf bb_3 RegUN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -630,7 +630,7 @@ Command: browseinst detail 37
 X(BSVModule)   = mkSub
 X(BSVPath)     = subis _element_0 foo2
 X(DEBUG)       = BLeaf foo2 RegN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -679,7 +679,7 @@ Command: browseinst detail 39
 X(BSVModule)   = mkSub
 X(BSVPath)     = subis _element_1 foo2
 X(DEBUG)       = BLeaf foo2 RegN Just ((Reg#(Int#(32))))
-X(IfcPosition) = Test2.bsv 8 14
+X(IfcPosition) = Test.bsv 162 4
 X(Interface)   = Reg#(Int#(32))
 X(LocalPath)   = 
 X(Module)      = RegN
