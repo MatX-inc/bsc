@@ -20,7 +20,6 @@ import Data.Maybe
 import Data.List
 import Control.Monad(foldM, when)
 import Data.Array((!))
-import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -474,15 +473,15 @@ joinPair bound_tyvars vps n (VPred i pp@(PredWithPositions (IsIn c ts) pos anc))
 sat :: DVS -> Givens -> [EPred] -> [EPred] -> VPred -> TI SatResult
 sat dvs ps solved pool p =
     satTrace ("sat: trying " ++ ppReadable p ++ " in " ++ ppReadable (givensList ps)) $ do
-    whole_stack <- getSatStack
+    stack_idx <- getSatStackIdx
     bound_tyvars <- getBoundTVs
     let lookfor_result :: Maybe (Bind, (Subst, [(Type,Type)]))
-        -- I'm a little worried that matching against the whole_stack
+        -- I'm a little worried that matching against the stack
         -- will have lexical scoping issues where p will match against
         -- something very "old", that it should not be able to "see"
         -- due to shadowing or something.  We are probably OK because
         -- the TIMonad is reset for each top-level definition.
-        lookfor_result = lookfor bound_tyvars p whole_stack
+        lookfor_result = lookfor bound_tyvars p (classIdxLookup stack_idx (vpClassKey p))
     case lookfor_result of
       Just (b, (s, [])) ->
          -- tie the recursive knot!
@@ -1344,7 +1343,7 @@ givenEntries :: Int -> [(GSeg, [ETree])] -> [EPred]
 givenEntries k segs =
     concat [ entriesK k (gsTrees seg ! i) et
            | (seg, ets) <- segs,
-             (i, et) <- pickAt (IM.findWithDefault [] k (gsIdx seg)) ets ]
+             (i, et) <- pickAt (classIdxLookup (gsIdx seg) k) ets ]
 
 data GivenExp = GivenExp [EPred] [EPred]
 
@@ -1364,14 +1363,14 @@ freshGivenEntries :: VPred -> Givens -> [EPred]
 freshGivenEntries vp gv =
     concat [ entriesK k (gsTrees seg ! i) (bySuperT ep)
            | seg <- givensSegs gv,
-             (i, ep) <- pickAt (IM.findWithDefault [] k (gsIdx seg)) (gsList seg) ]
+             (i, ep) <- pickAt (classIdxLookup (gsIdx seg) k) (gsList seg) ]
   where k = vpClassKey vp
 
 {-# NOINLINE directEntries #-}
 directEntries :: Class -> Givens -> [EPred]
 directEntries c gv =
     [ ep | seg <- givensSegs gv,
-           (i, ep) <- pickAt (IM.findWithDefault [] k (gsIdx seg)) (gsList seg),
+           (i, ep) <- pickAt (classIdxLookup (gsIdx seg) k) (gsList seg),
            gtKey (gsTrees seg ! i) == k ]
   where k = classKey c
 
