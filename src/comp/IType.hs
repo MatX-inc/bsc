@@ -7,6 +7,10 @@ module IType(
   ,itArrow
   ,mkNumConT
   ,iTypeNodeId
+  ,iTypeAtfFree
+  ,iTypeTFunFree
+  ,iTypeGroundKind
+  ,sameITypeNode
   ,fTVars
   ,VarSet
   ,fTVarSet
@@ -22,6 +26,9 @@ import Prelude hiding ((<>))
 #endif
 
 import qualified Data.Map.Strict as M
+import qualified Data.IntMap.Strict as IM
+import Data.Bits(shiftL, (.|.), (.&.))
+import Data.Word(Word8)
 import qualified Data.Set as S
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
 import Data.Maybe(isJust, fromJust)
@@ -35,7 +42,7 @@ import ErrorUtil(internalError)
 import IOUtil(progArgs)
 import Id(Id, getIdBase, getIdQual, setIdPosition, setIdProps, setIdQual)
 import PreIds(idArrow, idId, idTNumToStr)
-import TypeOps(opNumT, opStrT)
+import TypeOps(isPrimTFunName, opNumT, opStrT)
 import CType(Type(..), CType, TyCon(..), TyVar(..), Kind(..),
              TISort(..), StructSubType(..),
              cTApplys, cTVar, cTCon, cTNum, cTStr)
@@ -46,7 +53,7 @@ import PPrint
 import PFPrint
 import Position(noPosition)
 import Util(itos)
-import FStringCompat(FString, mkNumFString)
+import FStringCompat(FString, mkNumFString, fstringId)
 import PreStrings(fsEmpty)
 
 -- ==============================
@@ -85,35 +92,31 @@ data IKind
 -- types all share the one vsEmpty.  The field is metadata only: it
 -- never serializes, never prints, and never participates in
 -- comparison or intern keys.
+-- Interior nodes also carry a strict two-bit summary (bit 0: no
+-- TIatf; bit 1: neither TIatf nor primitive type function) and a lazy
+-- ground-kind field read only by ISyntaxCheck.
 data IType
-        = ITForAll_ {-# UNPACK #-} !Int !VarSet !Id !IKind IType
-        | ITAp_ {-# UNPACK #-} !Int !VarSet IType IType
+        = ITForAll_ {-# UNPACK #-} !Int !VarSet {-# UNPACK #-} !Word8 (Maybe IKind) !Id !IKind IType
+        | ITAp_ {-# UNPACK #-} !Int !VarSet {-# UNPACK #-} !Word8 (Maybe IKind) IType IType
         | ITVar_ !Id
-        | ITCon_ !Id !IKind !TISort
+        | ITCon_ {-# UNPACK #-} !Int !Id !IKind !TISort
         | ITNum !Integer
         | ITStr !FString
-        -- (all fields strict or forced at construction: NFData relies
-        -- on WHNF == deep NF for every constructor)
 
 pattern ITForAll :: Id -> IKind -> IType -> IType
-pattern ITForAll i k t <- ITForAll_ _ _ i k t
+pattern ITForAll i k t <- ITForAll_ _ _ _ _ i k t
   where ITForAll i k t = mkITForAll i k t
 
 pattern ITAp :: IType -> IType -> IType
-pattern ITAp f a <- ITAp_ _ _ f a
+pattern ITAp f a <- ITAp_ _ _ _ _ f a
   where ITAp f a = mkITAp f a
 
--- The Id-carrying leaves are sealed the same way: construction goes
--- through normalizing smart constructors (Ids embedded in types carry
--- no positions and no props -- see the normalization section below),
--- so "stripped on entry" is enforced by the module boundary, not by
--- convention.
 pattern ITVar :: Id -> IType
 pattern ITVar i <- ITVar_ i
   where ITVar i = mkITVar i
 
 pattern ITCon :: Id -> IKind -> TISort -> IType
-pattern ITCon i k s <- ITCon_ i k s
+pattern ITCon i k s <- ITCon_ _ i k s
   where ITCon i k s = mkITCon i k s
 
 {-# COMPLETE ITForAll, ITAp, ITVar, ITCon, ITNum, ITStr #-}
@@ -199,11 +202,11 @@ vsNull = S.null
 fTVarSet :: IType -> VarSet
 fTVarSet t0 | ftvCacheEnabled = cached t0
             | otherwise       = walk t0
-  where cached (ITForAll_ _ fvs _ _ _) = fvs
-        cached (ITAp_ _ fvs _ _) = fvs
+  where cached (ITForAll_ _ fvs _ _ _ _ _) = fvs
+        cached (ITAp_ _ fvs _ _ _ _) = fvs
         cached l = leaf l
-        walk (ITForAll_ _ _ i _ b) = vsDelete i (walk b)
-        walk (ITAp_ _ _ f a) = walk f `vsUnion` walk a
+        walk (ITForAll_ _ _ _ _ i _ b) = vsDelete i (walk b)
+        walk (ITAp_ _ _ _ _ f a) = walk f `vsUnion` walk a
         walk l = leaf l
         leaf (ITVar i) = vsSingleton i
         leaf _ = vsEmpty
@@ -220,10 +223,68 @@ fTVars = fTVarSet
 -- sharing-map keys in BinData -- and must never be serialized or
 -- otherwise influence anything observable.
 iTypeNodeId :: IType -> Int
-iTypeNodeId (ITForAll_ u _ _ _ _) = u
-iTypeNodeId (ITAp_ u _ _ _) = u
+iTypeNodeId (ITForAll_ u _ _ _ _ _ _) = u
+iTypeNodeId (ITAp_ u _ _ _ _ _) = u
 iTypeNodeId t =
     internalError ("IType.iTypeNodeId: not an interior node: " ++ show t)
+
+-- Bit 0: ATF-free (no TIatf).  Bit 1: type-function-free (neither
+-- TIatf nor primitive type function).
+tfBitATF, tfBitTFun, tfBitsAllFree :: Word8
+tfBitATF  = 1
+tfBitTFun = 2
+tfBitsAllFree = 3
+
+tFlags :: IType -> Word8
+tFlags (ITForAll_ _ _ tf _ _ _ _) = tf
+tFlags (ITAp_ _ _ tf _ _ _) = tf
+tFlags (ITCon_ _ _ _ (TIatf {})) = 0
+tFlags (ITCon_ _ i _ _) | isPrimTFunName i || i == idId = tfBitATF
+tFlags _ = tfBitsAllFree
+
+iTypeAtfFree :: IType -> Bool
+iTypeAtfFree t = (tFlags t .&. tfBitATF) /= 0
+
+iTypeTFunFree :: IType -> Bool
+iTypeTFunFree t = (tFlags t .&. tfBitTFun) /= 0
+
+-- True node identity (equal intern uniques), without cmpT's
+-- binder-kind skip.
+sameITypeNode :: IType -> IType -> Bool
+sameITypeNode (ITAp_ u _ _ _ _ _) (ITAp_ u' _ _ _ _ _) = u == u'
+sameITypeNode (ITForAll_ u _ _ _ _ _ _) (ITForAll_ u' _ _ _ _ _ _) = u == u'
+sameITypeNode _ _ = False
+
+-- The kind of a ground interior node, computed lazily on first demand
+-- by ISyntaxCheck.
+iTypeGroundKind :: IType -> Maybe IKind
+iTypeGroundKind (ITForAll_ _ _ _ mk _ _ _) = mk
+iTypeGroundKind (ITAp_ _ _ _ mk _ _) = mk
+iTypeGroundKind _ = Nothing
+
+groundKindOf :: IType -> Maybe IKind
+groundKindOf = kindNode M.empty
+
+kindIn :: M.Map Id IKind -> IType -> Maybe IKind
+kindIn _ (ITForAll_ _ fvs _ mk _ _ _) | vsNull fvs = mk
+kindIn _ (ITAp_ _ fvs _ mk _ _) | vsNull fvs = mk
+kindIn r t = kindNode r t
+
+kindNode :: M.Map Id IKind -> IType -> Maybe IKind
+kindNode r (ITForAll_ _ _ _ _ i k t) =
+    case kindIn (M.insert i k r) t of
+      Just kr -> kr `seq` Just (IKFun k kr)
+      Nothing -> Nothing
+kindNode r (ITAp_ _ _ _ _ f a) =
+    case kindIn r f of
+      Just (IKFun ka kr) -> case kindIn r a of
+                              Just ka' | ka' == ka -> kr `seq` Just kr
+                              _ -> Nothing
+      _ -> Nothing
+kindNode r (ITVar_ i) = M.lookup i r
+kindNode _ (ITCon_ _ _ k _) = Just k
+kindNode _ (ITNum _) = Just IKNum
+kindNode _ (ITStr _) = Just IKStr
 
 -- --------------------------------
 -- Id normalization for type embedding
@@ -329,7 +390,7 @@ mkITCon i k s
         -- HasCallStack to mkITCon and the ITCon pattern signature and
         -- render callStack here.
         internalError ("IType.mkITCon: unqualified tycon " ++
-                       show (ITCon_ i k s))
+                       show (ITCon_ 0 i k s))
     | otherwise = unsafePerformIO $ do
         let key = (getIdQual i, getIdBase i)
         TConTable m0 <- readIORef tconTable
@@ -346,7 +407,7 @@ mkITCon i k s
                          -- tycon; TISort can embed a whole CType), so
                          -- NFData can stop at the interned node
                          t = ti `deepseq` k `deepseq` ts `deepseq`
-                             assertConstructedNF "mkITCon" (ITCon_ ti k ts)
+                             assertConstructedNF "mkITCon" (ITCon_ (M.size m) ti k ts)
                      in  (TConTable (M.insert key t m), t)
 
 -- --------------------------------
@@ -390,18 +451,35 @@ data NodeKey
         deriving (Eq, Ord)
 
 tKey :: IType -> TKey
-tKey (ITForAll_ u _ _ _ _) = TKNode u
-tKey (ITAp_ u _ _ _)       = TKNode u
-tKey (ITCon_ i _ _)        = TKCon (getIdQual i) (getIdBase i)
-tKey (ITVar_ i)            = TKVar (getIdBase i)
-tKey (ITNum n)             = TKNum n
-tKey (ITStr s)             = TKStr s
+tKey (ITForAll_ u _ _ _ _ _ _) = TKNode u
+tKey (ITAp_ u _ _ _ _ _)       = TKNode u
+tKey (ITCon_ _ i _ _)          = TKCon (getIdQual i) (getIdBase i)
+tKey (ITVar_ i)                = TKVar (getIdBase i)
+tKey (ITNum n)                 = TKNum n
+tKey (ITStr s)                 = TKStr s
 
-data InternTable = InternTable !(M.Map NodeKey IType) {-# UNPACK #-} !Int
+data InternTable = InternTable !(IM.IntMap (IM.IntMap IType))
+                               !(M.Map NodeKey IType) {-# UNPACK #-} !Int
+
+tCode :: IType -> Int
+tCode (ITForAll_ u _ _ _ _ _ _) = tagged 0 u
+tCode (ITAp_ u _ _ _ _ _)       = tagged 0 u
+tCode (ITCon_ u _ _ _)          = tagged 1 u
+tCode (ITVar_ i)                = tagged 2 (fstringId (getIdBase i))
+tCode (ITStr s)                 = tagged 3 (fstringId s)
+tCode (ITNum n) | n >= 0 && n < toInteger codeLimit = tagged 4 (fromInteger n)
+                | otherwise = -1
+
+tagged :: Int -> Int -> Int
+tagged tag x | x >= 0 && x < codeLimit = (x `shiftL` 3) .|. tag
+             | otherwise = -1
+
+codeLimit :: Int
+codeLimit = 1 `shiftL` 60
 
 {-# NOINLINE internTable #-}
 internTable :: IORef InternTable
-internTable = unsafePerformIO $ newIORef (InternTable M.empty 0)
+internTable = unsafePerformIO $ newIORef (InternTable IM.empty M.empty 0)
 
 -- The hidden flag -hack-no-itype-ftv-cache (registered with the
 -- other progArgs-queried flags in FlagsDecode.traceflags, so the
@@ -418,48 +496,66 @@ internTable = unsafePerformIO $ newIORef (InternTable M.empty 0)
 ftvCacheEnabled :: Bool
 ftvCacheEnabled = not ("-hack-no-itype-ftv-cache" `elem` progArgs)
 
+groundNew :: VarSet -> Bool
+groundNew fvs = ftvCacheEnabled && vsNull fvs
+
 {-# NOINLINE internAp #-}
 internAp :: IType -> IType -> IType
-internAp f a = unsafePerformIO $ do
+internAp f a
+  | cf >= 0 && ca >= 0 = unsafePerformIO $ do
+    InternTable im0 _ _ <- readIORef internTable
+    case IM.lookup cf im0 >>= IM.lookup ca of
+      Just t  -> return t
+      Nothing -> atomicModifyIORef' internTable goFast
+  | otherwise = unsafePerformIO $ do
     let key = NKAp (tKey f) (tKey a)
-    InternTable m0 _ <- readIORef internTable
+    InternTable _ m0 _ <- readIORef internTable
     case M.lookup key m0 of
       Just t  -> return t
       Nothing -> atomicModifyIORef' internTable (go key)
   where
-    go key st@(InternTable m n) =
+    cf = tCode f
+    ca = tCode a
+    {-# INLINE new #-}
+    new n = let fvs | ftvCacheEnabled = fTVarSet f `vsUnionCanon` fTVarSet a
+                    | otherwise       = vsEmpty
+                tf = tFlags f .&. tFlags a
+                raw | groundNew fvs = ITAp_ n fvs tf (groundKindOf raw) f a
+                    | otherwise     = ITAp_ n fvs tf Nothing f a
+            in  fvs `deepseq` assertConstructedNF "internAp" raw
+    goFast st@(InternTable im m n) =
+        case IM.lookup cf im >>= IM.lookup ca of
+          Just t  -> (st, t)
+          Nothing -> let !t = new n
+                         im' = IM.insertWith IM.union cf (IM.singleton ca t) im
+                     in  (InternTable im' m (n+1), t)
+    go key st@(InternTable im m n) =
         case M.lookup key m of
           Just t  -> (st, t)
-          Nothing -> let fvs | ftvCacheEnabled = fTVarSet f `vsUnionCanon` fTVarSet a
-                             | otherwise       = vsEmpty
-                         -- deep NF at construction (children are already
-                         -- deep by induction), so NFData can stop at
-                         -- interned nodes
-                         t = fvs `deepseq`
-                             assertConstructedNF "internAp" (ITAp_ n fvs f a)
-                     in  (InternTable (M.insert key t m) (n+1), t)
+          Nothing -> let t = new n
+                     in  (InternTable im (M.insert key t m) (n+1), t)
 
 {-# NOINLINE mkITForAll #-}
 mkITForAll :: Id -> IKind -> IType -> IType
 mkITForAll i k t = unsafePerformIO $ do
     let key = NKForAll ti k (tKey t)
-    InternTable m0 _ <- readIORef internTable
+    InternTable _ m0 _ <- readIORef internTable
     case M.lookup key m0 of
       Just t' -> return t'
       Nothing -> atomicModifyIORef' internTable (go key)
   where
-    -- binder Ids are type-embedded Ids like any other: normalized
     ti = tidyTypeId i
-    go key st@(InternTable m n) =
+    go key st@(InternTable im m n) =
         case M.lookup key m of
           Just t' -> (st, t')
           Nothing -> let fvs | ftvCacheEnabled = vsDeleteCanon ti (fTVarSet t)
                              | otherwise       = vsEmpty
-                         -- deep NF at construction; see internAp
+                         tf = tFlags t
+                         raw | groundNew fvs = ITForAll_ n fvs tf (groundKindOf raw) ti k t
+                             | otherwise     = ITForAll_ n fvs tf Nothing ti k t
                          t' = fvs `deepseq` ti `deepseq` k `deepseq`
-                              assertConstructedNF "mkITForAll"
-                                  (ITForAll_ n fvs ti k t)
-                     in  (InternTable (M.insert key t' m) (n+1), t')
+                              assertConstructedNF "mkITForAll" raw
+                     in  (InternTable im (M.insert key t' m) (n+1), t')
 
 -- The smart constructor behind the ITAp pattern synonym.  It first
 -- performs the single-step type-function reduction that
@@ -476,13 +572,13 @@ mkITForAll i k t = unsafePerformIO $ do
 -- real constructors (ITAp_): the ITAp synonym's builder is this very
 -- function.
 mkITAp :: IType -> IType -> IType
-mkITAp (ITAp_ _ _ (ITCon op _ _) (ITNum x)) (ITNum y) | isJust (res) =
+mkITAp (ITAp_ _ _ _ _ (ITCon op _ _) (ITNum x)) (ITNum y) | isJust (res) =
     mkNumConT (fromJust res)
   where res = opNumT op [x, y]
 mkITAp (ITCon op _ _) (ITNum x) | isJust (res) =
     mkNumConT (fromJust res)
   where res = opNumT op [x]
-mkITAp (ITAp_ _ _ (ITCon op _ _) (ITStr x)) (ITStr y) | isJust (res) =
+mkITAp (ITAp_ _ _ _ _ (ITCon op _ _) (ITStr x)) (ITStr y) | isJust (res) =
     ITStr (fromJust res)
   where res = opStrT op [x, y]
 mkITAp (ITCon op _ _) (ITNum x) | op == idTNumToStr =
@@ -526,10 +622,10 @@ assertConstructedNF site t = unsafePerformIO $ do
     -- components forced deep at construction vs. IType children
     -- trusted by induction (WHNF check only)
     let (deep, whnf) = case t of
-          ITForAll_ _ fvs i k b -> ([asBox fvs, asBox i, asBox k], [asBox b])
-          ITAp_ _ fvs f a       -> ([asBox fvs], [asBox f, asBox a])
-          ITVar_ i              -> ([asBox i], [])
-          ITCon_ i k s          -> ([asBox i, asBox k, asBox s], [])
+          ITForAll_ _ fvs _ _ i k b -> ([asBox fvs, asBox i, asBox k], [asBox b])
+          ITAp_ _ fvs _ _ f a       -> ([asBox fvs], [asBox f, asBox a])
+          ITVar_ i                  -> ([asBox i], [])
+          ITCon_ _ i k s            -> ([asBox i, asBox k, asBox s], [])
           ITNum n               -> ([asBox n], [])
           ITStr s               -> ([asBox s], [])
     mapM_ walk deep
@@ -575,10 +671,10 @@ assertConstructedNF _ t = t
 -- intern uniques, matching what the derived instance printed before
 -- hash-consing (so debug dumps are unchanged).
 instance Show IType where
-    showsPrec d (ITForAll_ _ _ i k t) = showParen (d > 10) $
+    showsPrec d (ITForAll_ _ _ _ _ i k t) = showParen (d > 10) $
         showString "ITForAll " . showsPrec 11 i . showString " " .
         showsPrec 11 k . showString " " . showsPrec 11 t
-    showsPrec d (ITAp_ _ _ f a) = showParen (d > 10) $
+    showsPrec d (ITAp_ _ _ _ _ f a) = showParen (d > 10) $
         showString "ITAp " . showsPrec 11 f . showString " " .
         showsPrec 11 a
     showsPrec d (ITVar i) = showParen (d > 10) $
@@ -630,7 +726,7 @@ instance Ord IType where
 -- Interned interior nodes short-circuit on equal uniques (same unique
 -- means the same node, hence EQ).  Uniques are never used for LT/GT.
 cmpT :: IType -> IType -> Ordering
-cmpT (ITForAll_ u1 _ i1 _ t1) (ITForAll_ u2 _ i2 _ t2)  -- binder kind comparison skipped (see above)
+cmpT (ITForAll_ u1 _ _ _ i1 _ t1) (ITForAll_ u2 _ _ _ i2 _ t2)  -- binder kind comparison skipped (see above)
         | u1 == u2  = EQ
         | otherwise =
             case compare i1 i2 of
@@ -639,7 +735,7 @@ cmpT (ITForAll_ u1 _ i1 _ t1) (ITForAll_ u2 _ i2 _ t2)  -- binder kind compariso
 cmpT (ITForAll _  _  _ ) _                   = LT
 
 cmpT (ITAp _ _)          (ITForAll _  _  _)  = GT
-cmpT (ITAp_ u1 _ f1 a1)  (ITAp_ u2 _ f2 a2)
+cmpT (ITAp_ u1 _ _ _ f1 a1)  (ITAp_ u2 _ _ _ f2 a2)
         | u1 == u2  = EQ
         | otherwise =
             case cmpT f1 f2 of

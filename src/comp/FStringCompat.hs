@@ -2,7 +2,7 @@
 module FStringCompat(FString, getFString,
                      tmpFString, enumFString, cloneFString, concatFString,
                      mkNumFString, mkStrFString, mkFString,
-                     filterFString
+                     filterFString, fstringId
                     ) where
 
 -- wrapper to make SStrings look like FStrings
@@ -15,6 +15,10 @@ import qualified Data.Generics as Generic
 
 
 newtype FString = FString S.SString deriving (Eq,Ord,Generic.Data, Generic.Typeable)
+
+-- The string's id (SpeedyString.sstringId): equal ids are equal strings.
+fstringId :: FString -> Int
+fstringId (FString s) = S.sstringId s
 
 fromString :: String -> FString
 fromString = FString . S.fromString
