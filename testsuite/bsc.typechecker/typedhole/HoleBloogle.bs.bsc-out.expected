@@ -1,0 +1,9 @@
+checking package dependencies
+compiling HoleBloogle.bs
+Warning: "HoleBloogle.bs", line 4, column 20: (T0159)
+  Typed hole `__' has the inferred type:
+    Prelude.Bit 12
+  bloogle found these approximate matches:
+    FakeVector fakeFold :: (a -> b -> b) -> b -> Fake n a -> b
+    FakeVector fakeHead :: Fake n a -> a
+All packages are up to date.

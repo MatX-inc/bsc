@@ -31,6 +31,7 @@ data Flags = Flags {
         -- code from its .ba, as a reusable block rather than a runnable top);
         -- never settable from the command line -- see codegenNames
         blockCodegen :: Bool,
+        bloogleDb :: Maybe String,
         bluespecDir :: String,
         cIncPath :: [String],
         cLibPath :: [String],
