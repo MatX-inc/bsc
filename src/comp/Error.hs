@@ -833,6 +833,8 @@ data ErrMsg =
         | WIncoherentMatch String String
         | WOrphanInst String
         | WTransitiveIncoherentMatch String String String
+        | WRedundantProviso String String (Maybe String)
+          -- definition, proviso, a proviso that supplies what is used of it
         | ECoherentTransitiveIncoherentMatch String String String
         | EUnbasedUnsizedType String String String -- literal, expected type, unpack hint
         | WTypedHole String [String] -- inferred type, bloogle approximate matches
@@ -3199,6 +3201,14 @@ getErrorText (WRedundantPattern ctx pat) =
      s2par ("This pattern in " ++ ctx ++ " can never match, because" ++
             " the preceding patterns cover all of its cases:") $$
      nest 2 (text pat))
+
+getErrorText (WRedundantProviso def prov msup) =
+    (Type 167, empty,
+     s2par ("The proviso " ++ ishow prov ++ " on " ++ ishow def ++
+            " is redundant: " ++
+            case msup of
+              Nothing -> "the definition does not use it."
+              Just sup -> ishow sup ++ " supplies all that the definition uses of it."))
 getErrorText (ECoherentTransitiveIncoherentMatch pred root_pred root_inst) =
     (Type 164, empty,
      s2par ("Coherent proviso " ++ pred ++ " is satisfied by a dictionary that " ++

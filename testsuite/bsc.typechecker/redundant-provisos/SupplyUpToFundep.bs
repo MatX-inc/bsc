@@ -1,0 +1,19 @@
+package SupplyUpToFundep where
+
+class Kind k t | k -> t where
+  type Tag k = t
+
+class (Kind k t) => Kinded k t | k -> t where
+  kindName :: k -> String
+
+struct Box k =
+    tag :: Tag k
+
+-- DefaultValue (Tag k) reduces to Kind k t' and DefaultValue t'.  The
+-- field needs Kind k t', which Kinded k t supplies as a superclass (the
+-- dependency makes t' = t), so the whole proviso is redundant.
+named :: (Kinded k t, DefaultValue (Tag k)) => k -> Box k -> Box k
+named k b = if kindName k == "" then b else Box { tag = b.tag }
+
+named2 :: (DefaultValue (Tag k), Kinded k t) => k -> Box k -> Box k
+named2 k b = if kindName k == "" then b else Box { tag = b.tag }

@@ -96,6 +96,7 @@ changequote([`], ['])dnl
 -warn-incomplete-patterns warn when pattern matching does not cover all possible values
 -warn-method-urgency    warn when a method's urgency is arbitrarily chosen
 -warn-overlapping-patterns warn when a pattern can never match (shadowed by earlier patterns)
+-warn-redundant-provisos warn when a signature proviso is unused or implied by another
 
 Most flags may be preceded by a ``no-'' to reverse the effect.
 Flags later on the command line override earlier ones.

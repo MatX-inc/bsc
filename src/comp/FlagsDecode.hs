@@ -771,6 +771,7 @@ defaultFlags bluespecdir = Flags {
         warnIncompletePatterns = True,
         warnMethodUrgency = True,
         warnOverlappingPatterns = True,
+        warnRedundantProvisos = False,
         warnUndetPred = False,
         semanticPortsComment = False
         }
@@ -1910,6 +1911,10 @@ externalFlags = [
          (Toggle (\f x -> f {warnOverlappingPatterns=x}) (showIfTrue warnOverlappingPatterns),
           "warn when a pattern can never match (shadowed by earlier patterns)", Visible)),
 
+        ("warn-redundant-provisos",
+         (Toggle (\f x -> f {warnRedundantProvisos=x}) (showIfTrue warnRedundantProvisos),
+          "warn when a signature proviso is unused or implied by another", Visible)),
+
         ("warn-undet-predicate",
          (Toggle (\f x -> f {warnUndetPred=x}) (showIfTrue warnUndetPred),
           "warn when a rule or method predicate has an undetermined value", Hidden)),
@@ -2157,6 +2162,7 @@ showFlagsRaw flags =
           ("warnIncompletePatterns", show (warnIncompletePatterns flags)),
           ("warnMethodUrgency", show (warnMethodUrgency flags)),
           ("warnOverlappingPatterns", show (warnOverlappingPatterns flags)),
+          ("warnRedundantProvisos", show (warnRedundantProvisos flags)),
           ("warnUndetPred", show (warnUndetPred flags)),
           ("semanticPortsComment", show (semanticPortsComment flags))
          ]

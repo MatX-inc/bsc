@@ -1,0 +1,37 @@
+package MethodAssoc where
+
+-- Calling a method or variable whose declared type names an associated
+-- type needs the proviso that resolves it, though its dictionary is
+-- unused: no warning.
+
+class Shape a where
+  shapeBits :: a -> Bit (SizeOf a)
+
+toByte :: (Shape a, Bits a 8) => a -> Bit 8
+toByte x = shapeBits x
+
+class Kind k t | k -> t where
+  type Tag k = t
+  kindName :: k -> String
+
+class Source s where
+  source :: s -> Tag s
+
+fetch :: (Source s, Kind s (Bit 4)) => s -> Bit 4
+fetch x = source x
+
+-- a method of a superclass
+class (Shape a) => Shape2 a where
+  shapeOk :: a -> Bool
+
+toByte2 :: (Shape2 a, Bits a 8) => a -> Bit 8
+toByte2 x = shapeBits x
+
+-- a method whose type is a synonym that hides SizeOf
+type Packed a = Bit (SizeOf a)
+
+class Shape3 a where
+  packed :: a -> Packed a
+
+toByte3 :: (Shape3 a, Bits a 8) => a -> Bit 8
+toByte3 x = packed x

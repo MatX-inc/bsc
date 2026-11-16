@@ -93,6 +93,7 @@ import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
                   getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck)
 import PatMatchCheck(patternMatchWarnings)
+import RedundantProvisos(checkRedundantProvisos)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import CQualifyClassDefaults(qualifyClassDefaults)
@@ -490,7 +491,8 @@ compilePackage
 
     -- Reduce the contexts as far as possible
     start flags DFctxreduce
-    (mctx, pkgsUsedInCtxReduce) <- cCtxReduceIO errh flags symt11 mder
+    (mctx, pkgsUsedInCtxReduce, signProvisos) <-
+        cCtxReduceIO errh flags symt11 (warnRedundantProvisos flags) mder
     t <- dump errh flags t DFctxreduce dumpnames mctx
 
     -- Rebuild the symbol table because CtxReduce has possibly changed
@@ -516,6 +518,9 @@ compilePackage
     when (not tcErrors) $ do
       let pm_warns = patternMatchWarnings flags symt minst mod
       when (not (null pm_warns)) $ bsWarning errh pm_warns
+
+    when (warnRedundantProvisos flags && not tcErrors) $
+      checkRedundantProvisos errh symt11 mder signProvisos mod
 
     --when (early flags) $ return ()
     let prefix = dirName name ++ "/"
@@ -2654,7 +2659,7 @@ compileCDefToIDef errh flags dumpnames symt host_context ipkg def =
     t <- getNow
 
     start flags DFwrapper_ctxreduce
-    (cpkg_ctx, _) <- cCtxReduceIO errh flags symt cpkg0
+    (cpkg_ctx, _, _) <- cCtxReduceIO errh flags symt False cpkg0
     t <- dump errh flags t DFwrapper_ctxreduce dumpnames cpkg_ctx
 
     start flags DFwrapper_typecheck
