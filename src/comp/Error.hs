@@ -825,6 +825,7 @@ data ErrMsg =
         | WIncoherentMatch String String
         | WOrphanInst String
         | WTransitiveIncoherentMatch String String String
+        | ECoherentTransitiveIncoherentMatch String String String
         | EUnbasedUnsizedType String String String -- literal, expected type, unpack hint
         | WTypedHole String [String] -- inferred type, bloogle approximate matches
         | EModInstWrongArgs [Position]
@@ -3167,6 +3168,11 @@ getErrorText (WTransitiveIncoherentMatch pred root_pred root_inst) =
     (Type 158, empty,
      s2par ("Proviso " ++ pred ++ " is satisfied by a dictionary that transitively " ++
             "depends on an incoherent match of " ++ root_pred ++
+            " against instance " ++ root_inst))
+getErrorText (ECoherentTransitiveIncoherentMatch pred root_pred root_inst) =
+    (Type 164, empty,
+     s2par ("Coherent proviso " ++ pred ++ " is satisfied by a dictionary that " ++
+            "transitively depends on an incoherent match of " ++ root_pred ++
             " against instance " ++ root_inst))
 
 getErrorText (WInterfaceSyntaxUsedForStruct name) =
