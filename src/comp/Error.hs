@@ -889,7 +889,7 @@ data ErrMsg =
         | EForeignModResetHasArgs String String String
         | EForeignModInoutHasArgs String String String
         | EForeignModNotField String String
-        | EForeignModMissingField String String String
+        | EForeignModMissingField String String
         | EForeignModSynth String
 
         | EForeignFuncStringRes
@@ -2838,10 +2838,10 @@ getErrorText (EForeignModNotField ifc f) =
     -- we don't display "ifc" because it's the mangled generated ifc name
     (Type 104, empty, s2par ("The interface of this foreign module " ++
                              "does not have a field " ++ ishow f))
-getErrorText (EForeignModMissingField f mod mod_pos) =
-    (Type 105, empty, s2par ("The interface field " ++ ishow f ++
-                             " is missing in the foreign module import " ++
-                             quote mod ++ " at " ++ mod_pos))
+getErrorText (EForeignModMissingField ifc f) =
+    (Type 105, empty, s2par ("This foreign module import is missing the " ++
+                             "field " ++ ishow f ++ " of its interface " ++
+                             ishow ifc))
 getErrorText (ETypeSynRecursive names) =
     (Type 106, empty, s2par ("There are circular references among the following type synonyms: " ++
                              unwordsAnd names))
