@@ -11,7 +11,7 @@ import IntLit
 import ErrorUtil
 import Id
 import ISyntax
-import ISyntaxSubst(eSubst, etSubst)
+import ISyntaxSubst(eSubst, etSubst, eSubstIfOnce)
 import Prim
 import ISyntaxUtil(aitBit, isTrue, isFalse, isitActionValue_, isitActionValue, iDefsMap)
 import ISyntaxXRef(mapIExprPosition)
@@ -53,7 +53,13 @@ iSimpAp' b f ts es = mapIExprPosition True (f, iSimpAp b f ts es)
 iSimpAp :: (NFData a) => Bool -> IExpr a -> [IType] -> [IExpr a] -> IExpr a
 iSimpAp n (ILAM i _ e) (t:ts) as = iSimpAp n (etSubst i t e) ts as
 iSimpAp n (ILam i _ e) [] (a:as)
-    | not (isKeepId i) && (isTriv a || countOcc i e <= 1) =
+    | not (isKeepId i), isTriv a =
+        iSimpAp n (eSubst i a e) [] as
+    -- an argument used at most once is inlined: found out and done in
+    -- one traversal of the body when possible
+    | not (isKeepId i), Just e' <- eSubstIfOnce i a e =
+        iSimpAp n e' [] as
+    | not (isKeepId i) && countOcc i e <= 1 =
         let e' = eSubst i a e
         in iSimpAp n e' [] as
 iSimpAp _ (ICon _ (ICPrim _ prim)) ts es | m /= Nothing = r

@@ -23,6 +23,7 @@ module ISyntaxSubst(
         -- Public API
         tSubst,
         eSubst,
+        eSubstIfOnce,
         etSubst,
         tSubstBatch,
         eSubstBatch,
@@ -433,12 +434,135 @@ eSubstWith ectx tctx allIds e
 -- Public API: single expression substitution
 {-# INLINE eSubst #-}
 eSubst :: Id -> IExpr a -> IExpr a -> IExpr a
-eSubst i x e
-    | Changed e' <- result = e'
-    | otherwise = e
+eSubst i x e =
+    case eSubstPlain i x fvx e of
+      SubNew e' -> e'
+      SubSame -> e
+      SubNeedsGeneral
+          | Changed e' <- result -> e'
+          | otherwise -> e
   where fvx = fVars x
         allIds = fvx `S.union` aVars e
         result = eSubstWith (SingleExpr i x fvx) EmptyType allIds e
+
+-- Substitute a variable that occurs at most once, finding out whether
+-- it does in the same traversal.  Nothing: it occurs more than once, or
+-- this is not the plain case (see eSubstPlain); the caller then counts
+-- and substitutes the general way.  The occurrences counted are those
+-- eSubst would replace.
+eSubstIfOnce :: Id -> IExpr a -> IExpr a -> Maybe (IExpr a)
+eSubstIfOnce i x e0 =
+    case go False e0 of
+      OnceSame _ -> Just e0
+      OnceNew e' -> Just e'
+      OnceNo -> Nothing
+  where
+    fvx = fVars x
+    -- the argument tells whether an occurrence has been seen already
+    go seen (IVar v) | v /= i = OnceSame seen
+                     | seen = OnceNo
+                     | otherwise = OnceNew x
+    go seen (ILam b t e)
+        | b == i = OnceSame seen
+        | b `S.member` fvx = OnceNo
+        | otherwise = case go seen e of
+                        OnceNew e' -> OnceNew (ILam b t e')
+                        r -> r
+    go seen (ILAM b k e) = case go seen e of
+                             OnceNew e' -> OnceNew (ILAM b k e')
+                             r -> r
+    go seen (IAps f ts es) =
+        case go seen f of
+          OnceNo -> OnceNo
+          OnceSame seen' ->
+              case goList seen' es of
+                OnceListNo -> OnceNo
+                OnceListSame seen'' -> OnceSame seen''
+                OnceListNew es' -> OnceNew (IAps f ts es')
+          OnceNew f' ->
+              -- the one occurrence is in f: there must be none in es
+              case goList True es of
+                OnceListSame _ -> OnceNew (IAps f' ts es)
+                _ -> OnceNo
+    go seen (ICon _ ii) | conHoldsExprs ii = OnceNo
+                        | otherwise = OnceSame seen
+    go seen (IRefT _ _ _ _) = OnceSame seen
+
+    goList seen [] = OnceListSame seen
+    goList seen (a : as) =
+        case go seen a of
+          OnceNo -> OnceListNo
+          OnceSame seen' ->
+              case goList seen' as of
+                OnceListNew as' -> OnceListNew (a : as')
+                r -> r
+          OnceNew a' ->
+              case goList True as of
+                OnceListSame _ -> OnceListNew (a' : as)
+                _ -> OnceListNo
+
+-- OnceNew: the (single) occurrence was replaced, and this is the result
+data OnceResult a = OnceNo | OnceSame !Bool | OnceNew (IExpr a)
+data OnceListResult a = OnceListNo | OnceListSame !Bool | OnceListNew [IExpr a]
+
+-- the constants that etSubstIConInfo substitutes expressions in
+conHoldsExprs :: IConInfo a -> Bool
+conHoldsExprs (ICUndet { imVal = Just _ }) = True
+conHoldsExprs (ICClock { }) = True
+conHoldsExprs (ICReset { }) = True
+conHoldsExprs (ICInout { }) = True
+conHoldsExprs (ICLazyArray { uninit = Just _ }) = True
+conHoldsExprs _ = False
+
+-- Substitution of one variable in the common case: no binder on the
+-- way has to be renamed, and no constant holds expressions.  It gives
+-- exactly what eSubstWith gives then, for a fraction of the work per
+-- node (the simplifier substitutes once per let binding, each time
+-- over the whole body), and gives up otherwise.
+data SubResult a = SubSame | SubNew (IExpr a) | SubNeedsGeneral
+
+eSubstPlain :: Id -> IExpr a -> S.Set Id -> IExpr a -> SubResult a
+eSubstPlain i x fvx = go
+  where
+    go (IVar v) | v == i = SubNew x
+                | otherwise = SubSame
+    go (ILam b t e)
+        | b == i = SubSame
+        | b `S.member` fvx = SubNeedsGeneral
+        | otherwise = case go e of
+                        SubNew e' -> SubNew (ILam b t e')
+                        r -> r
+    go (ILAM b k e) = case go e of
+                        SubNew e' -> SubNew (ILAM b k e')
+                        r -> r
+    go (IAps f ts es) =
+        case go f of
+          SubNeedsGeneral -> SubNeedsGeneral
+          rf -> case goList es of
+                  Nothing -> SubNeedsGeneral
+                  Just Nothing -> case rf of
+                                    SubNew f' -> SubNew (IAps f' ts es)
+                                    _ -> SubSame
+                  Just (Just es') -> case rf of
+                                       SubNew f' -> SubNew (IAps f' ts es')
+                                       _ -> SubNew (IAps f ts es')
+    go (ICon _ ii) | conHoldsExprs ii = SubNeedsGeneral
+                   | otherwise = SubSame
+    go (IRefT _ _ _ _) = SubSame
+
+    -- Nothing: give up; Just Nothing: unchanged
+    goList [] = Just Nothing
+    goList (a : as) =
+        case go a of
+          SubNeedsGeneral -> Nothing
+          ra -> case goList as of
+                  Nothing -> Nothing
+                  Just Nothing -> case ra of
+                                    SubNew a' -> Just (Just (a' : as))
+                                    _ -> Just Nothing
+                  Just (Just as') -> case ra of
+                                       SubNew a' -> Just (Just (a' : as'))
+                                       _ -> Just (Just (a : as'))
 
 -- Public API: type substitution in expression
 {-# INLINE etSubst #-}
