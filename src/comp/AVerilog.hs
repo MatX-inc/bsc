@@ -1208,8 +1208,8 @@ genInstances errh flags ff_blocks vDef aspack =
             = dropUnusedPortWires ff_blocks (filtered_defs ++ all_io_wires) reg_uses inst_infos
 
         filtered_ds2 =
-            let unused_ids = map vidToId unused_defs
-                isUsedDef (ADef { adef_objid=i }) = i `notElem` unused_ids
+            let unused_ids = S.fromList (map vidToId unused_defs)
+                isUsedDef (ADef { adef_objid=i }) = not (i `S.member` unused_ids)
             in  filter isUsedDef filtered_ds
 
     -- ----------
