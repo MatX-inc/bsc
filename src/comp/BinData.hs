@@ -1,31 +1,65 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE MultiParamTypeClasses, FunctionalDependencies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables, BangPatterns #-}
-{-# LANGUAGE PatternSynonyms, OverloadedLists, TypeFamilies #-}
+{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE MagicHash, UnboxedTuples, RankNTypes #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
 module BinData ( Byte
                , putBs, putB, putI
-               , getN, getB, getI -- , getBytesRead
+               , getN, getB, getI
                , Bin(..)
                , section
-               , encode, decode, decodeWithHash
-               , binTypeStats
+               , Lazy(..), toBinLazy, fromBinLazy
+               , encodeWithIO, decode, decodeStrict, decodeWithHash
                ) where
 
 {- Routines for converting structures to/from byte strings.
 
-   These routines are carefully crafted to avoid three problem scenarios:
-   stack overflows due to thunks within a monad, requiring the
-   entire binary stream to be built in memory before it can begin to be
-   consumed, and losing structure sharing in the generated binary stream.
+   The writer walks a value left to right and writes its encoding into
+   byte buffers outside the Haskell heap (see Out), sharing repeated
+   structures through per-kind tables.  The walk forces the value in
+   that order, and forces a shared value's key only as far as the
+   comparisons of its sharing map need: writing is often the first
+   consumer of lazily built values, and the order in which they are
+   forced decides the order in which their names are interned.
 
-   Because of these requirements, this module is designed for
-   full laziness and includes a facility for tracking shared structures.
-   This allows the conversion to run in bounded space because the byte
-   stream is generated lazily and the portion of it
-   which has been consumed can be reclaimed by the garbage collector
-   before the remainder of the stream has been generated.
+   CONTAINER LAYOUT
+
+   An encoded value is a region container.  All offsets are relative to
+   the start of the encoding (an artifact's format tag precedes it and
+   is not part of the container):
+
+     [bodies]        the root value, written sequentially.  A shared
+                     value (FString, Id, Position, Type, IType) occurs
+                     in the stream as a plain index into its table; a
+                     lazy sub-value (see Lazy / toBinLazy) occurs as a
+                     chunk number followed inline by the chunk's bytes.
+     [tables]        for each of Id, Position, Type and IType: the
+                     entries (each entry is the value's writeBytes
+                     payload, with nested shared occurrences as indices)
+                     concatenated in index order, then an index of
+                     count+1 u32 offsets (entry i spans [off_i, off_i+1)).
+     [strtab]        u32 count, then every distinct FString in
+                     first-occurrence order, in the Bin String encoding.
+     [chunk index]   u32 count, then (u32 offset, u32 length) per chunk,
+                     in chunk-number order; offsets are into [bodies].
+     [footer]        fixed width (see footerSize): u64 offsets and counts
+                     locating every region above, then an 8-byte magic.
+
+   Indices are assigned per kind in first-occurrence order of a single
+   left-to-right walk of the element stream (a parent's index precedes
+   its children's), exactly as the previous in-stream sharing scheme
+   assigned them, so every table and the string table are a pure
+   function of the content.  The string table is the walk-ordered
+   projection of the intern table: the reader interns it eagerly in
+   table order, so FString ids come out exactly as a sequential decode
+   would have produced them.  The other tables are decoded on demand,
+   one memoized thunk per entry (forward references are allowed), and a
+   lazy chunk is decoded on first force of the value that stands for it.
+
+   The writer builds every region in memory before the container is
+   written out.
 
    When reconstructing a data structure from its byte stream, we do
    not yet meet the goal of bounded space.  Care must be taken to make
@@ -34,9 +68,8 @@ module BinData ( Byte
 -}
 
 import ErrorUtil(internalError)
-import Data.IORef(IORef, newIORef, readIORef, writeIORef, modifyIORef')
-import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 import IOUtil(progArgs)
+import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 
 import FStringCompat
 import PreIds(idDefaultClock)
@@ -56,190 +89,60 @@ import IntLit
 import Undefined
 import Prim hiding(PrimArg(..))
 
-import Util(Hash(..), hashInit, nextHashByte, showHash)
+import Util(hashInit, nextHashByte, showHash)
 
-import Data.List(sort, intercalate)
+import Data.List(mapAccumL)
 import Control.Monad(liftM, ap, when)
-import Foreign.ForeignPtr(mallocForeignPtrBytes, withForeignPtr)
-import Foreign.Ptr(Ptr)
-import Foreign.Storable(peekByteOff, pokeByteOff)
+import Control.Monad.ST(ST, runST)
+import GHC.ST(ST(..))
+import Data.IORef
+import Foreign.Marshal.Alloc(mallocBytes, reallocBytes, free)
+import Foreign.Marshal.Utils(copyBytes)
+import Foreign.Ptr(Ptr, plusPtr, castPtr)
+import Foreign.Storable(peek, poke, peekByteOff, pokeByteOff)
 import Data.Array.IArray()
 import Data.Array.Unboxed
+import Data.Array.ST(STUArray, newArray)
+import Data.Array.Base(unsafeRead, unsafeWrite)
+import GHC.Arr(Array(..))
+import GHC.Exts(Int(I#), indexArray#, seq#)
 import Data.Bits
 import Data.Word
-import GHC.Exts(IsList(..))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Unsafe as BSU
 import qualified Data.ByteString.Lazy as B
-import qualified Data.Text.Lazy as T
-import qualified Data.Text.Lazy.Encoding as TE
 import qualified Data.Text as TS
 import qualified Data.Text.Encoding as TSE
 import qualified Data.Map as M
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Set as S
-import Numeric(showHex)
-
-import Debug.Trace
 
 type Byte = Word8
 
-{- To reduce the size of the binary stream and preserve shared
-   structures, we want to avoid repeatedly emitting identical
-   structures into the binary stream.  But we need to do it in
-   a way that still allows full laziness.  So examining the entire
-   structure to identify all shared structures before writing out
-   the data is not a viable option.  Instead, we take the approach
-   of converting (lazily) into this intermediate structure which
-   distinguishes shared values from the other converted data.  This
-   structure has the advantage of being compositional and easy to
-   generate in a fully lazy monad with constant stack usage.
-
-   When the final result is extracted from the monad, the shared
-   elements are replaced with the binary representation of
-   either a tagged value if it is the first time the value
-   has been encountered or a tagged index which identifies the
-   number of the value if it has been seen before.
-
-   This process can be done piecewise and lazily, which is what we
-   want.
- -}
-
--- -------------------------------------------------------------
--- Intermediate structure with distinguished shared structures
-
 {- HOW TO ADD A NEW TYPE TO THE SET OF STRUCTURES THAT GET SHARED
 
-   1. Add a constructor for it to the BinElem definition
-      (Don't forget to add it to the Show instance)
-   2. Add a cache for it to the BinCache record along with
-      a set function to update the field of the record
-      (Don't forget to update unknownCache)
-   3. Add a table for it to the BinTable record along with
-      a set function to update the field of the record
-      (Don't forget to update unknownTable)
-   4. Add a Shared instance to provide access to the cache and table
-      added in steps 2 & 3
-   5. In the Bin instance, define toBin and fromBin functions
-      These will typically be simply:
-        toBin a = Out [Constructor a] ()
+   1. Add a TableKind for it (this changes the container format)
+   2. Add a key map and a WTable for it to W (newW, finishW), keyed so
+      that comparing keys forces no more of a value than writing its
+      payload does (see the keys below)
+   3. In the Bin instance, define toBin and fromBin.  These will
+      typically be simply:
+        toBin a = shared <keys field> <table field> (key a) (writeBytes a)
         fromBin = readShared
-   6. Add a case to the share function to handle the constructor
-      added in Step 1
+   4. Add a Shared instance and a table to the Tables record, decoded
+      in mkTables
 -}
 
-data BinElem = B [Byte]
-             -- shared types
-             | S FString
-             | I Id
-             | P Position
-             | T Type
-             -- | ASL AStateLocPathComponent
-             | IT IType
-             -- | AExp AExpr
-             -- accounting markers
-             | Start String
-             | End
+-- The kinds of shared value that live in offset-indexed tables
+-- (strings have the eager string table instead)
+data TableKind = KId | KPosition | KType | KIType
+  deriving (Eq, Ord, Show, Enum, Bounded)
 
-instance Show BinElem where
-  show (B bs)    = "[" ++
-                   (intercalate "," [showHex b "" | b <- bs]) ++
-                   "]"
-  show (S s)     = getFString s
-  show (I i)     = show i
-  show (P p)     = show p
-  show (T t)     = show t
-  show (IT t)    = show t
-  -- show (ASL l)   = show l
-  -- show (AExp e)  = show e
-  show (Start s) = "<BEGIN " ++ s ++ ">"
-  show End       = "<END>"
-
--- Simple difference list implementation for O(1) append.
-newtype DList a = DL ([a] -> [a])
-
-instance IsList (DList a) where
-  type Item (DList a) = a
-
-  {-# INLINE toList #-}
-  toList (DL f) = f []
-
-  {-# INLINE fromList #-}
-  fromList = DL . (++)
-
-instance Semigroup (DList a) where
-  {-# INLINE (<>) #-}
-  (DL a) <> (DL b) = DL (a . b)
-
-type BinData = DList BinElem
+allKinds :: [TableKind]
+allKinds = [minBound .. maxBound]
 
 -- -------------------------------------------------------------
--- Structures used to track shared values during writing and reading
-
-data Known k v = Known Int (M.Map k v)
-  deriving Show
-
-unknown :: Known k v
-unknown = Known 0 M.empty
-
--- Cache of known keys and the index assigned to them
-type Cache k = Known k Int
-
-data BinCache = BinCache { string_cache   :: Cache FString
-                         , id_cache       :: Cache IdKey
-                         , position_cache :: Cache Position
-                         , type_cache     :: Cache TypeKey
-                         , itype_cache    :: Cache ITypeKey
-                         }
-
--- Set functions
-set_string_cache :: BinCache -> Cache FString -> BinCache
-set_string_cache   bc c = bc { string_cache = c }
-
-set_id_cache :: BinCache -> Cache IdKey -> BinCache
-set_id_cache       bc c = bc { id_cache = c }
-
-set_position_cache :: BinCache -> Cache Position -> BinCache
-set_position_cache bc c = bc { position_cache = c }
-
-set_type_cache :: BinCache -> Cache TypeKey -> BinCache
-set_type_cache     bc c = bc { type_cache = c }
-
-set_itype_cache :: BinCache -> Cache ITypeKey -> BinCache
-set_itype_cache    bc c = bc { itype_cache = c }
-
-unknownCache :: BinCache
-unknownCache = BinCache unknown unknown unknown unknown unknown
-
--- Table of known indexes and the values they map to
-type Table v = Known Int v
-
-data BinTable = BinTable { string_table   :: Table FString
-                         , id_table       :: Table Id
-                         , position_table :: Table Position
-                         , type_table     :: Table Type
-                         -- , loc_table      :: Table AStateLocPathComponent
-                         , itype_table    :: Table IType
-                         -- , aexpr_table    :: Table AExpr
-                         }
-
--- Set functions
-set_string_table :: BinTable -> Table FString -> BinTable
-set_string_table   bt t = bt { string_table = t }
-
-set_id_table :: BinTable -> Table Id -> BinTable
-set_id_table       bt t = bt { id_table = t }
-
-set_position_table :: BinTable -> Table Position -> BinTable
-set_position_table bt t = bt { position_table = t }
-
-set_type_table :: BinTable -> Table Type -> BinTable
-set_type_table     bt t = bt { type_table = t }
-
-set_itype_table :: BinTable -> Table IType -> BinTable
-set_itype_table    bt t = bt { itype_table = t }
-
-unknownTable :: BinTable
-unknownTable = BinTable unknown unknown unknown unknown unknown
+-- Sharing keys
 
 -- We don't use Id as a key since the Eq instance for Id only
 -- compares the strings, but we want to distinguish Ids with
@@ -261,10 +164,6 @@ data TypeKey = TKV IdKey Int Kind
   deriving (Eq, Ord, Show)
 
 type_key :: Type -> TypeKey
--- The share map keys on deep structure rather than on typeCanonId.
--- Canonical ids ignore positions, so id-keyed sharing would collapse
--- types that differ only in position onto whichever was serialized
--- first.  Share-map identity has to imply value identity.
 type_key (TVar (TyVar i n k))  = TKV (id_key i) n k
 type_key (TCon (TyCon i mk s)) = TKC (id_key i) mk s
 type_key (TCon (TyNum n p))    = TKN n p
@@ -301,85 +200,441 @@ itype_key (ITCon i k s)      = ITKC (id_key i) k s
 itype_key (ITNum n)          = ITKN n
 itype_key (ITStr s)          = ITKS s
 
+-- A stored Position's key: its file, line and column, which are what
+-- Position's Eq and Ord compare.  Position's fields are strict, so
+-- this forces exactly what any comparison of the Position would.
+data PosKey = PosKey {-# UNPACK #-} !Int {-# UNPACK #-} !Int {-# UNPACK #-} !Int
+  deriving (Eq, Ord)
+
+pos_key :: Position -> PosKey
+pos_key (Position f l c _) = PosKey (fstringId f) l c
+
 -- -------------------------------------------------------------
--- The Out monad makes it easy to generate composite BinData
+-- Byte buffers
 
-data Out a = Out BinData a
+-- A growable byte buffer in malloc'ed memory, whose header block holds
+-- the data pointer, the length and the capacity
+newtype WBuf = WBuf (Ptr Word8)
 
-out_data :: Out a -> [BinElem]
-out_data (Out bd _) = toList bd
+wbData, wbLenOff, wbCap :: Int
+wbData = 0
+wbLenOff = 8
+wbCap = 16
 
-instance Monad Out where
-  return = pure
-  (Out bs x) >>= f = let (Out bs' x') = f x in Out (bs <> bs') x'
+wbNew :: Int -> IO WBuf
+wbNew cap0 = do
+  let cap = max cap0 16
+  h <- mallocBytes 24
+  d <- mallocBytes cap :: IO (Ptr Word8)
+  pokeByteOff h wbData d
+  pokeByteOff h wbLenOff (0 :: Int)
+  pokeByteOff h wbCap cap
+  return (WBuf h)
+
+wbLen :: WBuf -> IO Int
+wbLen (WBuf h) = peekByteOff h wbLenOff
+
+wbPtr :: WBuf -> IO (Ptr Word8)
+wbPtr (WBuf h) = peekByteOff h wbData
+
+-- Room for n more bytes: the data pointer and the length
+{-# INLINE wbReserve #-}
+wbReserve :: WBuf -> Int -> IO (Ptr Word8, Int)
+wbReserve (WBuf h) n = do
+  d <- peekByteOff h wbData
+  len <- peekByteOff h wbLenOff
+  cap <- peekByteOff h wbCap
+  if len + n <= cap
+    then return (d, len)
+    else do let cap' = max (2 * cap) (len + n)
+            d' <- reallocBytes d cap'
+            pokeByteOff h wbData d'
+            pokeByteOff h wbCap cap'
+            return (d', len)
+
+{-# INLINE wbSetLen #-}
+wbSetLen :: WBuf -> Int -> IO ()
+wbSetLen (WBuf h) n = pokeByteOff h wbLenOff n
+
+{-# INLINE wbByte #-}
+wbByte :: WBuf -> Word8 -> IO ()
+wbByte b x = do
+  (d, len) <- wbReserve b 1
+  pokeByteOff d len x
+  wbSetLen b (len + 1)
+
+wbBytes :: WBuf -> [Word8] -> IO ()
+wbBytes _ [] = return ()
+wbBytes b xs = do
+  let n = length xs
+  (d, len) <- wbReserve b n
+  let go _ [] = return ()
+      go i (y:ys) = pokeByteOff d i y >> go (i + 1) ys
+  go len xs
+  wbSetLen b (len + n)
+
+-- Append n bytes from memory
+wbCopy :: WBuf -> Ptr Word8 -> Int -> IO ()
+wbCopy b src n = do
+  (d, len) <- wbReserve b n
+  copyBytes (d `plusPtr` len) src n
+  wbSetLen b (len + n)
+
+wbBS :: WBuf -> BS.ByteString -> IO ()
+wbBS b s =
+  BSU.unsafeUseAsCStringLen s $ \(src, n) -> wbCopy b (castPtr src) n
+
+-- The Bin Integer encoding of a non-negative Int: base-254 digits, most
+-- significant first, then the terminator (endPos, or endNeg for the
+-- magnitude of a negative number)
+wbNat :: WBuf -> Int -> Word8 -> IO ()
+wbNat b n term
+  | n < 0 = internalError ("BinData.wbNat: " ++ show n)
+  | n < 254 = if n == 0
+              then wbByte b term
+              else do (d, len) <- wbReserve b 2
+                      pokeByteOff d len (fromIntegral n :: Word8)
+                      pokeByteOff d (len + 1) term
+                      wbSetLen b (len + 2)
+  | otherwise = do
+      let digits :: Int -> Int -> Int
+          digits 0 k = k
+          digits m k = digits (m `quot` 254) (k + 1)
+          k = digits n 0
+      (d, len) <- wbReserve b (k + 1)
+      let go _ (-1) = return ()
+          go m i = do pokeByteOff d (len + i) (fromIntegral (m `rem` 254) :: Word8)
+                      go (m `quot` 254) (i - 1)
+      go n (k - 1)
+      pokeByteOff d (len + k) term
+      wbSetLen b (len + k + 1)
+
+-- An index or a length
+{-# INLINE wbIdx #-}
+wbIdx :: WBuf -> Int -> IO ()
+wbIdx b n = wbNat b n endPos
+
+-- The Bin Integer encoding of an Int
+wbInt :: WBuf -> Int -> IO ()
+wbInt b n
+  | n >= 0 = wbNat b n endPos
+  | n /= minBound = wbNat b (negate n) endNeg
+  | otherwise = wbBytes b (integerBytes (toInteger n))
+
+-- The Bin Integer encoding
+wbInteger :: WBuf -> Integer -> IO ()
+wbInteger b i
+  | i >= toInteger (negate maxBound :: Int) && i <= toInteger (maxBound :: Int) =
+      wbInt b (fromInteger i)
+  | otherwise = wbBytes b (integerBytes i)
+
+integerBytes :: Integer -> [Byte]
+integerBytes i = if i < 0
+                 then emit (-i) [endNeg]
+                 else emit   i  [endPos]
+  where emit 0 bs = bs
+        emit n bs = emit (n `div` baseI) (fromInteger (n `mod` baseI) : bs)
+
+-- The Bin String encoding: the length of the UTF-8 bytes, then the bytes
+wbString :: WBuf -> String -> IO ()
+wbString b s
+  | all (< '\x80') s = do
+      let n = length s
+      wbIdx b n
+      (d, len) <- wbReserve b n
+      let go _ [] = return ()
+          go i (c:cs) = pokeByteOff d i (fromIntegral (fromEnum c) :: Word8) >> go (i + 1) cs
+      go len s
+      wbSetLen b (len + n)
+  | otherwise = do
+      let !u = TSE.encodeUtf8 (TS.pack s)
+      wbIdx b (BS.length u)
+      wbBS b u
+
+-- A u32, least significant byte first
+wbU32 :: WBuf -> Int -> IO ()
+wbU32 b n
+  | n < 0 || n > 0xffffffff = internalError $ "BinData: u32 out of range: " ++ show n
+  | otherwise = do (d, len) <- wbReserve b 4
+                   pokeByteOff d len (fromIntegral n :: Word8)
+                   pokeByteOff d (len + 1) (fromIntegral (n `shiftR` 8) :: Word8)
+                   pokeByteOff d (len + 2) (fromIntegral (n `shiftR` 16) :: Word8)
+                   pokeByteOff d (len + 3) (fromIntegral (n `shiftR` 24) :: Word8)
+                   wbSetLen b (len + 4)
+
+-- The contents (the buffer is freed)
+wbFreeze :: WBuf -> IO BS.ByteString
+wbFreeze (WBuf h) = do
+  d <- peekByteOff h wbData :: IO (Ptr Word8)
+  len <- peekByteOff h wbLenOff
+  free h
+  d' <- reallocBytes d (max len 1)
+  BSU.unsafePackMallocCStringLen (castPtr d', len)
+
+wbFree :: WBuf -> IO ()
+wbFree (WBuf h) = do
+  d <- peekByteOff h wbData :: IO (Ptr Word8)
+  free d
+  free h
+
+-- -------------------------------------------------------------
+-- The Out monad writes an encoding
+
+{- Out writes bytes to the current target: the bodies region, or the
+   innermost open table entry.  A shared value is written as its index
+   into the table for its kind; on its first occurrence it is assigned
+   the next index of that kind and its payload (writeBytes) is written
+   to a new entry of the table, in which nested first occurrences open
+   entries of their own.  So indices are assigned per kind in
+   first-occurrence order of the walk, a parent's before its children's.
+
+   A shared value is found by looking its key up in a map, and the maps
+   are what decides how much of a value its key forces: an FString and
+   a Position are forced whole by any comparison (their fields are
+   strict), so they are keyed by numbers, while Ids, Types and ITypes
+   are keyed by the structural keys above, compared only by the map's
+   own lookups and inserts.
+-}
+
+newtype Out a = Out (W -> IO a)
+
+{-# INLINE runOut #-}
+runOut :: Out a -> W -> IO a
+runOut (Out f) = f
 
 instance Functor Out where
-  fmap = liftM
+  {-# INLINE fmap #-}
+  fmap f (Out m) = Out $ \w -> fmap f (m w)
 
 instance Applicative Out where
-  pure x = Out [] x
-  (<*>) = ap
+  {-# INLINE pure #-}
+  pure x = Out $ \_ -> return x
+  {-# INLINE (<*>) #-}
+  Out f <*> Out x = Out $ \w -> do { g <- f w; y <- x w; return (g y) }
+  {-# INLINE (*>) #-}
+  Out a *> Out b = Out $ \w -> a w >> b w
+
+instance Monad Out where
+  {-# INLINE (>>=) #-}
+  Out m >>= k = Out $ \w -> m w >>= \x -> runOut (k x) w
+  {-# INLINE (>>) #-}
+  (>>) = (*>)
+
+-- A table being written: its entries in the order they closed, and per
+-- index (in order) the offset and length of its entry there, as two
+-- Ints (-1 until the entry closes)
+data WTable = WTable { wtBytes :: !WBuf
+                     , wtSpans :: !WBuf
+                     , wtNext  :: !(IORef Int)
+                     }
+
+data W = W
+  { wCur      :: !(Ptr (Ptr Word8))  -- the header of the target WBuf
+  , wBody     :: !WBuf
+  , wDepth    :: !(IORef Int)        -- open table entries
+  , wSpare    :: !(IORef [WBuf])     -- entry buffers not in use
+    -- strings: index by FString id; first occurrences, most recent first
+  , wStrIdx   :: !(IORef (IM.IntMap Int))
+  , wStrs     :: !(IORef [FString])
+  , wNStr     :: !(IORef Int)
+  , wIdKeys   :: !(IORef (M.Map IdKey Int))
+  , wPosKeys  :: !(IORef (M.Map PosKey Int))
+  , wTypeKeys :: !(IORef (M.Map TypeKey Int))
+  , wITKeys   :: !(IORef (M.Map ITypeKey Int))
+    -- the interior entries of wITKeys, by node id
+  , wITNodes  :: !(IORef (IM.IntMap Int))
+  , wIds       :: !WTable
+  , wPositions :: !WTable
+  , wTypes     :: !WTable
+  , wITypes    :: !WTable
+  , wChunks   :: !(IORef (IM.IntMap (Int, Int)))  -- closed chunks: offset, length
+  , wNChunks  :: !(IORef Int)
+  }
+
+newWTable :: IO WTable
+newWTable = WTable <$> wbNew 65536 <*> wbNew 4096 <*> newIORef 0
+
+newW :: IO W
+newW = do
+  body <- wbNew 65536
+  let WBuf h = body
+  cur <- mallocBytes 8
+  poke cur h
+  W cur body <$> newIORef 0 <*> newIORef []
+    <*> newIORef IM.empty <*> newIORef [] <*> newIORef 0
+    <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty
+    <*> newIORef IM.empty
+    <*> newWTable <*> newWTable <*> newWTable <*> newWTable
+    <*> newIORef IM.empty <*> newIORef 0
+
+{-# INLINE curBuf #-}
+curBuf :: W -> IO WBuf
+curBuf w = WBuf <$> peek (wCur w)
 
 -- Insert some bytes into the byte stream
 putBs :: [Byte] -> Out ()
-putBs bs = Out [B bs] ()
+putBs bs = Out $ \w -> do { b <- curBuf w; wbBytes b bs }
 
 -- Insert one byte into the byte stream
+{-# INLINE putB #-}
 putB :: Byte -> Out ()
-putB b = putBs [b]
+putB x = Out $ \w -> do { b <- curBuf w; wbByte b x }
 
 -- Insert an Int value (between 0 and 255) into the byte stream
+{-# INLINE putI #-}
 putI :: Int -> Out ()
 putI n = if (n >= 0) && (n < 256)
          then putB $ toEnum n
          else internalError $ "BinData.putI value out of range: " ++ (show n)
 
--- Insert accounting marks into the byte stream
+{-# INLINE putIdx #-}
+putIdx :: W -> Int -> IO ()
+putIdx w n = do { b <- curBuf w; wbIdx b n }
 
-beginSection :: String -> Out ()
-beginSection s = Out [Start s] ()
-
-endSection :: Out ()
-endSection = Out [End] ()
-
+-- Names a part of an encoding; nothing is recorded
 section :: String -> Out () -> Out ()
-section s action = do { beginSection s; action; endSection }
+section _ action = action
+
+-- An occurrence of a shared value: its index, and on its first
+-- occurrence its payload in a new entry of its table
+{-# INLINE shared #-}
+shared :: (Ord k) => (W -> IORef (M.Map k Int)) -> (W -> WTable) -> k -> Out () -> Out ()
+shared keys table k payload = Out $ \w -> do
+  let ref = keys w
+  m <- readIORef ref
+  case M.lookup k m of
+    Just n -> putIdx w n
+    Nothing -> do
+      let t = table w
+      n <- newIndex t
+      writeIORef ref $! M.insert k n m
+      putIdx w n
+      inEntry w t n payload
+
+newIndex :: WTable -> IO Int
+newIndex t = do
+  n <- readIORef (wtNext t)
+  writeIORef (wtNext t) $! n + 1
+  (d, len) <- wbReserve (wtSpans t) 16
+  pokeByteOff d len (-1 :: Int)
+  pokeByteOff d (len + 8) (-1 :: Int)
+  wbSetLen (wtSpans t) (len + 16)
+  return n
+
+-- Write a payload as entry n of a table
+inEntry :: W -> WTable -> Int -> Out () -> IO ()
+inEntry w t n payload = do
+  spare <- readIORef (wSpare w)
+  b@(WBuf h) <- case spare of
+                  (x : xs) -> do { writeIORef (wSpare w) xs; return x }
+                  [] -> wbNew 256
+  prev <- peek (wCur w)
+  poke (wCur w) h
+  depth <- readIORef (wDepth w)
+  writeIORef (wDepth w) $! depth + 1
+  runOut payload w
+  writeIORef (wDepth w) depth
+  poke (wCur w) prev
+  off <- wbLen (wtBytes t)
+  len <- wbLen b
+  src <- wbPtr b
+  wbCopy (wtBytes t) src len
+  spans <- wbPtr (wtSpans t)
+  pokeByteOff spans (16 * n) off
+  pokeByteOff spans (16 * n + 8) len
+  wbSetLen b 0
+  modifyIORef' (wSpare w) (b :)
+
+stringIdx :: W -> FString -> IO Int
+stringIdx w s = do
+  m <- readIORef (wStrIdx w)
+  let !k = fstringId s
+  case IM.lookup k m of
+    Just n -> return n
+    Nothing -> do
+      n <- readIORef (wNStr w)
+      writeIORef (wNStr w) $! n + 1
+      writeIORef (wStrIdx w) $! IM.insert k n m
+      modifyIORef' (wStrs w) (s :)
+      return n
+
+-- The file-name transform (-remap-path-prefix) is applied before
+-- sharing, so the key is the stored (remapped) value: positions that
+-- remap equal share a single entry.  It runs once per (pos_is_stdlib,
+-- pos_file), its only inputs; a later position reuses the FString the
+-- first one interned.
+writePosition :: W -> Position -> IO ()
+writePosition w p =
+  runOut (shared wPosKeys wPositions (pos_key p) (writeBytes p)) w
+
+-- Write a sub-value as a lazy chunk: the reader skips its bytes and
+-- decodes them on first force of the returned value (see fromBinLazy).
+-- A lazy chunk may not occur inside a shared value's payload.
+toBinLazy :: (Bin a) => a -> Out ()
+toBinLazy x = Out $ \w -> do
+  depth <- readIORef (wDepth w)
+  when (depth /= 0) $
+    internalError "BinData.toBinLazy: lazy value inside a shared value"
+  c <- readIORef (wNChunks w)
+  writeIORef (wNChunks w) $! c + 1
+  wbIdx (wBody w) c
+  start <- wbLen (wBody w)
+  runOut (toBin x) w
+  end <- wbLen (wBody w)
+  modifyIORef' (wChunks w) (IM.insert c (start, end - start))
+
+-- A wrapper whose Bin instance is the lazy-chunk encoding of the
+-- wrapped value
+newtype Lazy a = Lazy { unLazy :: a }
+
+instance (Bin a) => Bin (Lazy a) where
+  writeBytes (Lazy x) = toBinLazy x
+  readBytes = Lazy <$> fromBinLazy
 
 -- -------------------------------------------------------------
 -- The In monad makes it easy to parse a byte stream
 
+-- The reader's tables for one container: the whole encoding, the
+-- string table (eagerly interned unless walking), one lazily decoded
+-- (memoized per entry) table per other shared kind, the chunk index,
+-- and whether a lookup forces its entry (see mkLookupIdx).
+data Tables = Tables { tBytes      :: !BS.ByteString
+                     , tStrings    :: !(Array Int FString)
+                     , tIds        :: Array Int Id
+                     , tPositions  :: Array Int Position
+                     , tTypes      :: Array Int Type
+                     , tITypes     :: Array Int IType
+                     , tChunks     :: !(UArray Int Int) -- offset, length pairs
+                     , tChunkCount :: !Int
+                     , tWalk       :: !Bool
+                     }
+
 -- The In monad reads from a fixed environment: the byte string, a small
--- mutable block holding the read offset and the running hash, and the
--- tables for shared structures. Whether to hash or not is decided once
--- per call to runIn. Keeping the per-byte state mutable means reading a
--- byte allocates nothing.
+-- mutable block holding the read offset and its limit, and the tables.
+-- Keeping the per-byte state mutable means reading a byte allocates
+-- nothing.  Every decode (the root, a table entry, a lazy chunk) runs
+-- with its own state block over the shared tables (see runAt).  In a
+-- strict run (decodeStrict) a lazy chunk is decoded in place instead of
+-- being deferred.
 
-data Env = Env { envBytes  :: !BS.ByteString
-               , envState  :: !(Ptr Word8) -- see stateOffset .. stateSize
-               , envTable  :: !(IORef BinTable)
-               , envHashed :: !Bool
-               }
+data Env s = Env { envBytes  :: !BS.ByteString
+                 , envState  :: !(STUArray s Int Int) -- see stateOffset .. stateSize
+                 , envTables :: !Tables
+                 , envStrict :: !Bool
+                 }
 
--- Layout of the mutable state block: the read offset (Int), then the
--- two Word32 halves of the running hash.
-stateOffset, stateHashX, stateHashY, stateSize :: Int
+-- Slots of the mutable state block: the read offset, the offset this run
+-- may not read past, and the number of chunks decoded in place (strict
+-- runs only).
+stateOffset, stateLimit, stateChunks, stateSize :: Int
 stateOffset = 0
-stateHashX  = 8
-stateHashY  = 12
-stateSize   = 16
+stateLimit  = 1
+stateChunks = 2
+stateSize   = 3
 
-{-# INLINE peekHash #-}
-peekHash :: Ptr Word8 -> IO Hash
-peekHash st = do x <- peekByteOff st stateHashX
-                 y <- peekByteOff st stateHashY
-                 return (Hash x y)
-
-{-# INLINE pokeHash #-}
-pokeHash :: Ptr Word8 -> Hash -> IO ()
-pokeHash st (Hash x y) = do pokeByteOff st stateHashX x
-                            pokeByteOff st stateHashY y
-
-newtype In a = In (Env -> IO a)
+-- Each run is a local strict ST computation (see runAt); a deferred
+-- decode is a pure thunk over the immutable tables.
+newtype In a = In (forall s. Env s -> ST s a)
 
 instance Monad In where
   return = pure
@@ -394,10 +649,17 @@ instance Applicative In where
   pure x = In $ \_ -> return x
   (<*>) = ap
 
+runInEnv :: In a -> Env s -> ST s a
+runInEnv (In f) env = f env
+
+-- Control.Exception.evaluate for ST: force x when the action runs.
+evaluateST :: a -> ST s a
+evaluateST x = ST (\s -> seq# x s)
+
 getN :: Int -> In [Byte]
 getN n = readN n getB
 
--- Read n values in order. In runs in IO, where replicateM and a recursive
+-- Read n values in order. In runs in strict ST, where replicateM and a recursive
 -- (x:) <$> ... hold one stack frame per element until the list ends; a long
 -- list overflows the stack. Accumulating and reversing runs in constant stack.
 {-# INLINE readN #-}
@@ -408,30 +670,21 @@ readN n0 r = go n0 []
 
 -- Advance the read offset past n bytes and return where they start.
 {-# INLINE advance #-}
-advance :: String -> Env -> Int -> IO Int
+advance :: String -> Env s -> Int -> ST s Int
 advance who env n = do
   let st = envState env
-  off <- peekByteOff st stateOffset :: IO Int
-  if n < 0 || off + n > BS.length (envBytes env)
+  off <- unsafeRead st stateOffset
+  lim <- unsafeRead st stateLimit
+  if n < 0 || off + n > lim
     then internalError ("BinData." ++ who ++ ": unexpected end of byte stream")
-    else do pokeByteOff st stateOffset (off + n)
+    else do unsafeWrite st stateOffset (off + n)
             return off
-
--- Fold the bytes just read into the running hash, if this read is hashed.
-{-# INLINE hashWith #-}
-hashWith :: Env -> (Hash -> Hash) -> IO ()
-hashWith env f = when (envHashed env) $ do
-  let st = envState env
-  h <- peekHash st
-  let !h' = f h
-  pokeHash st h'
 
 {-# INLINE getB #-}
 getB :: In Byte
 getB = In $ \env -> do
   off <- advance "getB" env 1
   let !b = BSU.unsafeIndex (envBytes env) off
-  hashWith env (\h -> nextHashByte h b)
   return b
 
 -- Read n bytes as a slice of the input, without building a list.
@@ -439,7 +692,6 @@ getBS :: Int -> In BS.ByteString
 getBS n = In $ \env -> do
   off <- advance "getBS" env n
   let !s = BSU.unsafeTake n (BSU.unsafeDrop off (envBytes env))
-  hashWith env (\h -> BS.foldl' nextHashByte h s)
   return s
 
 -- get an Int value (between 0 and 255)
@@ -447,137 +699,113 @@ getI :: In Int
 getI = do { b <- getB; return (fromEnum b) }
 
 -- ------------------------------------------------------------------
--- The Shared typeclass simplifies the process of creating shared
--- structures in the output byte stream.
+-- Reading shared values: each kind is read from its table.
 
-class Shared k v | v -> k where
-  -- query if a key is already known (value is used only for its type)
-  knownAs   :: k -> v -> BinCache -> Maybe Int
-  -- add a (key,value) association
-  addKey    :: k -> v -> BinCache -> BinCache
-  -- reserve an index for a new value (value is used only for its type)
-  newVal    :: In (Int,v)
-  -- record a value for its index once it is fully constructed
-  recordVal :: Int -> v -> In ()
+class Shared v where
   -- get the value associated with a given index
   lookupIdx :: Int -> In v
 
--- Templates for instances. These take get/set functions for the
--- particular cache and table fields in a BinCache/BinTable and
--- generate a function appropriate for defining an instance of
--- Shared for the correct key and value type.
+-- Index a boxed array without forcing the element: a table entry stays
+-- the memoized thunk it is until a consumer needs the value.
+{-# INLINE lazyIndex #-}
+lazyIndex :: String -> Array Int v -> Int -> ST s v
+lazyIndex who arr idx =
+  case arr of
+    Array lo hi _ arr# ->
+      if idx < lo || idx > hi
+      then internalError $ "BinData.lookupIdx: invalid " ++ who ++
+                           " index " ++ show idx
+      else case indexArray# arr# (case idx - lo of I# i# -> i#) of
+             (# v #) -> return v
 
--- get the right cache, lookup the key and return the result
-mkKnownAs :: (Ord k) =>
-             (BinCache -> (Cache k)) ->
-             (k -> v -> BinCache -> Maybe Int)
-mkKnownAs get k _ bc = let (Known _ m) = get bc
-                       in M.lookup k m
+-- In a strict decode every lookup forces its entry, so each string and
+-- entry is forced at its first occurrence, as the sequential decoder
+-- did: readers intern strings beyond the string table (mkITAp forces
+-- idTExp and friends), and intern order must not depend on the layout.
+mkLookupIdx :: String -> (Tables -> Array Int v) -> Int -> In v
+mkLookupIdx who get idx = In $ \env ->
+  let tbl = envTables env
+  in if tWalk tbl then lazyIndex who (get tbl) idx >>= evaluateST
+     else lazyIndex who (get tbl) idx
 
--- get the right cache, add an mapping from key to the next index, and
--- put back the updated cache
-mkAddKey :: (Ord k) =>
-            (BinCache -> (Cache k)) ->
-            (BinCache -> (Cache k) -> BinCache) ->
-            (k -> v -> BinCache -> BinCache)
-mkAddKey get set k v bc = let (Known n m) = get bc
-                          in set bc (Known (n+1) (M.insert k n m))
-
--- get the right table, increment its index count and
--- put back the updated table while returning the fresh index
-mkNewVal :: (BinTable -> (Table v)) ->
-            (BinTable -> (Table v) -> BinTable) ->
-            In (Int,v)
-mkNewVal get set =
-  In $ \env -> do
-          bt <- readIORef (envTable env)
-          let (Known n m) = get bt
-          writeIORef (envTable env) $! set bt (Known (n+1) m)
-          return (n, undefined)
-
--- get the right table, add a mapping from the index to the value,
--- and put back the updated table while returning ()
-mkRecordVal ::(BinTable -> (Table v)) ->
-              (BinTable -> (Table v) -> BinTable) ->
-              (Int -> v -> In ())
-mkRecordVal get set idx v =
-  In $ \env -> do
-          bt <- readIORef (envTable env)
-          let (Known n m) = get bt
-          writeIORef (envTable env) $! (v `seq` set bt (Known n (M.insert idx v m)))
-
-
--- get the right table and look up the value for the given index
-mkLookupIdx ::(BinTable -> (Table v)) ->
-              (Int -> In v)
-mkLookupIdx get idx =
-  In $ \env -> do
-          bt <- readIORef (envTable env)
-          let (Known _ m) = get bt
-          case (M.lookup idx m) of
-            (Just v) -> return v
-            Nothing  -> internalError $ "BinData.lookupIdx: invalid index " ++ (show idx)
-
-
--- This is a convenience function that groups the sequence of operations
--- required to read a shared value.  It also hides the type trickery so
--- that no one will notice.  What is happening is that we need a way to
--- force the typechecker to infer the correct Shared instance for newVal,
--- which we do by having newVal return (in addition to the fresh index
--- we actually want) a dummy value of the type which uniquely determines
--- the Shared instance.  Then we use asTypeOf to force the typechecker
--- to unify the dummy value's type with the type of the return value.
---
--- Also note: the index is created before reading the value so that
--- indexes are assigned in the same top-down order as they are assigned
--- during writing.  This particularly affects recursive types.
-readShared :: (Bin a, Shared k a) => In a
-readShared = do tag <- getI
-                case tag of
-                  0 -> do (idx, dummy) <- newVal
-                          v <- readBytes
-                          recordVal idx (v `asTypeOf` dummy)
-                          return v
-                  1 -> do idx <- readBytes
-                          lookupIdx idx
-                  n -> internalError $ "BinData.readShared: invalid tag " ++ (show tag)
+-- A shared value occurs in the stream as its index into the table for
+-- its kind.  The table entry (or string) is already there; nothing is
+-- assigned or recorded while reading.
+readShared :: (Shared a) => In a
+readShared = do idx <- readBytes
+                lookupIdx idx
 
 -- actual Shared instance definitions
 
-instance Shared FString FString where
-  knownAs   = mkKnownAs string_cache
-  addKey    = mkAddKey string_cache set_string_cache
-  newVal    = mkNewVal string_table set_string_table
-  recordVal = mkRecordVal string_table set_string_table
-  lookupIdx = mkLookupIdx string_table
+instance Shared FString where
+  lookupIdx = mkLookupIdx "FString" tStrings
 
-instance Shared IdKey Id where
-  knownAs   = mkKnownAs id_cache
-  addKey    = mkAddKey id_cache set_id_cache
-  newVal    = mkNewVal id_table set_id_table
-  recordVal = mkRecordVal id_table set_id_table
-  lookupIdx = mkLookupIdx id_table
+instance Shared Id where
+  lookupIdx = mkLookupIdx "Id" tIds
 
-instance Shared Position Position where
-  knownAs   = mkKnownAs position_cache
-  addKey    = mkAddKey position_cache set_position_cache
-  newVal    = mkNewVal position_table set_position_table
-  recordVal = mkRecordVal position_table set_position_table
-  lookupIdx = mkLookupIdx position_table
+instance Shared Position where
+  lookupIdx = mkLookupIdx "Position" tPositions
 
-instance Shared TypeKey Type where
-  knownAs   = mkKnownAs type_cache
-  addKey    = mkAddKey type_cache set_type_cache
-  newVal    = mkNewVal type_table set_type_table
-  recordVal = mkRecordVal type_table set_type_table
-  lookupIdx = mkLookupIdx type_table
+instance Shared Type where
+  lookupIdx = mkLookupIdx "Type" tTypes
 
-instance Shared ITypeKey IType where
-  knownAs   = mkKnownAs itype_cache
-  addKey    = mkAddKey itype_cache set_itype_cache
-  newVal    = mkNewVal itype_table set_itype_table
-  recordVal = mkRecordVal itype_table set_itype_table
-  lookupIdx = mkLookupIdx itype_table
+instance Shared IType where
+  lookupIdx = mkLookupIdx "IType" tITypes
+
+-- ------------------------------------------------------------------
+-- Lazy chunks
+
+-- Read a sub-value written by toBinLazy.  The stream holds the chunk
+-- number; the chunk index gives the extent of its bytes, which start
+-- right here.  Normally the bytes are skipped and the value is a thunk
+-- that decodes them on first force (with its own state block over the
+-- shared tables, and an end-of-chunk check); in a strict run they are
+-- decoded now, in place.
+fromBinLazy :: (Bin a) => In a
+fromBinLazy = In $ \env -> do
+  c <- runInEnv readBytes env
+  let tbl = envTables env
+      st  = envState env
+  when (c < 0 || c >= tChunkCount tbl) $
+    internalError $ "BinData.fromBinLazy: invalid chunk number " ++ show c
+  let off = tChunks tbl ! (2*c)
+      len = tChunks tbl ! (2*c+1)
+  cur <- unsafeRead st stateOffset
+  when (cur /= off) $
+    internalError $ "BinData.fromBinLazy: chunk " ++ show c ++
+                    " expected at " ++ show off ++ ", found at " ++ show cur
+  if envStrict env
+    then do x <- runInEnv fromBin env
+            end <- unsafeRead st stateOffset
+            when (end /= off + len) $
+              internalError $ "BinData.fromBinLazy: chunk " ++ show c ++
+                              " decoded " ++ show (end - off) ++ " of " ++
+                              show len ++ " bytes"
+            n <- unsafeRead st stateChunks
+            unsafeWrite st stateChunks (n + 1)
+            return x
+    else do _ <- advance "fromBinLazy" env len
+            return (runST (runAt tbl False off (off + len) ("chunk " ++ show c) fromBin))
+
+-- Run a reader over [start, end) of the container with a fresh state
+-- block, requiring it to consume exactly those bytes.
+runAt :: Tables -> Bool -> Int -> Int -> String -> In a -> ST s a
+runAt tbl strict start end what (In f) = do
+  st <- newArray (0, stateSize - 1) 0
+  unsafeWrite st stateOffset start
+  unsafeWrite st stateLimit end
+  x <- f (Env (tBytes tbl) st tbl strict)
+  off <- unsafeRead st stateOffset
+  when (off /= end) $
+    internalError $ "BinData.decode: " ++ what ++ " decoded " ++
+                    show (off - start) ++ " of " ++ show (end - start) ++
+                    " bytes"
+  when strict $ do
+    seen <- unsafeRead st stateChunks
+    when (seen /= tChunkCount tbl) $
+      internalError $ "BinData.decodeStrict: " ++ show seen ++ " of " ++
+                      show (tChunkCount tbl) ++ " chunks reached"
+  return x
 
 -- ------------------------------------------------------------------
 -- The Bin typeclass defines automatic conversions to/from a
@@ -617,7 +845,7 @@ instance Bin Double where
   readBytes = do m <- fromBin; n <- fromBin; return (encodeFloat m n)
 
 instance Bin Int where
-  writeBytes i = toBin (toInteger i)
+  writeBytes i = Out $ \w -> do { b <- curBuf w; wbInt b i }
   -- The Integer encoding, read in Int arithmetic.  Int arithmetic wraps
   -- modulo the word size, as fromInteger of the exact value would.
   readBytes = loop 0
@@ -630,11 +858,7 @@ instance Bin Int where
                               else loop (n * 254 + fromIntegral b)
 
 instance Bin Integer where
-  writeBytes i = if i < 0
-                 then putBs (emit (-i) [endNeg])
-                 else putBs (emit   i  [endPos])
-    where emit 0 bs = bs
-          emit n bs = emit (n `div` baseI) (fromInteger (n `mod` baseI) : bs)
+  writeBytes i = Out $ \w -> do { b <- curBuf w; wbInteger b i }
   -- Accumulate in Int while the value cannot overflow, so that the
   -- small values that make up most of a file allocate no Integer per byte.
   readBytes = small 0
@@ -757,13 +981,11 @@ instance Bin FString where
   writeBytes = writeBytes . getFString
   readBytes = mkFString <$> readBytes
   -- FStrings are shared
-  toBin s = Out [S s] ()
+  toBin s = Out $ \w -> stringIdx w s >>= putIdx w
   fromBin = readShared
 
 instance {-# OVERLAPPABLE #-} Bin String where
-    writeBytes fs = do let bs = TE.encodeUtf8 $ T.pack fs
-                       toBin $ toInteger $ B.length bs
-                       putBs $ B.unpack bs
+    writeBytes fs = Out $ \w -> do { b <- curBuf w; wbString b fs }
     readBytes     = do len <- fromBin
                        bs <- getBS len
                        let !t = TSE.decodeUtf8 bs
@@ -783,7 +1005,7 @@ instance Bin Position where
         return (mkPositionFull fs l c is_stdlib)
 
     -- Positions are shared
-    toBin p = Out [P p] ()
+    toBin p = Out $ \w -> writePosition w p
     fromBin = readShared
 
 instance Bin Id where
@@ -800,7 +1022,7 @@ instance Bin Id where
                    return (setIdProps (mkQId pos mfs fs) props)
 
     -- Ids are shared
-    toBin i = Out [I i] ()
+    toBin i = shared wIdKeys wIds (id_key i) (writeBytes i)
     fromBin = readShared
 
 instance Bin IdProp where
@@ -1415,7 +1637,7 @@ binBumpRet x
   | binStatsEnabled = unsafeDupablePerformIO (modifyIORef' cnBinTypeRead (+1) >> return x)
   | otherwise = x
 
--- | Counter snapshot for the -trace-ctype-stats dump.
+-- Counter snapshot for the -trace-ctype-stats dump.
 binTypeStats :: IO [(String, Int)]
 binTypeStats = do
     n <- readIORef cnBinTypeRead
@@ -1437,7 +1659,7 @@ instance Bin Type where
              n -> internalError $ "BinData.Bin(Type).readBytes: " ++ show n
 
     -- Type is shared
-    toBin t = Out [T t] ()
+    toBin t = shared wTypeKeys wTypes (type_key t) (writeBytes t)
     fromBin = readShared
 
 instance Bin TyVar where
@@ -1544,7 +1766,26 @@ instance Bin IType where
                      n -> internalError $ "BinData.Bin(IType).readBytes: " ++ show n
 
     -- IType is shared
-    toBin t = Out [IT t] ()
+    toBin t = Out $ \w ->
+              case t of
+                ITForAll _ _ _ -> interior w
+                ITAp _ _ -> interior w
+                _ -> runOut (shared wITKeys wITypes (itype_key t) (writeBytes t)) w
+      -- An interior node's key is its node id, compared only with other
+      -- node ids, so it is found by number; it still goes into wITKeys,
+      -- whose shape decides how much of a leaf's key a lookup forces.
+      where interior w = do
+              let !nid = iTypeNodeId t
+              m <- readIORef (wITNodes w)
+              case IM.lookup nid m of
+                Just n -> putIdx w n
+                Nothing -> do
+                  let tbl = wITypes w
+                  n <- newIndex tbl
+                  writeIORef (wITNodes w) $! IM.insert nid n m
+                  modifyIORef' (wITKeys w) (M.insert (ITKI nid) n)
+                  putIdx w n
+                  inEntry w tbl n (writeBytes t)
     fromBin = readShared
 
 instance Bin IKind where
@@ -1575,128 +1816,268 @@ instance Bin UndefKind where
                      2 -> return UNoMatch
                      n -> internalError $ "BinData.Bin(UndefKind).readBytes: " ++ show n
 
--- ------------------------------------------------------------------
--- This is a debugging facility to help in determining what structures
--- contribute the most bytes to the output byte stream.
-
--- XXX This should be a trace flag, but tracing can overflow the stack
--- when the data is too large, so I am leaving it as a compile-time
--- setting for now.
-trace_bindata :: Bool
-trace_bindata = False
-
-type Histogram = M.Map String (Integer, Integer, Integer)
-
-incr :: (Integer, Integer, Integer ) -> (Integer, Integer, Integer)
-     -> (Integer, Integer, Integer)
-incr (x1,y1,z1) (x2,y2,z2) = (x1+x2, y1+y2, z1+z2)
-
-updateBytes :: [String] -> Integer -> Histogram -> Histogram
-updateBytes [] _ h = h
--- updateBytes (s:ss) n h = let upds = (s, (n,0,n)):[(p, (0,0,n)) | p <- ss]
---                          in map_insertManyWith incr upds h
-updateBytes (s:_) n h = M.insertWith incr s (n,0,n) h
-
-incrSection :: String -> Histogram -> Histogram
-incrSection s h = M.insertWith incr s (0,1,0) h
-
-showHist :: Histogram -> String
-showHist hist = let buckets = sort [ (n1,n2,n3,s)
-                                   | (s,(n1,n2,n3)) <- (M.toList hist) ]
-                    ls = [ (show n1) ++ " (" ++ (show n3) ++ ") count = " ++
-                           (show n2) ++ " : " ++ s
-                         | (n1,n2,n3,s) <- buckets ]
-                    total = [ "----------------------------"
-                            , (show (sum [ n | (n,_,_,_) <- buckets]))
-                            ]
-                in unlines (ls ++ total)
-
-buildHistogram :: [BinElem] -> Histogram
-buildHistogram bes = snd (foldl build (["<UNCLAIMED>"], M.empty) bes)
-  where build ([], _) _ = internalError "unbalanced accounting marks"
-        build (sec, hist) (B b) =
-          (sec, updateBytes sec (toInteger (length b)) hist)
-        build (sec, hist) (Start s) = ((s:sec), incrSection s hist)
-        build ((_:sec), hist) End   = (sec, hist)
-        build _ x = internalError $ "unexpected BinElem: " ++ (show x)
 
 -- ------------------------------------------------------------------
+-- Fixed-width integers and the footer
 
--- Convert BinData containing shared elements to BinData containing
--- only B elements, where the shared elements are put in the binary
--- stream the first time they occur and referenced by index thereafter.
+u64Bytes :: Int -> [Byte]
+u64Bytes n
+  | n < 0 = internalError $ "BinData: u64 out of range: " ++ show n
+  | otherwise = [ fromIntegral (n `shiftR` sh) | sh <- [0, 8, 16, 24, 32, 40, 48, 56] ]
 
--- This converts a BinElem for a shared value into BinData
--- matching (Left value) the first time it is encountered
--- and (Right idx) each time afterward, updating the cache
--- to track known values.
-share :: BinElem -> BinCache -> ([BinElem], BinCache)
-share (S s)   bc = share' s s bc
-share (I i)   bc = share' (id_key i) i bc
-share (P p)   bc = share' p p bc
-share (T t)   bc = share' (type_key t) t bc
-share (IT t)  bc = share' (itype_key t) t bc
--- share (ASL l) bc = share' l l bc
-share be      bc = ([be], bc)
+readUnsigned :: Int -> BS.ByteString -> Int -> Int
+readUnsigned width s o
+  | o < 0 || o + width > BS.length s =
+      internalError "BinData.decode: index outside the container"
+  | otherwise = foldr (\k acc -> (acc `shiftL` 8) .|.
+                                 fromIntegral (BSU.unsafeIndex s (o + k)))
+                      0 (enumFromTo 0 (width - 1))
 
-share' :: (Bin v, Shared k v) => k -> v -> BinCache -> ([BinElem], BinCache)
-share' k x bc =
-          case (knownAs k x bc) of
-            (Just idx) -> (out_data $ do { putI 1; writeBytes idx }, bc)
-            Nothing    -> (out_data $ do { putI 0; writeBytes x },
-                           addKey k x bc)
+readU32 :: BS.ByteString -> Int -> Int
+readU32 = readUnsigned 4
+
+readU64 :: BS.ByteString -> Int -> Int
+readU64 = readUnsigned 8
+
+-- Where the regions are.  Every field is derivable from the regions'
+-- sizes, which lets the reader cross-check the whole layout at load.
+data Footer = Footer { fBodiesEnd  :: !Int
+                     , fTables     :: ![(Int, Int, Int)] -- per Kind: entries start, index start, count
+                     , fStrStart   :: !Int
+                     , fStrCount   :: !Int
+                     , fChunkStart :: !Int
+                     , fChunkCount :: !Int
+                     }
+
+footerMagic :: [Byte]
+footerMagic = map (fromIntegral . fromEnum) "BSCBIN01"
+
+footerFields :: Int
+footerFields = 1 + 3 * length allKinds + 4
+
+footerSize :: Int
+footerSize = 8 * footerFields + length footerMagic
+
+footerBytes :: Footer -> [Byte]
+footerBytes ft =
+    concatMap u64Bytes ([fBodiesEnd ft] ++
+                        concat [ [a, b, c] | (a, b, c) <- fTables ft ] ++
+                        [fStrStart ft, fStrCount ft, fChunkStart ft, fChunkCount ft])
+    ++ footerMagic
+
+parseFooter :: BS.ByteString -> Footer
+parseFooter s =
+    let len  = BS.length s
+        base = len - footerSize
+        field i = readU64 s (base + 8 * i)
+        nk = length allKinds
+        ft = Footer { fBodiesEnd  = field 0
+                    , fTables     = [ (field (1 + 3*k), field (2 + 3*k), field (3 + 3*k))
+                                    | k <- [0 .. nk - 1] ]
+                    , fStrStart   = field (1 + 3*nk)
+                    , fStrCount   = field (2 + 3*nk)
+                    , fChunkStart = field (3 + 3*nk)
+                    , fChunkCount = field (4 + 3*nk)
+                    }
+        bad what = internalError $ "BinData.decode: malformed container (" ++ what ++ ")"
+        -- the regions are contiguous: each starts where the previous ends
+        checkTables start [] = start
+        checkTables start ((es, xs, n) : rest)
+          | es /= start || xs < es || n < 0 = bad "table"
+          | otherwise = checkTables (xs + 4 * (n + 1)) rest
+    in if len < footerSize || BS.unpack (BS.drop (len - length footerMagic) s) /= footerMagic
+       then bad "footer"
+       else if fBodiesEnd ft < 0
+            then bad "bodies"
+            else let tend = checkTables (fBodiesEnd ft) (fTables ft)
+                 in if fStrStart ft /= tend || fStrCount ft < 0
+                    then bad "string table"
+                    else if fChunkStart ft < fStrStart ft || fChunkCount ft < 0
+                            || fChunkStart ft + 4 + 8 * fChunkCount ft /= base
+                         then bad "chunk index"
+                         else ft
+
+-- ------------------------------------------------------------------
+-- Finishing the container
+
+-- A table's region: its entries in index order, then count+1 u32
+-- offsets.  An entry closes after the entries nested in it, so entries
+-- are put into index order here.
+finishTable :: TableKind -> WTable -> IO (BS.ByteString, BS.ByteString, Int)
+finishTable k t = do
+  n <- readIORef (wtNext t)
+  total <- wbLen (wtBytes t)
+  src <- wbPtr (wtBytes t)
+  spans <- wbPtr (wtSpans t)
+  out <- wbNew total
+  offs <- wbNew (4 * (n + 1))
+  let go i pos
+        | i >= n = return pos
+        | otherwise = do
+            off <- peekByteOff spans (16 * i) :: IO Int
+            len <- peekByteOff spans (16 * i + 8) :: IO Int
+            when (off < 0 || len < 0 || off + len > total) $
+              internalError $ "BinData.finishTable: " ++ show k ++ " entry " ++ show i
+            wbU32 offs pos
+            wbCopy out (src `plusPtr` off) len
+            go (i + 1) (pos + len)
+  end <- go 0 0
+  when (end /= total) $ internalError $ "BinData.finishTable: " ++ show k ++ " table"
+  wbU32 offs end
+  wbFree (wtBytes t)
+  wbFree (wtSpans t)
+  es <- wbFreeze out
+  os <- wbFreeze offs
+  return (es, os, n)
+
+-- The bodies region is complete: add the tables, the string table, the
+-- chunk index and the footer.
+finishW :: W -> IO B.ByteString
+finishW w = do
+  depth <- readIORef (wDepth w)
+  when (depth /= 0) $ internalError "BinData.finishW: unclosed table entry"
+  bodiesEnd <- wbLen (wBody w)
+  bodies <- wbFreeze (wBody w)
+  readIORef (wSpare w) >>= mapM_ wbFree
+  free (wCur w)
+  -- in allKinds order
+  tables <- sequence [ finishTable KId (wIds w), finishTable KPosition (wPositions w)
+                     , finishTable KType (wTypes w), finishTable KIType (wITypes w) ]
+  strs <- reverse <$> readIORef (wStrs w)
+  nStr <- readIORef (wNStr w)
+  when (length strs /= nStr) $ internalError "BinData.finishW: string table"
+  sb <- wbNew 65536
+  wbU32 sb nStr
+  mapM_ (wbString sb . getFString) strs
+  strBytes <- wbFreeze sb
+  chunks <- readIORef (wChunks w)
+  nChunks <- readIORef (wNChunks w)
+  when (IM.size chunks /= nChunks) $ internalError "BinData.finishW: chunks"
+  cb <- wbNew (4 + 8 * nChunks)
+  wbU32 cb nChunks
+  mapM_ (\(off, len) -> wbU32 cb off >> wbU32 cb len) (IM.elems chunks)
+  chunkBytes <- wbFreeze cb
+  let place start (es, os, n) =
+        let xs = start + BS.length es
+        in (xs + BS.length os, (start, xs, n))
+      (strStart, tableFields) = mapAccumL place bodiesEnd tables
+      ft = Footer { fBodiesEnd = bodiesEnd, fTables = tableFields
+                  , fStrStart = strStart, fStrCount = nStr
+                  , fChunkStart = strStart + BS.length strBytes
+                  , fChunkCount = nChunks }
+  return $ B.fromChunks ([bodies] ++ concat [ [es, os] | (es, os, _) <- tables ] ++
+                         [strBytes, chunkBytes, BS.pack (footerBytes ft)])
+
+-- Encode a value into a container.
+encodeIO :: (Bin a) => a -> IO B.ByteString
+encodeIO x = do
+  w <- newW
+  runOut (toBin x) w
+  finishW w
+
+-- ------------------------------------------------------------------
+-- Reading the container
+
+getU32 :: In Int
+getU32 = do b0 <- getI; b1 <- getI; b2 <- getI; b3 <- getI
+            return (b0 .|. (b1 `shiftL` 8) .|. (b2 `shiftL` 16) .|. (b3 `shiftL` 24))
 
 
-compress :: [BinElem] -> [BinElem]
-compress bes = compress' (bes, unknownCache)
-  where compress' ((x@(B _):xs), cache) = x:(compress' (xs, cache))
-        compress' ((x@(Start _):xs), cache) = x:(compress' (xs, cache))
-        compress' ((x@(End):xs), cache) = x:(compress' (xs, cache))
-        compress' ((x:xs), cache) =
-          let (bes, cache') = share x cache
-          in -- trace ((show x) ++ " -> " ++ (show bes)) $
-             compress' (bes ++ xs, cache')
-        compress' ([], _) = []
+-- Validate the indices, intern the string table in order, and build
+-- the lazy tables.  A table entry is a pure thunk that decodes its
+-- bytes on first force (a local ST run over the immutable input); a
+-- parent entry may reference entries with higher indices.  When walking (a strict
+-- decode), strings are left for mkLookupIdx to intern.
+mkTables :: Bool -> BS.ByteString -> Footer -> ST s Tables
+mkTables walk s ft = do
+  let bodiesEnd = fBodiesEnd ft
+      bad what = internalError $ "BinData.decode: malformed container (" ++ what ++ ")"
+      -- entry offsets must be non-decreasing and end at the index
+      checkTable k (es, xs, n) =
+        let go i prev
+              | i > n     = when (prev /= xs - es) $ bad (show k ++ " table extent")
+              | otherwise = let o = readU32 s (xs + 4 * i)
+                            in if o < prev then bad (show k ++ " table offsets")
+                               else go (i + 1) o
+        in go (0 :: Int) 0
+  mapM_ (\(k, t) -> checkTable k t) (zip allKinds (fTables ft))
+  let emptyBoxed :: Array Int v
+      emptyBoxed = listArray (0, -1) []
+      emptyChunks :: UArray Int Int
+      emptyChunks = listArray (0, -1) []
+      tbl0 = Tables { tBytes = s, tStrings = emptyBoxed
+                    , tIds = emptyBoxed, tPositions = emptyBoxed
+                    , tTypes = emptyBoxed, tITypes = emptyBoxed
+                    , tChunks = emptyChunks, tChunkCount = 0
+                    , tWalk = False }
+  -- the string table, interned now (unless walking) and in table
+  -- order: FString ids are the Ord of every Id-keyed map, so this must
+  -- happen before and in the same order as a sequential decode would
+  -- have interned them
+  strs <- runAt tbl0 False (fStrStart ft) (fChunkStart ft) "string table" $ do
+            n <- getU32
+            when (n /= fStrCount ft) $ bad "string count"
+            let loop i acc
+                  | i >= n    = return (reverse acc)
+                  | otherwise = do str <- readBytes
+                                   fs <- if walk then return (mkFString str)
+                                         else In (\_ -> evaluateST (mkFString str))
+                                   loop (i + 1) (fs : acc)
+            loop (0 :: Int) []
+  let strArr = listArray (0, fStrCount ft - 1) strs :: Array Int FString
+  -- the chunk index: every chunk lies within the bodies region
+  chunks <- runAt tbl0 False (fChunkStart ft) (BS.length s - footerSize) "chunk index" $ do
+              n <- getU32
+              when (n /= fChunkCount ft) $ bad "chunk count"
+              let loop i acc
+                    | i >= n    = return (reverse acc)
+                    | otherwise = do off <- getU32
+                                     len <- getU32
+                                     when (off + len > bodiesEnd) $ bad ("chunk " ++ show i)
+                                     loop (i + 1) (len : off : acc)
+              loop (0 :: Int) []
+  let nChunks = fChunkCount ft
+      chunkArr = listArray (0, 2 * nChunks - 1) chunks :: UArray Int Int
+      entryBounds (es, xs, _) i = (es + readU32 s (xs + 4 * i), es + readU32 s (xs + 4 * (i + 1)))
+      lazyTable :: (Bin v) => TableKind -> Array Int v
+      lazyTable k =
+        let t@(_, _, n) = fTables ft !! fromEnum k
+            entry i = let (a, b) = entryBounds t i
+                      in runST (runAt tables False a b (show k ++ " entry " ++ show i) readBytes)
+        in listArray (0, n - 1) [ entry i | i <- [0 .. n - 1] ]
+      tables = Tables { tBytes = s, tStrings = strArr
+                      , tIds = lazyTable KId, tPositions = lazyTable KPosition
+                      , tTypes = lazyTable KType, tITypes = lazyTable KIType
+                      , tChunks = chunkArr, tChunkCount = nChunks
+                      , tWalk = walk }
+  return tables
 
--- Run the Out monad and extract a byte stream.  The resulting
--- byte stream is generated lazily through the monad and preserves
--- sharing.
+decodeContainer :: (Bin a) => Bool -> BS.ByteString -> a
+decodeContainer strict s = runST $ do
+  let ft = parseFooter s
+  tbl <- mkTables strict s ft
+  x <- runAt tbl strict 0 (fBodiesEnd ft) "root" fromBin
+  when strict $ do
+    let force :: forall v s . Array Int v -> ST s ()
+        force arr = mapM_ evaluateST (elems arr)
+    force (tIds tbl)
+    force (tPositions tbl)
+    force (tTypes tbl)
+    force (tITypes tbl)
+  return x
 
-runOut :: Out () -> [Byte]
-runOut (Out xs _) = let bes   = compress $ toList xs
-                        bytes = concat [ bs | B bs <- bes ]
-                    in -- trace ("xs = " ++ (show xs)) $
-                       -- trace ("bytes = " ++ (show bytes)) $
-                       if trace_bindata
-                       then trace (showHist (buildHistogram bes)) $ bytes
-                       else bytes
-
--- Convenience function for encoding structures in the Bin typeclass
-encode :: (Bin a) => a -> [Byte]
-encode x = runOut (toBin x)
-
-runIn :: In a -> BS.ByteString -> Bool -> (a, Int, String)
-runIn (In f) bs do_hash = unsafePerformIO $ do
-  fp <- mallocForeignPtrBytes stateSize
-  withForeignPtr fp $ \st -> do
-    pokeByteOff st stateOffset (0 :: Int)
-    pokeHash st hashInit
-    tbl <- newIORef unknownTable
-    x <- f (Env bs st tbl do_hash)
-    off <- peekByteOff st stateOffset
-    h <- if do_hash
-         then showHash <$> peekHash st
-         else return ""
-    return (x, off, h)
-
+-- Decode a container.  The root is read now; shared table entries and
+-- lazy chunks are decoded on demand.
 decode :: (Bin a) => BS.ByteString -> a
-decode s = let (x, off, _) = runIn fromBin s False
-           in if off == BS.length s
-              then x
-              else internalError "BinData.decode: unused trailing bytes"
+decode = decodeContainer False
 
+-- Decode a container completely: every lazy chunk is decoded in place
+-- and every table entry is forced, so any malformed byte is reported
+-- here rather than on first use.
+decodeStrict :: (Bin a) => BS.ByteString -> a
+decodeStrict = decodeContainer True
+
+-- The hash authenticates the whole encoding: a fold over every byte,
+-- independent of what the consumer later forces.
 decodeWithHash :: (Bin a) => BS.ByteString -> (a,String)
-decodeWithHash s = let (x, off, hstr) = runIn fromBin s True
-                   in if off == BS.length s
-                      then (x, hstr)
-                      else internalError "BinData.decodeWithHash: unused trailing bytes"
+decodeWithHash s = (decode s, showHash (BS.foldl' nextHashByte hashInit s))
