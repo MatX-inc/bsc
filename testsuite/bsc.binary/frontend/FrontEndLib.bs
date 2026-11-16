@@ -1,0 +1,4 @@
+package FrontEndLib where
+
+three :: Integer
+three = 3

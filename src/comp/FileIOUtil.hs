@@ -2,6 +2,8 @@
 module FileIOUtil
     (readFilePath
     ,readBinFilePath
+    ,existsFilePath
+    ,readBinFoundFile
     ,readFilePathOrAbs
     ,readFilesPath
     ,readFileMaybe
@@ -140,6 +142,13 @@ readFilesPath' errh pos verb names path = do
                 return res
 
 
+-- One of the files that existsFilePath found, read as readBinFilePath
+-- reads it, for callers that choose among the copies on the path by
+-- their contents (so that the others are not reported as ignored)
+readBinFoundFile :: ErrorHandle -> Position -> Bool -> String -> IO (Maybe BS.ByteString)
+readBinFoundFile errh pos verb name =
+    fmap (B.toStrict . fst) <$> readFilePath_tryFile errh pos verb name
+
 -- this is used by readFilePath' to try reading one filename
 readFilePath_tryFile :: ErrorHandle -> Position ->
                         Bool -> String -> IO (Maybe (B.ByteString, String))
@@ -157,7 +166,7 @@ readFilePath_tryFile errh pos verb name =
         catchIO rdFile handler
 
 
--- returns the files that were found
+-- returns the files that were found, in path order
 existsFilePath :: String -> [String] -> IO [String]
 existsFilePath fname [] = return []
 existsFilePath fname (p:paths) = do

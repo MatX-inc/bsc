@@ -1,0 +1,9 @@
+package FrontEndBad where
+
+import FrontEndA
+
+good :: Bool
+good = isRed Green
+
+bad :: Bool
+bad = next 3

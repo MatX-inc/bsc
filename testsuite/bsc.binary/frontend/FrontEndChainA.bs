@@ -1,0 +1,28 @@
+package FrontEndChainA where
+
+-- The bottom of a chain FrontEndChainA <- FrontEndChainB <- FrontEndChainC
+-- for -u -check-only, with a library import and two warnings, an unused
+-- definition (P0223) and an instance that does not cover its class's
+-- functional dependency (T0160) (see frontend.exp)
+
+import Vector
+
+data Mode = Off | Slow | Fast
+    deriving (Eq, Bits)
+
+class Scaled a where
+    scale :: a -> UInt 8
+
+instance Scaled Mode where
+    scale Off = 0
+    scale Slow = 1
+    scale Fast = 4
+
+total :: Vector 4 Mode -> UInt 8
+total v = foldr (\ m s -> scale m + s) 0 v
+
+class Widen a b | a -> b where
+    widen :: a -> b
+
+instance Widen (UInt n) (UInt m) where
+    widen x = 0

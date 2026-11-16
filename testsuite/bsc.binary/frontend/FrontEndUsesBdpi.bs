@@ -1,0 +1,6 @@
+package FrontEndUsesBdpi where
+
+import FrontEndBdpi
+
+both :: Bit 32 -> Bit 32
+both x = and32 x x
