@@ -133,6 +133,9 @@ module Yices (
 
     -- * Models
     getModel,
+    getModelMaybe,
+    freeModel,
+    formulasTrueInModel,
     printModel
 
     --getModelBool,
@@ -768,6 +771,31 @@ getModel :: Context -> IO Model
 getModel ctx = do
   Model <$>
     (withForeignPtr (yContext ctx) $ \cptr -> yices_get_model cptr 1)
+
+-- The context's model (keeping its substitutions, so that a term with no
+-- value of its own evaluates to a default), or Nothing if it has none.
+-- The model outlives the context.  It is freed with 'freeModel', or with
+-- every term, context and model by the reset in the next 'mkContext', after
+-- which it must be neither used nor freed.
+getModelMaybe :: Context -> IO (Maybe Model)
+getModelMaybe ctx = do
+  p <- withForeignPtr (yContext ctx) $ \cptr -> yices_get_model cptr 1
+  return $ if p == nullPtr then Nothing else Just (Model p)
+
+freeModel :: Model -> IO ()
+freeModel = yices_free_model . unModel
+
+-- Just True if every formula is true in the model, Just False if one is
+-- false, Nothing if one cannot be evaluated
+formulasTrueInModel :: Model -> [Expr] -> IO (Maybe Bool)
+formulasTrueInModel mdl es = do
+  res <- withArray (map unExpr es) $ \aptr ->
+         yices_formulas_true_in_model (unModel mdl)
+             (fromIntegral (length es)) aptr
+  return $ case res of
+             1 -> Just True
+             0 -> Just False
+             _ -> Nothing
 
 printModel :: Model -> IO ()
 printModel mdl = do
