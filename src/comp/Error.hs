@@ -623,6 +623,7 @@ data ErrMsg =
         | EBadSpecialArgs
         | EBadMethodConflictOp
         | EBadMethodConflictOpList
+        | EUnsupportedMethodConflictOp String
         | WNoSchedulingAnnotation [String] String [String]
         | ENestedModulePragma -- ^ pragmas not allowed in nested modules
         | ETerminalAction -- ^ action ends a block that requires a return value

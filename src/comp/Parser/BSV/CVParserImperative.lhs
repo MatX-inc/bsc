@@ -1894,21 +1894,27 @@ Extract each type of statement, making sure to preserve the order
 >                                           (map getIdString as_x)
 >                                           (map getIdString bs_y))]
 >                        else []
+>                    -- a reversed pair repeats the relationship if it is
+>                    -- symmetric or relates a method to itself; else a conflict
 >                    isRevOp C = True
 >                    isRevOp CF = True
->                    isRevOp SB = True
->                    isRevOp SBR = True
+>                    isRevOp P = True
+>                    isRevOp SB = False
+>                    isRevOp SBR = False
 >                    isRevOp op = internalError ("isRevOp: " ++ show op)
 >                    checkBack (p1,(xs,r1,ys)) (p2,(as,r2,bs)) =
->                        if ((r1 /= r2) || not (isRevOp r1)) &&
->                           (commonEl as ys) && (commonEl bs xs)
->                        then let as_y = filter (\y -> y `elem` ys) as
->                                 bs_x = filter (\x -> x `elem` xs) bs
->                             in  [(p2, EBVIDuplicateSchedule p1 (show r1)
+>                        let as_y = filter (\y -> y `elem` ys) as
+>                            bs_x = filter (\x -> x `elem` xs) bs
+>                            isDup a b = (r1 == r2) && (isRevOp r1 || a == b)
+>                        in  if or [ not (isDup a b) | a <- as_y, b <- bs_x ]
+>                            then [(p2, EBVIDuplicateSchedule p1 (show r1)
 >                                           (map getIdString bs_x)
 >                                           (map getIdString as_y))]
->                        else []
+>                            else []
+>                    -- also check a statement against itself,
+>                    -- for (a, b) SB (a, b)
 >                    checkList (s:rest) =
+>                        checkBack s s ++
 >                        concatMap (check s) rest ++ checkList rest
 >                    checkList [] = []
 >                    errs = checkList ss
