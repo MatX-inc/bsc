@@ -1,0 +1,25 @@
+package AlwaysEnabledComposable where
+
+import FIFOF
+
+-- No G0129: a SB b, and e is CF with both.  e C e is fine, since a method
+-- with one enable executes at most once per cycle.
+
+interface AEComposable =
+    a   :: Action          {-# always_enabled #-}
+    b   :: Action          {-# always_enabled #-}
+    e   :: Bit 8 -> Action {-# always_enabled #-}
+    cur :: Bit 8           {-# always_ready #-}
+
+{-# synthesize sysAlwaysEnabledComposable #-}
+sysAlwaysEnabledComposable :: Module AEComposable
+sysAlwaysEnabledComposable =
+  module
+    c :: Reg (Bit 8) <- mkReg 0
+    d :: Reg (Bit 8) <- mkReg 0
+    f :: FIFOF (Bit 8) <- mkUGFIFOF
+    interface
+      a = c := d
+      b = d := d + 1
+      e x = f.enq x
+      cur = c
