@@ -346,7 +346,7 @@ module YicesFFI (
     yices_assert_formula,
     yices_assert_formulas,
     yices_check_context,
-    -- yices_check_context_with_assumptions,
+    yices_check_context_with_assumptions,
     -- yices_assert_blocking_clause,
     -- yices_stop_search,
 
@@ -865,6 +865,9 @@ foreign import ccall unsafe "yices.h"
 
 foreign import ccall unsafe "yices.h"
     yices_check_context :: Ptr YContext -> Ptr YParams -> IO YStatus
+
+foreign import ccall unsafe "yices.h"
+    yices_check_context_with_assumptions :: Ptr YContext -> Ptr YParams -> CUInt -> Ptr YExpr -> IO YStatus
 
 ------------------------------------------------------------------------
 -- Search parameters
