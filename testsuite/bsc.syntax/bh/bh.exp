@@ -226,3 +226,9 @@ compile_pass_no_warning PullPiping.bs
 compile_pass_no_warning PushPiping.bs
 compile_pass_no_warning RPushPiping.bs
 
+
+# Errors right after a function application are reported at the right token
+compile_fail_error SyntaxErrorAfterApp.bs P0005
+compare_file SyntaxErrorAfterApp.bs.bsc-out
+compile_fail_error LexErrorAfterApp.bs P0000
+compare_file LexErrorAfterApp.bs.bsc-out
