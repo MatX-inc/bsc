@@ -1043,7 +1043,7 @@ genModule
     t <- dump errh flags t DFAPackageIOproperties dumpnames aioprops
 
     (t, vfilenames)
-        <- if (backend flags == Just Verilog)
+        <- if (backend flags == Just Verilog && not (elabOnly flags))
            then genModuleVerilog
                     errh pps flags dumpnames t prefix modstr
                     blurb methodConflictBlurb methodConflictBVI
