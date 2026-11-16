@@ -50,6 +50,10 @@ installs the six utility executables, and `make -C src/comp bsc` builds a single
 executable and symlinks it in `src/comp`. Pass the same `PREFIX`, `GHC`, and
 `BSC_BUILD` flags across invocations.
 
+`make install-bluehs` builds and installs the relocatable
+[`bluehs`](../util/bluehs/README.md) script runtime under `inst/bluehs`
+(requiring `python3`, `cpio`, and on Linux `patchelf`).
+
 ### Solvers
 
 The normal Make build installs the vendored `stp` and `yices` under

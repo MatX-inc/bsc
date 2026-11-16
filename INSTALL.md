@@ -80,6 +80,9 @@ The following dependencies are optional, though recommended:
  - To run the full test suite: the Icarus Verilog simulator, Perl,
    csh, and SystemC libraries. See the [testsuite
    README](testsuite/README.md) for details.
+ - To install the relocatable `bluehs` script runtime (`make install-bluehs`):
+   `python3`, `cpio`, and (on Linux) `patchelf`. See
+   [`util/bluehs/README.md`](util/bluehs/README.md) for details.
  - To build PDF documentation: a LaTeX installation, with extras and
    additional fonts.
  - To format release notes for publication, the [Asciidoctor] tool.
@@ -106,6 +109,9 @@ sudo apt-get install \
    flex \
    bison \
    iverilog \
+   cpio \
+   patchelf \
+   python3 \
    texlive-latex-base \
    texlive-latex-recommended \
    texlive-latex-extra \
@@ -156,6 +162,9 @@ sudo dnf install \
    tcl-devel \
    gmp-devel \
    gperf \
+   cpio \
+   patchelf \
+   python3 \
    latex \
    texlive-boxedminipage \
    texlive-dingbat \
