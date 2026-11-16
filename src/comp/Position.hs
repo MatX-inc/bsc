@@ -25,10 +25,15 @@ mkPositionFull :: FString -> Int -> Int -> Bool -> Position
 mkPositionFull f l c is_stdlib = Position f l c is_stdlib
 
 instance Eq Position where
-  (Position f1 l1 c1 _) == (Position f2 l2 c2 _) = (f1, l1, c1) == (f2, l2, c2)
+  (Position f1 l1 c1 _) == (Position f2 l2 c2 _) =
+      l1 == l2 && c1 == c2 &&
+      (f1 == f2 || getRelativeFilePath (getFString f1) == getRelativeFilePath (getFString f2))
 
 instance Ord Position where
-  compare (Position f1 l1 c1 _) (Position f2 l2 c2 _) = compare (f1, l1, c1) (f2, l2, c2)
+  compare (Position f1 l1 c1 _) (Position f2 l2 c2 _) =
+      case (if f1 == f2 then EQ else compare (getRelativeFilePath (getFString f1)) (getRelativeFilePath (getFString f2))) of
+          EQ -> compare (l1, c1) (l2, c2)
+          other -> other
 
 class HasPosition a where
     getPosition :: a -> Position

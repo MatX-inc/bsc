@@ -110,7 +110,7 @@ import Simplify(simplify)
 import ISyntax(IPackage(..), IModule(..),
                IEFace(..), IDef(..), IExpr(..), IType, fdVars)
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
-import InstNodes(getIStateLocs, flattenInstTree)
+import InstNodes(getIStateLocs, flattenInstTree, ppInstTreeReadable)
 import IConv(iConvPackage, iConvDef, iConvTStats)
 import IConvLet(mayHaveComplicatedLetrecCycle)
 import CType(cTypeConsStats)
@@ -1382,7 +1382,7 @@ genModule
 
     when ("-trace-inst-tree" `elem` progArgs) $ do
       putStrLn "Instantiation tree"
-      putStr (ppReadable (apkg_inst_tree amod))
+      putStr (ppInstTreeReadable (apkg_inst_tree amod))
 --      putStrLn "Instantiation tree"
 --      putStr (ppReadable flat_inst_tree)
 

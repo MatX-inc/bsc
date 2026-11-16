@@ -85,7 +85,7 @@ import Prelude hiding ((<>))
 
 import System.IO(Handle)
 import qualified Data.Map as M
-import Data.List(intercalate)
+import Data.List(intercalate, sortOn)
 
 import qualified Data.Array as Array
 import IntLit
@@ -1043,9 +1043,11 @@ instance PPrint (IModule a) where
         text "-- imod state instances" $+$
         foldr (($+$) . ppSV) (text "") vs $+$
         text "-- port types" $+$
-        foldr (($+$) . ppPT) (text "") (M.toList pts) $+$
+        foldr (($+$) . ppPT) (text "")
+              (sortOn (fmap pfpString . fst) (M.toList pts)) $+$
         text "-- expression source types" $+$
-        pPrint d p [(e, S.toList ts) | (e, ts) <- ets] $+$
+        pPrint d p (sortOn (ppString . fst)
+                           [(e, sortOn pfpString (S.toList ts)) | (e, ts) <- ets]) $+$
         text "-- imod local defs" $+$
         foldr (($+$) . ppDef d) (text "") ds $+$
         text "-- imod rules" $+$
@@ -1360,7 +1362,7 @@ getIExprPosition (ICon i _) = getIdPosition i
 -- The positions stamped on the heap ref (collected out of band when
 -- expressions are rewritten).
 -- When poss has several entries the pick is by Ord Position, whose
--- FString file component compares by intern order.  Today every live
+-- file component compares by normalized relative path.  Today every live
 -- poss is a singleton allocation seed, so the pick rule is moot; when
 -- issue #863 re-enables stamping at the evaluator sites, revisit it
 -- (recency is not representable in a set).

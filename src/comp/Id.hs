@@ -304,9 +304,11 @@ cmpSuffixedIdByName x y =
             default_x = (x, Nothing);
             default_y = (y, Nothing);
             addJust (a, b) = (a, Just b)
-            pair_x = if (count_x == 0) then default_x else addJust $ removeSuffix x
-            pair_y = if (count_y == 0) then default_y else addJust $ removeSuffix y
-        in pair_x  `compare` pair_y
+            (base_x, msuf_x) = if (count_x == 0) then default_x else addJust $ removeSuffix x
+            (base_y, msuf_y) = if (count_y == 0) then default_y else addJust $ removeSuffix y
+        in case cmpIdByName base_x base_y of
+               EQ -> compare msuf_x msuf_y
+               other -> other
 
 instance HasPosition Id where
     getPosition i = getIdPosition i

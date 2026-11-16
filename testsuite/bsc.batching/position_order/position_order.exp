@@ -1,0 +1,38 @@
+# Verify cross-file Position ordering (by normalized relative file path rather
+# than FString intern ID) and InstNode / cmpSuffixedIdByName determinism across
+# compiler diagnostics, -trace-inst-tree / -hack-strict-inst-tree dumps, and
+# batched compilation.
+
+if { $vtest == 1 } {
+    set src PosOrderTop.bs
+    set mod mkPosOrderTop
+    set vout [make_bsc_vcomp_output_name $src]
+
+    # Pre-compile imported packages in reverse-alphabetical order so top-level
+    # compilation exercises cross-file Position and InstTree comparison directly.
+    compile_pass PosFileZeta.bs
+    compile_pass PosFileAlpha.bs
+
+    erase PosOrderTop.bo
+    erase $mod.ba
+    with_normal_intern_order {
+        compile_verilog_pass_warning $src G0021 4 $mod {-no-u -elab -trace-inst-tree -hack-strict-inst-tree}
+    }
+    copy $vout vcomp.normal.out
+
+    erase PosOrderTop.bo
+    erase $mod.ba
+    with_normal_intern_order {
+        compile_verilog_pass_warning $src G0021 4 $mod {-no-u -elab -trace-inst-tree -hack-strict-inst-tree -trace-intern-reverse}
+    }
+    copy $vout vcomp.reverse.out
+
+    # Both the -trace-inst-tree hierarchy and cross-file G0021 warnings
+    # (PosFileAlpha.bs sorted before PosFileZeta.bs) must match byte-for-byte
+    # regardless of FString intern arrival order.
+    compare_file vcomp.normal.out vcomp.reverse.out
+    find_regexp vcomp.normal.out {(?s)Warning: "PosFileAlpha\.bs".*Warning: "PosFileZeta\.bs"}
+    find_regexp vcomp.normal.out {(?s)_elements_2.*_elements_10}
+
+    batching_verilog_pair $src $mod PosScramble.bs mkPosScramble {PosFileAlpha.bs PosFileZeta.bs}
+}

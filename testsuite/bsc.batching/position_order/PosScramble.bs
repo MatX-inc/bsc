@@ -1,0 +1,12 @@
+package PosScramble where
+
+import PosFileAlpha
+import PosFileZeta
+import PosOrderTop
+
+{-# verilog mkPosScramble #-}
+mkPosScramble :: Module PosOrderIfc
+mkPosScramble =
+    module
+        ifc <- mkPosOrderTop
+        return ifc

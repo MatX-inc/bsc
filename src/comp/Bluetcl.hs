@@ -2466,13 +2466,13 @@ getInstTreeList' :: Bool -> InstTree -> [InstNode]
 getInstTreeList' False t = processInstNodes $ (sortBy comparein (M.elems t))
 getInstTreeList' True  t =
   let getList x | isHiddenAll x = []
-      getList x@(Loc {}) | isHiddenKP x    = concatMap getList (sortBy comparein (getMyChildren x))
+      getList x@(Loc {}) | isHiddenKP x    = concatMap getList (getMyChildren x)
       getList x | isHiddenKP x = []
       getList x = [x]
       getMyChildren x = concatMap promote (M.elems $ node_children x)
       promote x@(Loc {node_name = nm, node_ignore = True}) | isBadId nm = getMyChildren x
       promote x                                                         = [x]
-  in processInstNodes $ concatMap getList (sortBy comparein (concatMap promote (M.elems t)))
+  in processInstNodes $ sortBy comparein (concatMap getList (concatMap promote (M.elems t)))
 
 -- sort before processing to get better orders
 processInstNodes :: [InstNode] -> [InstNode]

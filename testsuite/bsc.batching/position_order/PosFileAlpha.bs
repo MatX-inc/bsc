@@ -1,0 +1,16 @@
+package PosFileAlpha where
+
+mkAlphaSub :: Module (Reg (Bit 8))
+mkAlphaSub =
+    module
+        locReg :: Reg (Bit 8) <- mkReg 1
+        let rHi =
+                rules
+                    "rl_alpha_hi": when locReg == 1 ==> action
+                        locReg := locReg + 1
+            rLo =
+                rules
+                    "rl_alpha_lo": when locReg == 1 ==> action
+                        locReg := locReg + 3
+        addRules (rHi <+ rLo)
+        return locReg

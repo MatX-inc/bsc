@@ -1,0 +1,25 @@
+package PosOrderTop where
+
+import Vector
+import PosFileZeta
+import PosFileAlpha
+
+interface PosOrderIfc =
+    readZ :: Bit 8
+    readA :: Bit 8
+    readVec :: Bit 8
+
+{-# verilog mkPosOrderTop #-}
+mkPosOrderTop :: Module PosOrderIfc
+mkPosOrderTop =
+    module
+        z0 <- mkZetaSub
+        a0 <- mkAlphaSub
+        z1 <- mkZetaSub
+        a1 <- mkAlphaSub
+        vecRegs :: Vector 12 (Reg (Bit 8)) <- replicateM (mkReg 0)
+
+        interface
+            readZ = z0 + z1
+            readA = a0 + a1
+            readVec = (select vecRegs 2)._read + (select vecRegs 10)._read
