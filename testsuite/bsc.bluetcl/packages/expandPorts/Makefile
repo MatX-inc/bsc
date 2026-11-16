@@ -16,7 +16,8 @@ KEEPFILES = Test1.wrapper.exp.v \
 	Test7.wrapper.exp.v \
 	Test10.wrapper.exp.v \
 	Test11.wrapper.exp.v \
-	Test12.wrapper.exp.v 
+	Test12.wrapper.exp.v \
+	TestSplitPorts.wrapper.exp.v
 
 include $(CONFDIR)/clean.mk
 
