@@ -21,7 +21,9 @@ import IntLit
 
 import Error(internalError, ErrMsg(..), ErrorHandle)
 import ErrorMonad(ErrorMonad(..), convErrorMonadToIO)
-import Flags(Flags, useDPI)
+import Flags(Flags, svaRuntimeChecks, useDPI)
+import PreIds(idSvaRuntimeCheck)
+import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import Position(noPosition)
 
 import PreStrings( fsUnderUnder,
@@ -36,7 +38,8 @@ import VModInfo
 import ASyntax
 import ASyntaxUtil
 import ASchedule(AScheduleInfo(..), ExclusiveRulesDB(..), areRulesExclusive,
-                 MethodUsesMap, MethodUsers, MethodId(..), UniqueUse(..))
+                 MethodUsesMap, MethodUsers, MethodId(..), UniqueUse(..),
+                 errAction)
 import AUses(useDropCond)
 import AVerilogUtil(vNameToTask)
 import RSchedule(RAT, ratToNestedLists)
@@ -380,6 +383,57 @@ aState' flags pps schedule_info apkg = do
         cvtForeign rid resets a@(ACall { }) =
             internalError("AState.cvtForeign - not foreign:" ++ ppReadable a)
 
+        -- Check in Verilog simulation that conflicting methods are not
+        -- enabled together by an external Verilog instantiator.
+        act_ifc_map = M.fromList
+            [ (aif_name m, (idx, m))
+            | (idx, m) <- zip [0 :: Int ..] ifc
+            , case m of
+                AIAction {}      -> True
+                AIActionValue {} -> True
+                _                -> False ]
+        methodEnExpr i fi
+            | isAlwaysEn pps i = aTrue
+            | otherwise        = aBoolPort (mkNamedEnable fi)
+        conflictMsg m1 m2 =
+            "Methods " ++ quote (getIdBaseString m1) ++ " and " ++
+            quote (getIdBaseString m2) ++
+            " conflict and may not be enabled in the same clock cycle."
+        mkConflictCalls cond resets msg =
+            case errAction msg of
+              AFCall id f isC (_ : es) _ ->
+                  AForeignCall id (cvtName isC f) (cond : es) [] resets :
+                  [ AForeignCall idSvaRuntimeCheck
+                        (getIdString idSvaRuntimeCheck) (cond : es) [] resets
+                  | svaRuntimeChecks flags ]
+              a -> internalError ("AState.mkConflictCalls: " ++ ppReadable a)
+        stepConflict (seen, acc) (m1, m2)
+            | m1 == m2 = (seen, acc)
+            | isAlwaysEn pps m1 && isAlwaysEn pps m2 = (seen, acc)
+            | Just (i1, ifc1) <- M.lookup m1 act_ifc_map
+            , Just (i2, ifc2) <- M.lookup m2 act_ifc_map
+            , let key = if i1 <= i2 then (i1, i2) else (i2, i1)
+            , not (S.member key seen)
+            , let (na, fa, nb, fb) =
+                      if i1 <= i2 then (m1, ifc1, m2, ifc2)
+                                  else (m2, ifc2, m1, ifc1)
+            , let wp1 = aif_props fa
+                  wp2 = aif_props fb
+            , wpClockDomain wp1 == wpClockDomain wp2
+            , Just domain <- wpClockDomain wp1 =
+                let cond = aAnd (methodEnExpr na (aif_fieldinfo fa))
+                                (methodEnExpr nb (aif_fieldinfo fb))
+                    resets = stableOrdNub
+                                 (map (areset_wire . reset_lookup)
+                                      (wpResets wp1 ++ wpResets wp2))
+                    calls = [ (domain, fc)
+                            | fc <- mkConflictCalls cond resets
+                                        (conflictMsg na nb) ]
+                in  (S.insert key seen, reverse calls ++ acc)
+            | otherwise = (seen, acc)
+        conflict_rfas = reverse $ snd $ foldl' stepConflict (S.empty, []) $
+            sC (methodConflictInfo (asi_v_sched_info schedule_info))
+
         -- (domain, rule foreign actions)
         domain_rfas =
             [ (domain, cvtForeign rid resets a) |
@@ -387,7 +441,8 @@ aState' flags pps schedule_info apkg = do
               let domain = fromJustOrErr "AState.domain_rfas no clock domain"
                                (wpClockDomain wp),
               let resets = map (areset_wire . reset_lookup) (wpResets wp),
-              a <- as, isForeign a ]
+              a <- as, isForeign a ] ++
+            conflict_rfas
 
         -- foreign function actions by clock domain
         -- We cons one action at a time onto the result list to avoid an O(n^2) blowup.
