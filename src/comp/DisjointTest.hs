@@ -11,7 +11,7 @@ module DisjointTest(
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Control.Monad(foldM {- , when -})
-import Data.List (genericIndex)
+import Data.List (genericIndex, foldl')
 
 import Util(ordPair)
 
@@ -33,7 +33,8 @@ import qualified AExpr2STP as STP
           checkDisjointRulePair, checkDisjointExpr)
 import qualified AExpr2Yices as Yices
          (YState, initYState, addADefToYState,
-          checkDisjointRulePair, checkDisjointExpr)
+          checkDisjointRulePair, convertRulePair, decideRulePairs, YTerm,
+          checkDisjointExpr)
 
 -- -------------------------
 
@@ -116,20 +117,40 @@ genDisjointSet :: DisjointTestState -> [(ARuleId, ARuleId)] -> [ASchedulePragma]
                   IO (S.Set (ARuleId, ARuleId), DisjointTestState)
 genDisjointSet dt_state rulePairs pragmas = do
   let me_state = makeMETest pragmas
+      batch = case dt_state of
+                DTS_Yices {} -> True
+                _ -> False
 
       addResult :: S.Set (ARuleId, ARuleId) -> (ARuleId, ARuleId) -> Maybe Bool -> S.Set (ARuleId, ARuleId)
       addResult rset (r1,r2) (Just True) = S.insert (r1,r2) (S.insert (r2,r1) rset)
       addResult rset _ _                 = rset
 
-      foldFn (rset, st) p =
+      foldFn (rset, pend, st) p =
           case (checkMERulePair me_state p) of
             res@(Just _) -> let rset' = addResult rset p res
-                            in  return (rset', st)
-            _            -> do (res, st') <- checkDisjointRulePairTop st p
-                               let rset' = addResult rset p res
-                               return (rset', st')
+                            in  rset' `seq` return (rset', pend, st)
+            _ | batch -> do
+                  (res, st') <- convertRulePairTop st p
+                  case res of
+                    Left r -> let rset' = addResult rset p r
+                              in  rset' `seq` return (rset', pend, st')
+                    Right ts -> return (rset, (p, ts):pend, st')
+              | otherwise -> do
+                  (res, st') <- checkDisjointRulePairTop st p
+                  let rset' = addResult rset p res
+                  rset' `seq` return (rset', pend, st')
 
-  (res, dt_state') <- foldM foldFn (S.empty, dt_state) rulePairs
+  (res0, pending, dt_state1) <- foldM foldFn (S.empty, [], dt_state) rulePairs
+
+  (res, dt_state') <-
+      case dt_state1 of
+        DTS_Yices m ys | not (null pending) -> do
+            let ps = reverse pending
+            (vs, ys') <- Yices.decideRulePairs ys (map snd ps)
+            return (foldl' (\ rset ((p, _), v) -> addResult rset p v) res0
+                           (zip ps vs),
+                    DTS_Yices m ys')
+        _ -> return (res0, dt_state1)
 
   return (res, dt_state')
 
@@ -155,6 +176,16 @@ checkDisjointRulePairTop s p = do
   --   fail "bad disjoint map"
   -- return (res, s')
 
+
+convertRulePairTop :: DisjointTestState -> (ARuleId, ARuleId) ->
+                      IO (Either (Maybe Bool) (Yices.YTerm, Yices.YTerm),
+                          DisjointTestState)
+convertRulePairTop s@(DTS_Yices m yices_state) p
+  | supportIntersects m p = return (Left (Just False), s)
+  | otherwise = do (res, yices_state') <- Yices.convertRulePair yices_state p
+                   return (res, DTS_Yices m yices_state')
+convertRulePairTop s p = do (res, s') <- checkDisjointRulePairTop s p
+                            return (Left res, s')
 
 checkDisjointRulePair :: DisjointTestState -> (ARuleId, ARuleId) ->
                          IO (Maybe Bool, DisjointTestState)
