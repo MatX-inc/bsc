@@ -12,22 +12,22 @@ test_c_veri_bsv_modules_options AlwaysEnabledGated1 mkTestGated1 "-unsafe-always
 
 test_c_veri_bsv_modules_options AlwaysEnabledGated2 mkTestGated2 "-unsafe-always-ready"
 
-# G0129: always_enabled methods that conflict on a register
-compile_verilog_fail_error AlwaysEnabledConflict.bs G0129 1
+# G0134: always_enabled methods that conflict on a register
+compile_verilog_fail_error AlwaysEnabledConflict.bs G0134 1
 # Demoted, the hardware matches no serial execution of the methods
-compile_verilog_pass_warning AlwaysEnabledConflict.bs G0129 1 mkAEConflict "-demote-errors G0129"
+compile_verilog_pass_warning AlwaysEnabledConflict.bs G0134 1 mkAEConflict "-demote-errors G0134"
 link_verilog_no_main_pass {TbAlwaysEnabledConflict.v mkAEConflict.v} sysTbAlwaysEnabledConflict
 sim_verilog sysTbAlwaysEnabledConflict
 compare_file sysTbAlwaysEnabledConflict.out
-# G0129 through a submodule method that conflicts with itself
-compile_verilog_fail_error AlwaysEnabledConflictSub.bs G0129 1
-# G0129 through one part of a split method
-compile_verilog_fail_error AlwaysEnabledConflictSplit.bs G0129 1
+# G0134 through a submodule method that conflicts with itself
+compile_verilog_fail_error AlwaysEnabledConflictSub.bs G0134 1
+# G0134 through one part of a split method
+compile_verilog_fail_error AlwaysEnabledConflictSplit.bs G0134 1
 # SB and CF methods, and a method that conflicts with itself, are accepted
 compile_verilog_pass AlwaysEnabledComposable.bs
-# Methods with valid-bit arguments: G0129, or a warning when demoted
-compile_verilog_fail_error AlwaysEnabledValid.bs G0129 1
-compile_verilog_pass_warning AlwaysEnabledValid.bs G0129 1 sysAlwaysEnabledValid "-demote-errors G0129"
+# Methods with valid-bit arguments: G0134, or a warning when demoted
+compile_verilog_fail_error AlwaysEnabledValid.bs G0134 1
+compile_verilog_pass_warning AlwaysEnabledValid.bs G0134 1 sysAlwaysEnabledValid "-demote-errors G0134"
 
 compile_verilog_pass TestEnableFail.bsv
 if { $vtest == 1 } {

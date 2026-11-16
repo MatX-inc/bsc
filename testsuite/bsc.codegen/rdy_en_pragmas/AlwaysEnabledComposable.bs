@@ -2,7 +2,7 @@ package AlwaysEnabledComposable where
 
 import FIFOF
 
--- No G0129: a SB b, and e is CF with both.  e C e is fine, since a method
+-- No G0134: a SB b, and e is CF with both.  e C e is fine, since a method
 -- with one enable executes at most once per cycle.
 
 interface AEComposable =

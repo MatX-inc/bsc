@@ -1,4 +1,4 @@
-// mkAEConflict (AlwaysEnabledConflict.bs, G0129 demoted) has no EN ports, so
+// mkAEConflict (AlwaysEnabledConflict.bs, G0134 demoted) has no EN ports, so
 // a and b fire every cycle: any serial order adds 3 to c, the hardware adds 1.
 module sysTbAlwaysEnabledConflict;
   reg CLK = 0, RST_N = 0;
