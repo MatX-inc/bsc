@@ -55,8 +55,9 @@ compile_verilog_schedule_fail ResourceOneRuleCSEnoSC.bs sysResourceOneRuleCSEnoS
 compare_file_filter_ids ResourceOneRuleCSEnoSC.bs.bsc-sched-out
 
 # This was added to test bug 42 (there should be a second write port)
-compile_verilog_fail ResourceOneRuleMultiportAction.bs sysResourceOneRuleMultiportAction
-#find_n_strings_bug sysResourceOneRuleMultiportAction.v {wire arr\$WE_2} 1 42
+# sub has no annotation with itself, so it defaults to conflict-free
+compile_verilog_pass ResourceOneRuleMultiportAction.bs sysResourceOneRuleMultiportAction
+find_n_strings sysResourceOneRuleMultiportAction.v {assign arr$WE_2 =} 1
 
 compile_verilog_schedule_fail ResourceOneRuleTwoMethodsSC.bs sysResourceOneRuleTwoMethodsSC
 find_n_error ResourceOneRuleTwoMethodsSC.bs.bsc-sched-out G0004 1 
