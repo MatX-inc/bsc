@@ -295,12 +295,14 @@ getSubstRange (S eo _ ) = concat (map tv (Map.elems eo))
 -- substitution efficiently
 
 fixupBack :: S_map -> Set_vars -> Set_vars
-fixupBack new_map old_back
+fixupBack new_map = fixupBackWith (\ v -> Map.member v new_map)
+
+fixupBackWith :: (TyVar -> Bool) -> Set_vars -> Set_vars
+fixupBackWith retained old_back
     -- no entry would change: keep the old map
     | all unchanged old_back = old_back
     | otherwise = Map.mapMaybe handle_entry old_back
-  where retained v = Map.member v new_map
-        unchanged vs = not (Set.null vs) && all retained vs
+  where unchanged vs = not (Set.null vs) && all retained vs
         handle_entry vs
             | unchanged vs    = Just vs
             | Set.null vs'    = Nothing
@@ -323,7 +325,17 @@ trimSubstBy filterFunc (S old_map old_back) = S new_map new_back
 trimSubst :: TyVar -> Subst -> Subst
 trimSubst v (S old_map old_back) = S new_map new_back
   where (new_map, _) = Map.split v old_map
-        new_back     = fixupBack new_map old_back
+        new_back     = fixupBackWith (retainedBelow v new_map) old_back
+
+-- Map.member u new_map, where new_map is the keys of the substitution
+-- below v (Map.split v) and u is a key of the substitution: Ord TyVar
+-- compares generated variables by number first and user variables carry
+-- noTyVarNo (-1), so for two generated variables membership is nu < nv.
+retainedBelow :: TyVar -> S_map -> TyVar -> Bool
+retainedBelow v new_map u =
+    case (genTyVarNum u, genTyVarNum v) of
+      (Just nu, Just nv) -> nu < nv
+      _ -> Map.member u new_map
 
 -- This removes substitution entries whose LHS or RHS contains the variables.
 -- (That is, entried for a type variable and whose associated type contains
