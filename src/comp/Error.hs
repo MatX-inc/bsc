@@ -3205,7 +3205,7 @@ getErrorText (EUnbasedUnsizedType lit t hint) =
             hint ++ "."))
 
 getErrorText (EContradictorySchedule ann prev_pos prev_ann) =
-    (Type 159, empty,
+    (Type 171, empty,
      s2par ("The scheduling annotation " ++ quote (showAnn ann) ++
             " contradicts the annotation " ++ quote (showAnn prev_ann) ++
             " at " ++ prPosition prev_pos ++ ".  A pair of methods can " ++

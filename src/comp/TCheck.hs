@@ -10,7 +10,7 @@ import Data.Ix(range)
 import ListMap(lookupWithDefaultBy)
 import SCC(scc)
 import Util(findDup, concatMapM,
-            headOrErr, initOrErr, lastOrErr)
+            headOrErr, initOrErr, lastOrErr, ordPair, stableOrdNub)
 import Util(fst3)
 import IntLit
 import IntegerUtil(mask)
@@ -3335,7 +3335,7 @@ chkUnsyncMeths field_set ms =
             [] -> return ()
             i : _ -> err (getIdPosition i, EUnboundField (pfpString i))
 
--- Rejects contradictory annotations (T0159) and gives unannotated pairs the
+-- Rejects contradictory annotations (T0171) and gives unannotated pairs the
 -- BVI defaults (P0200), as mkVModInfo needs each pair annotated exactly once.
 chkClassicSchedInfo :: Position -> [VFieldInfo] -> VSchedInfo -> TI VSchedInfo
 chkClassicSchedInfo pos fields si = do
