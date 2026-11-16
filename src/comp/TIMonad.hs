@@ -14,6 +14,8 @@ module TIMonad(
         EPred(..), Infer2, CheckT, TaskCheckT,
         getBoundTVs, getTopBoundTVs, addBoundTVs, popBoundTVs,
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
+        getSolvedPool, addSolvedPool, pushSolvedPool, popSolvedPool,
+        getPoolDepositsOK, withoutSolvedPool,
         getNumProven, getNumRefuted, addNumDecided,
         errorAtId, findCons, findTyCon, findFields, findCls,
         bitCls,
@@ -42,7 +44,7 @@ import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..))
 import Flags(Flags, maxTIStackDepth)
 import Subst
 import Pred
-import SolvedBinds(SolvedBinds, emptySBs, (<++), extractClosures)
+import SolvedBinds(SolvedBinds, emptySBs, (<++))
 import Scheme
 import Assump
 import SymTab
@@ -107,7 +109,13 @@ data TStateRecover = TStateRecover {
   -- this definition, so repeated queries are answered from here
   -- rather than re-posed
   tsNumProven :: S.Set Pred,
-  tsNumRefuted :: S.Set Pred
+  tsNumRefuted :: S.Set Pred,
+  -- Reusable solved dictionaries for closed predicates and their
+  -- not-yet-emitted bindings, scoped by push/popSolvedPool frames
+  -- around each binding group (see TCMisc.propagateFunDeps).
+  tsSolvedPool :: [EPred],
+  tsPoolSbs :: SolvedBinds,
+  tsPoolDepositsOK :: Bool
 }
 
 type TSSatElement = EPred
@@ -181,7 +189,10 @@ initRecoverState = TStateRecover {
     tsExplPreds = [],
     tsSatStack = mkSizedStack [mkSizedStack []],
     tsNumProven = S.empty,
-    tsNumRefuted = S.empty
+    tsNumRefuted = S.empty,
+    tsSolvedPool = [],
+    tsPoolSbs = emptySBs,
+    tsPoolDepositsOK = True
   }
 
 data TIResult a = TIResult {
@@ -267,13 +278,6 @@ tiRecoveringFromError' do_something create_fake_output = do
             -}
             s <- getSubst
             updSubst (trimSubst dummy)
-            -- The solved-dictionary pool lives in TI state, so the
-            -- trimmed substitution must be forced into it exactly as
-            -- it is forced into the returned value: a pool binding
-            -- deposited inside "do_something" may mention a type
-            -- variable resolved inside it, whose mapping is destroyed
-            -- by the trim.  (Vars still free at this point have no
-            -- mapping to lose and resolve later as usual.)
             apSubSolvedPool s
             return (apSub s answer)
           ))
@@ -384,6 +388,44 @@ addNumDecided :: [Pred] -> [Pred] -> TI ()
 addNumDecided proven refuted = modify (\ s ->
     s { tsNumProven = foldr S.insert (tsNumProven s) proven,
         tsNumRefuted = foldr S.insert (tsNumRefuted s) refuted })
+
+getSolvedPool :: TI [EPred]
+getSolvedPool = gets tsSolvedPool
+
+addSolvedPool :: [EPred] -> SolvedBinds -> TI ()
+addSolvedPool eps sbs = modify add
+  where add s = s { tsSolvedPool = eps ++ tsSolvedPool s,
+                    tsPoolSbs = sbs <++ tsPoolSbs s }
+
+pushSolvedPool :: TI ([EPred], SolvedBinds)
+pushSolvedPool = do
+    pool <- gets tsSolvedPool
+    sbs <- gets tsPoolSbs
+    modify (\ s -> s { tsPoolSbs = emptySBs })
+    return (pool, sbs)
+
+popSolvedPool :: ([EPred], SolvedBinds) -> TI SolvedBinds
+popSolvedPool (pool0, sbs0) = do
+    frame_sbs <- gets tsPoolSbs
+    modify (\ s -> s { tsSolvedPool = pool0, tsPoolSbs = sbs0 })
+    return frame_sbs
+
+apSubSolvedPool :: Subst -> TI ()
+apSubSolvedPool s = modify app
+  where app st = st { tsSolvedPool = apSub s (tsSolvedPool st),
+                      tsPoolSbs = apSub s (tsPoolSbs st) }
+
+getPoolDepositsOK :: TI Bool
+getPoolDepositsOK = gets tsPoolDepositsOK
+
+withoutSolvedPool :: TI a -> TI a
+withoutSolvedPool action = do
+    old_g <- gets tsSolvedPool
+    old_ok <- gets tsPoolDepositsOK
+    modify (\ s -> s { tsSolvedPool = [], tsPoolDepositsOK = False })
+    r <- action
+    modify (\ s -> s { tsSolvedPool = old_g, tsPoolDepositsOK = old_ok })
+    return r
 
 mkEPred :: Pred -> TI EPred
 -- expandSynPred: givens must satisfy the same construction-time
