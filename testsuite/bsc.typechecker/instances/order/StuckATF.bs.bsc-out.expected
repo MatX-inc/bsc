@@ -5,11 +5,11 @@ Error: "StuckATF.bs", line 29, column 0: (T0030)
   Given type:
     a -> Prelude.Bit 8
   The following contexts are needed:
-    Prelude.Bits a a__
-      Introduced at the following locations:
-	"StuckATF.bs", line 30, column 28
     StuckATF.NPick a__
       Introduced at the following locations:
 	"StuckATF.bs", line 30, column 11
+    Prelude.Bits a a__
+      Introduced at the following locations:
+	"StuckATF.bs", line 30, column 28
   The type variables are from the following positions:
     "a__" at "StuckATF.bs", line 30, column 28
