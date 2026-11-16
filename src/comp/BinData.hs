@@ -127,6 +127,7 @@ import Data.Word
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Unsafe as BSU
 import qualified Data.ByteString.Short as SBS
+import qualified Data.ByteString.Short.Internal as SBSI(copyToPtr)
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Text as TS
 import qualified Data.Text.Encoding as TSE
@@ -373,6 +374,18 @@ wbString b s
       let !u = TSE.encodeUtf8 (TS.pack s)
       wbIdx b (BS.length u)
       wbBS b u
+
+-- The Bin String encoding of an FString's spelling, copying its stored
+-- bytes when they are what wbString writes (see SpeedyString's UTF-8)
+wbFString :: WBuf -> FString -> IO ()
+wbFString b f =
+  case fstringUtf8 f of
+    Just p -> do let n = SBS.length p
+                 wbIdx b n
+                 (d, len) <- wbReserve b n
+                 SBSI.copyToPtr p 0 (d `plusPtr` len) n
+                 wbSetLen b (len + n)
+    Nothing -> wbString b (getFString f)
 
 -- A u32, least significant byte first
 wbU32 :: WBuf -> Int -> IO ()
@@ -1025,8 +1038,8 @@ instance (Ord a, Bin a) => Bin (S.Set a) where
 -- Bin Ids, Positions, etc.
 
 instance Bin FString where
-  writeBytes = writeBytes . getFString
-  readBytes = mkFString <$> readBytes
+  writeBytes f = Out $ \w -> do { b <- curBuf w; wbFString b f }
+  readBytes = readFString
   -- FStrings are shared
   toBin s = Out $ \w -> stringIdx w s >>= putIdx w
   fromBin = readShared
@@ -1037,6 +1050,17 @@ instance {-# OVERLAPPABLE #-} Bin String where
                        bs <- getBS len
                        let !t = TSE.decodeUtf8 bs
                        return (TS.unpack t)
+
+-- mkFString of a Bin String, unforced.  The bytes are checked now, as the
+-- String reader decodes them now; well-formed UTF-8 is interned from its
+-- bytes (see SpeedyString's UTF-8), anything else as before.
+readFString :: In FString
+readFString = do len <- fromBin
+                 bs <- getBS len
+                 case mkFStringUtf8 bs of
+                   Just f -> return f
+                   Nothing -> do let !t = TSE.decodeUtf8 bs
+                                 return (mkFString (TS.unpack t))
 
 instance Bin Position where
     writeBytes (Position fs l c is_stdlib) = section "Position" $ do
@@ -1935,6 +1959,9 @@ footerBytes ft =
                         [fStrStart ft, fStrCount ft, fChunkStart ft, fChunkCount ft])
     ++ footerMagic (fFormat ft)
 
+-- Out of line: inlined into decodeContainer, it makes every container
+-- read allocate more
+{-# NOINLINE parseFooter #-}
 parseFooter :: BS.ByteString -> Footer
 parseFooter s =
     let len  = BS.length s
@@ -2031,7 +2058,7 @@ finishContainer fmt w finishTables = do
   when (length strs /= nStr) $ internalError "BinData.finishW: string table"
   sb <- wbNew 65536
   wbU32 sb nStr
-  mapM_ (wbString sb . getFString) strs
+  mapM_ (wbFString sb) strs
   strBytes <- wbFreeze sb
   chunks <- readIORef (wChunks w)
   nChunks <- readIORef (wNChunks w)
@@ -2416,28 +2443,12 @@ mkTables walk s ft = do
   mapM_ (\(k, t) -> checkTable k t) (zip (formatKinds fmt) (fTables ft))
   let emptyBoxed :: Array Int v
       emptyBoxed = listArray (0, -1) []
-      emptyChunks :: UArray Int Int
-      emptyChunks = listArray (0, -1) []
-      tbl0 = Tables { tBytes = s, tStrings = emptyBoxed
-                    , tIds = emptyBoxed, tPositions = emptyBoxed
-                    , tTypes = emptyBoxed, tITypes = emptyBoxed
-                    , tSorts = emptyBoxed
-                    , tChunks = emptyChunks, tChunkCount = 0
-                    , tWalk = False }
+      tbl0 = emptyTables s
   -- the string table, interned now (unless walking) and in table
   -- order: FString ids are the Ord of every Id-keyed map, so this must
   -- happen before and in the same order as a sequential decode would
   -- have interned them
-  strs <- runAt tbl0 False (fStrStart ft) (fChunkStart ft) "string table" $ do
-            n <- getU32
-            when (n /= fStrCount ft) $ bad "string count"
-            let loop i acc
-                  | i >= n    = return (reverse acc)
-                  | otherwise = do str <- readBytes
-                                   fs <- if walk then return (mkFString str)
-                                         else In (\_ -> evaluateST (mkFString str))
-                                   loop (i + 1) (fs : acc)
-            loop (0 :: Int) []
+  strs <- readStrTable walk s ft
   let strArr = listArray (0, fStrCount ft - 1) strs :: Array Int FString
   -- the chunk index: every chunk lies within the bodies region
   chunks <- runAt tbl0 False (fChunkStart ft) (BS.length s - footerSize fmt) "chunk index" $ do
@@ -2474,6 +2485,34 @@ mkTables walk s ft = do
                       , tChunks = chunkArr, tChunkCount = nChunks
                       , tWalk = walk }
   return tables
+
+-- Tables with no entries, for the regions read before the tables exist
+emptyTables :: BS.ByteString -> Tables
+emptyTables s =
+  let emptyBoxed :: Array Int v
+      emptyBoxed = listArray (0, -1) []
+  in  Tables { tBytes = s, tStrings = emptyBoxed
+             , tIds = emptyBoxed, tPositions = emptyBoxed
+             , tTypes = emptyBoxed, tITypes = emptyBoxed
+             , tSorts = emptyBoxed
+             , tChunks = listArray (0, -1) [], tChunkCount = 0
+             , tWalk = False }
+
+-- The string table in table order, each string interned as it is read
+-- (unless walking: see mkTables)
+readStrTable :: Bool -> BS.ByteString -> Footer -> ST s [FString]
+readStrTable walk s ft =
+  runAt (emptyTables s) False (fStrStart ft) (fChunkStart ft) "string table" $ do
+    n <- getU32
+    when (n /= fStrCount ft) $
+      internalError "BinData.decode: malformed container (string count)"
+    let loop i acc
+          | i >= n    = return (reverse acc)
+          | otherwise = do f <- readFString
+                           fs <- if walk then return f
+                                 else In (\_ -> evaluateST f)
+                           loop (i + 1) (fs : acc)
+    loop (0 :: Int) []
 
 decodeContainer :: (Bin a) => Bool -> BS.ByteString -> a
 decodeContainer strict s = runST $ do
