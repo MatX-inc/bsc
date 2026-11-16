@@ -75,3 +75,7 @@ link_objects_pass "" mkBug1741_Not
 
 # -------------------------
 
+# Calls of rf.sub under sel and under !sel: the rule always uses rf.sub,
+# so its conflict with "writer" is kept (G0010) and they never fire together
+compile_verilog_pass_warning UseCondMultiUse.bs G0010
+test_c_veri UseCondMultiUse
