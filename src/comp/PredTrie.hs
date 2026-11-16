@@ -4,6 +4,7 @@ module PredTrie(
     PredTrie,
     buildPredTrie,
     lookupPredTrie,
+    lookupCandidates,
     allItems,
     predQuery,
     overlapProbeQuery,
@@ -19,7 +20,7 @@ import qualified Data.Set as S
 import Error(internalError)
 import CType(Type(..), TyCon(..), TISort(..), TyVar, leftTyCon)
 import TypeOps(isPrimTFunName)
-import Pred(Pred(..), Class(inputPositions), expandSyn)
+import Pred(Pred(..), Class(inputPositions), Candidate(..), expandSyn)
 
 -- ---------------------------------------------------------------------------
 -- PredTrie
@@ -106,9 +107,17 @@ sortTrieLeaves f (Node m)  = Node (M.map (sortTrieLeaves f) m)
 --   Con tc -- the head constructor is tc (possibly applied to args).
 --             Items with the same constructor OR a variable can match.
 --             Probe the Just tc branch AND the Nothing branch.
+--
+--   Var    -- a type variable, bare or applied to arguments, at a
+--            pure-input position of a predicate being resolved against
+--            the instances.  A one-way match binds the item's variables
+--            to the query's types, never the reverse, so only items with
+--            a variable at this position can match: lookupCandidates
+--            marks the others ruled out; lookupPredTrie treats it as
+--            Free, for walks that unify.
 -- ---------------------------------------------------------------------------
 
-data QueryElem = Free | Bound | Con TyCon
+data QueryElem = Free | Bound | Con TyCon | Var
     deriving (Show, Eq)
 
 -- | Collect all items whose trie key is compatible with the given query.
@@ -130,11 +139,51 @@ lookupPredTrie (q:qs) (Node m)  =
         -- branches before the Nothing (catch-all) branch so that more-specific
         -- instances are encountered first by the type checker's scan.
         -- (M.elems would put Nothing first since Nothing < Just in Map order.)
-        Free    -> let (_, m_nothing, justBranches) = M.splitLookup Nothing m
-                   in  concatMap (lookupPredTrie qs) (M.elems justBranches)
-                       ++ maybe [] (lookupPredTrie qs) m_nothing
+        Free    -> allBranches
+        -- Variable head: every item, as for Free; this is the lookup for
+        -- walks that unify with the items (lookupCandidates is the one
+        -- that marks the ruled-out ones).
+        Var     -> allBranches
   where
     descend k = maybe [] (lookupPredTrie qs) (M.lookup k m)
+    allBranches = let (_, m_nothing, justBranches) = M.splitLookup Nothing m
+                  in  concatMap (lookupPredTrie qs) (M.elems justBranches)
+                      ++ maybe [] (lookupPredTrie qs) m_nothing
+
+-- The items lookupPredTrie returns for the query, in its order, each
+-- marked Try or RuledOut: at a Var position the items under the
+-- constructor branches are ruled out, because match (Unify.hs) binds
+-- the item's variables to the query's types and never the reverse, so
+-- an item whose head at that position is a constructor (a TCon, or a
+-- TAp with a TCon at its left) can never match the query's variable
+-- head there, whatever the rest of the query; the items under the
+-- variable branch go on being classified by the rest of the query.
+-- The ruled-out items are listed rather than dropped, in their place,
+-- because the instance walk (TCMisc.reducePred) still owes each of
+-- them what it did when it tried every instance; so
+--   map candidateInst (lookupCandidates qs t) == lookupPredTrie qs t.
+lookupCandidates :: [QueryElem] -> PredTrie a -> [Candidate a]
+lookupCandidates = go Try
+  where
+    go :: (a -> Candidate a) -> [QueryElem] -> PredTrie a -> [Candidate a]
+    go mark []     (Leaf xs) = map mark xs
+    go _    []     (Node _)  = internalError "PredTrie.lookupCandidates: query too short"
+    go _    (_:_)  (Leaf []) = []
+    go _    (_:_)  (Leaf _)  = internalError "PredTrie.lookupCandidates: query too long (items at leaf)"
+    go mark (q:qs) (Node m)  =
+        case q of
+          Con tc -> descend mark (Just tc) ++ descend mark Nothing
+          Bound  -> descend mark Nothing
+          Free   -> branches mark
+          Var    -> branches RuledOut
+      where
+        descend mark' k = maybe [] (go mark' qs) (M.lookup k m)
+        -- the constructor branches, with the given mark, then the
+        -- variable branch, as lookupPredTrie orders them
+        branches mark' =
+            let (_, m_nothing, justBranches) = M.splitLookup Nothing m
+            in  concatMap (go mark' qs) (M.elems justBranches)
+                ++ maybe [] (go mark qs) m_nothing
 
 -- | Collect ALL items stored in the trie (e.g. for getInsts).
 allItems :: PredTrie a -> [a]
@@ -187,9 +236,9 @@ overlapProbeQuery p@(IsIn c _) =
 -- | Build a query for a predicate, using the class's pre-computed
 -- inputPositions.  Output positions (in the fallback case where all positions
 -- are outputs in some fundep direction) use Free; input positions use
--- mkQueryElem, which returns Con tc for concrete non-function heads, Free for
--- type variables and unevaluated type functions.  Pass S.empty for btvs to
--- suppress Bound (e.g. for instance lookup where Bound would hide
+-- mkQueryElem, which returns Con tc for concrete non-function heads, Var for
+-- type-variable heads and Free for unevaluated type functions.  Pass S.empty
+-- for btvs to suppress Bound (e.g. for instance lookup where Bound would hide
 -- non-matching concrete instances needed for incoherence detection).
 predQuery :: S.Set TyVar -> Pred -> [QueryElem]
 predQuery btvs (IsIn c ts) =
@@ -223,7 +272,8 @@ stableHeadTyCon _ = True  -- TyNum, TyStr
 
 -- | Classify one type argument of the predicate being resolved.
 -- An unstable head (type function, stuck ATF) is treated as Free so that
--- all candidate instances are returned for unification-based filtering.
+-- all candidate instances are returned for unification-based filtering;
+-- a type-variable head is Var (see lookupCandidates).
 -- Pass 'S.empty' for btvs to suppress Bound (never emit Bound in queries).
 mkQueryElem :: S.Set TyVar -> Type -> QueryElem
 mkQueryElem btvs t =
@@ -232,7 +282,8 @@ mkQueryElem btvs t =
         Just _                       -> Free  -- unevaluated type function
         Nothing -> case headVar t of
             Just tv | tv `S.member` btvs -> Bound
-            _                            -> Free
+            Just _                       -> Var
+            Nothing                      -> Free
   where
     -- Walk left through TAp to find the head variable, if any.
     headVar (TVar tv)  = Just tv
