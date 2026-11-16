@@ -1,0 +1,11 @@
+# Issue: a Free query of the instance trie walked a node's branches in
+# Data.Map order over Maybe TyCon, which is string-intern order, and the
+# fresh type variables that context reduction numbers in that order name
+# every later dictionary in the .bo.
+# Fix: each trie node keeps and enumerates its keys in declaration order.
+# Probe: TrieOrder's polymorphic module context leaves Free IsModule queries;
+# its .bo must dump the same alone, behind TrieOrderScramble (Module first),
+# and under -trace-intern-reverse.
+
+batching_bo_pair TrieOrder.bs TrieOrderRoot.bs TrieOrderScramble.bs
+reverse_intern_same_bo TrieOrder.bs

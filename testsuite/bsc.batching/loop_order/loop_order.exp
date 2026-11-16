@@ -1,0 +1,13 @@
+# Issue: the BSV parser's imperative desugaring listed a block's updated
+# variables in Ord Id order, i.e. string-intern order, so the tuple that
+# threads them through the desugared code, and the .bo, depended on what
+# the process had compiled before.
+# Fix: the variables are listed by each name's first sighting in the file.
+# Probe: reuse the existing ImperativeFunctionFor.bsv syntax test (whose loop
+# updates y and x) behind a Classic scrambler that interns x before y, and
+# under -trace-intern-reverse; the .bo dumps must match.
+
+copy ../../bsc.syntax/bsv05/ImperativeFunctionFor.bsv ImperativeFunctionFor.bsv
+batching_bo_pair ImperativeFunctionFor.bsv LoopOrderRoot.bs LoopOrderScramble.bs
+reverse_intern_same_bo ImperativeFunctionFor.bsv
+erase ImperativeFunctionFor.bsv

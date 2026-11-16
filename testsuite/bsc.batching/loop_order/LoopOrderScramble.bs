@@ -1,0 +1,9 @@
+package LoopOrderScramble where
+
+-- Parsed before ImperativeFunctionFor in the batch: interns "x" before "y"
+-- (ImperativeFunctionFor declares y first and x second).
+x :: Integer
+x = 0
+
+y :: Integer
+y = 0

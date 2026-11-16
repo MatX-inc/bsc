@@ -1,0 +1,4 @@
+package LiftDictsOrder where
+
+keepVal :: Bit 8 -> Bool
+keepVal x = x == 3

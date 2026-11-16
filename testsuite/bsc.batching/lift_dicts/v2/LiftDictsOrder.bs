@@ -1,0 +1,7 @@
+package LiftDictsOrder where
+
+unrelatedVal :: Bit 16 -> Bool
+unrelatedVal y = y == 7
+
+keepVal :: Bit 8 -> Bool
+keepVal x = x == 3

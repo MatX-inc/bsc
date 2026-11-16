@@ -1,0 +1,11 @@
+# Issue: genNumEqInsts decomposes the more structured side of NumEq#(t, t')
+# and chose it with ordPair (Ord Type), i.e. by type variables' string-intern
+# ids, an order bsc -u takes from how the root lists its imports; so
+# Bug782_Div_OK was rejected with T0030 behind a scrambler package.
+# Fix: both ordPair sites use ordPairBy cmpTypeShape, an order by content.
+# Probe: compile the Classic translation alone, with -u behind a scrambler
+# that interns its type variables in reverse order, and under
+# -trace-intern-reverse; all compiles must succeed and dump the same .bo.
+
+batching_bo_pair Bug782_Div_OK_Batch.bs Bug782_Div_OK_BatchTop.bs Bug782_Div_OK_BatchPre.bs
+reverse_intern_same_bo Bug782_Div_OK_Batch.bs

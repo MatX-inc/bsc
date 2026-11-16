@@ -423,7 +423,10 @@ joinCtxsNG :: JoinGoal g => [TyVar] -> [g] ->
               Maybe (([g], Subst, SolvedBind, VPred), (Int, [VPred], VPred, VPred))
 joinCtxsNG bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
   where blob_list = [ b | g <- vps, b <- goalBlobs g ]
-        joined_blob_list = joinByFst blob_list
+        -- groups in first-occurrence order: the first group with a
+        -- joinable pair decides which join happens first, and the
+        -- key's Ord (class name, types) is intern order
+        joined_blob_list = joinByFstStable blob_list
         matchBlobs ((_,n,_), gvs) =
             fmap (\ (r, (v1, v2)) -> (r, (n, gvs, v1, v2))) (joinInGroup bound_tyvars vps n gvs)
 

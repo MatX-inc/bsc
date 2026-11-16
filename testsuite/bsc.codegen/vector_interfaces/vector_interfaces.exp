@@ -16,12 +16,12 @@ find_regexp tcwrapper.out \
     {_tcdict[0-9]+[ \t]*=[ \t]+_tcdict[0-9]+[ \t]*;}
 find_regexp_fail ldwrapper.out \
     {_tcdict[0-9]+[ \t]*=[ \t]+_tcdict[0-9]+[ \t]*;}
-find_regexp ldwrapper.out {_lifted_dict[0-9]+}
+find_regexp ldwrapper.out {(_lifted_dict[0-9]+|_dict_)}
 compile_backend_pass WrapFieldRepeat.bs \
     {-no-lift-dicts -dwrapper_liftdicts=noldwrapper.out} 1
 find_regexp noldwrapper.out \
     {_tcdict[0-9]+[ \t]*=[ \t]+_tcdict[0-9]+[ \t]*;}
-find_regexp_fail noldwrapper.out {_lifted_dict[0-9]+}
+find_regexp_fail noldwrapper.out {(_lifted_dict[0-9]+|_dict_)}
 
 # Both wrappers need the host package's local instance definitions.  Their
 # lifted names must also avoid package definitions and previous wrappers.
@@ -33,7 +33,7 @@ foreach flags {{} {-no-lift-dicts}} {
     if {$flags eq {}} {
         foreach wrapper {mkEncodedRegs mkDerivedRegs} {
             find_regexp WrapperDicts.$wrapper.liftdicts.out \
-                {_lifted_dict[0-9]+}
+                {(_lifted_dict[0-9]+|_dict_)}
             find_regexp_fail WrapperDicts.$wrapper.liftdicts.out \
                 {_tcdict[0-9]+[ \t]*=[ \t]+_tcdict[0-9]+[ \t]*;}
         }

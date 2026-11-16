@@ -7,4 +7,4 @@
 compile_pass v1/StaleT.bs
 compile_pass v2/StaleT.bs
 copy v1/StaleT.bo StaleT.bo
-bluetcl_run_bh_compare_pass_bug stale.tcl {} {} {} "stale synonym payload after a package reload"
+bluetcl_run_bh_compare_pass stale.tcl

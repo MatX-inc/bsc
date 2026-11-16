@@ -5956,10 +5956,12 @@ parse tokens into CSyntax
 >                   String -> String -> [SV_Token] ->
 >                   IO (CPackage, [WMsg])
 > bsvParseTokens errh flags filename defaultPkgName tokens =
->     do let initPos | null tokens = initialPosition filename
->                    | otherwise = start_position (head tokens)
+>     do let initPos = case tokens of
+>                        []      -> initialPosition filename
+>                        (tok:_) -> start_position tok
 >        result <- runParser (pPackageWithWarnings defaultPkgName)
->                  (emptyParserState errh flags) initPos tokens
+>                  ((emptyParserState errh flags) { firstSeen = firstSightings tokens })
+>                  initPos tokens
 >        case result of
 >          Left  errs         -> bsError errh errs
 >          Right (pkg, warns) -> return (pkg, warns)
