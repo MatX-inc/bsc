@@ -1,0 +1,11 @@
+checking package dependencies
+compiling KindMemoWarn.bs
+Warning: "KindMemoWarn.bs", line 14, column 16: (T0165)
+  Pattern matching in the clauses for `tripIncomplete' is not exhaustive. The
+  following pattern is not covered:
+    MB Invalid
+Warning: "KindMemoWarn.bs", line 29, column 14: (T0166)
+  This pattern in the clauses for `pairRedundant' can never match, because the
+  preceding patterns cover all of its cases:
+    KA KA
+All packages are up to date.

@@ -1,0 +1,10 @@
+package GuardPlaceContradict where
+
+data WG = WG Bool
+  deriving (Eq, Bits)
+
+-- The guard denies the very value the as-pattern requires, so the first
+-- clause can never match.
+contradictsPattern :: WG -> Bit 2
+contradictsPattern (WG b@True) when not b = 0
+contradictsPattern (WG _) = 1

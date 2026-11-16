@@ -1,0 +1,11 @@
+checking package dependencies
+compiling UnderscoreName.bs
+Warning: "UnderscoreName.bs", line 6, column 6: (T0165)
+  Pattern matching in the clauses for `_foo' is not exhaustive. The following
+  pattern is not covered:
+    Invalid
+Warning: "UnderscoreName.bs", line 16, column 8: (T0165)
+  Pattern matching in the clauses for `uconv' is not exhaustive. The following
+  pattern is not covered:
+    _ Invalid
+All packages are up to date.

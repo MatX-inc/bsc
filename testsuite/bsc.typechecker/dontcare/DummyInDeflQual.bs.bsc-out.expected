@@ -2,6 +2,10 @@ checking package dependencies
 compiling DummyInDeflQual.bs
 Warning: "DummyInDeflQual.bs", line 5, column 10: (P0223)
   Definition of `x' is not used.
+Warning: "DummyInDeflQual.bs", line 5, column 10: (T0165)
+  Pattern matching in the clauses for `f' is not exhaustive. The following
+  pattern is not covered:
+    _
 === internal (DummyInDeflQual):
 IPackage DummyInDeflQual
   --linked packages

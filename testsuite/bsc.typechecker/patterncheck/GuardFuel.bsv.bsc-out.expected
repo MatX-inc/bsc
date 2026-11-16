@@ -1,0 +1,7 @@
+checking package dependencies
+compiling GuardFuel.bsv
+Warning: "GuardFuel.bsv", line 9, column 15: (T0166)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    tagged FuelA
+All packages are up to date.

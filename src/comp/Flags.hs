@@ -97,6 +97,7 @@ data Flags = Flags {
         optSched :: Bool,
         optUndet :: Bool,
         parallelSimLink :: Integer,
+        patternCheckFuel :: Int,
         printFlags :: Bool,
         printFlagsHidden :: Bool,
         printFlagsRaw :: Bool,
@@ -164,7 +165,9 @@ data Flags = Flags {
         verilogDeclareAllFirst :: Bool,
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
+        warnIncompletePatterns :: Bool,
         warnMethodUrgency :: Bool,
+        warnOverlappingPatterns :: Bool,
         warnUndetPred :: Bool,
         -- derive the Verilog "Ports:" comment from the APackage analysis
         -- (getIOPropsA) instead of the netlist measurement; off by default
