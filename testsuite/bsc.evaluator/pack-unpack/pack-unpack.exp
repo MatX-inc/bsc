@@ -239,7 +239,7 @@ compile_verilog_pass ImpCondMethodArg.bs mkImpCondMethodArg
 if { $vtest == 1 } {
     find_n_strings mkImpCondHold.v {assign rdy = f$EMPTY_N ;} 1
     find_n_strings mkImpCondHoldVec.v {assign rdy = f$EMPTY_N ;} 1
-    find_n_strings mkImpCondMethodArg.v {assign hasNext = inner$RDY_tryEmit && q$EMPTY_N ;} 1
+    find_n_strings mkImpCondMethodArg.v {assign hasNext = q$EMPTY_N && inner$RDY_tryEmit ;} 1
 }
 
 # ---------------

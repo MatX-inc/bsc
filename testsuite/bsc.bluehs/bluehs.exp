@@ -12,4 +12,8 @@ if { ! [file exists "$bluehs"] } {
 compile_pass Strings.bs
 bluehs_run_compare_pass IExpandStrings.hs
 
+# SignalNaming / ISignalNaming / ASignalNaming cross-stage ExprName parity
+compile_verilog_pass SignalNamingMod.bs mkSignalNamingMod "-elab"
+bluehs_run_compare_pass SignalNamingTest.hs
+
 }

@@ -43,14 +43,14 @@ dim_sysMergeIf =
 rule_RL_r1_sysMergeIf :: MOD_sysMergeIf -> (Bool, MOD_sysMergeIf, ());
 rule_RL_r1_sysMergeIf =
     (\ (state0 :: MOD_sysMergeIf) ->
-     let { (def_s1__h348 :: Bit #1) = meth_read_RegN (inst_s1__sysMergeIf state0)
-	 ; (def_f2_i_notFull____d3 :: Bit #1) = meth_i_notFull_FIFO2 (inst_f2__sysMergeIf state0)
-	 ; (def_f1_i_notFull____d4 :: Bit #1) = meth_i_notFull_FIFO2 (inst_f1__sysMergeIf state0)
-	 ; (def_f3_i_notFull____d1 :: Bit #1) = meth_i_notFull_FIFO2 (inst_f3__sysMergeIf state0)
-	 ; (def_IF_s1_THEN_f2_i_notFull_ELSE_f1_i_notFull___d5 :: Bit #1) =
-	       if (bitToBool def_s1__h348) then def_f2_i_notFull____d3 else def_f1_i_notFull____d4
-	 ; (def_f3_i_notFull_AND_IF_s1_THEN_f2_i_notFull_ELSE__ETC___d6 :: Bool) =
-	       (bitToBool def_f3_i_notFull____d1) && (bitToBool def_IF_s1_THEN_f2_i_notFull_ELSE_f1_i_notFull___d5)
+     let { (def_s1_hvncv :: Bit #1) = meth_read_RegN (inst_s1__sysMergeIf state0)
+	 ; (def_f1_FULL_N_h6e4f :: Bit #1) = meth_i_notFull_FIFO2 (inst_f1__sysMergeIf state0)
+	 ; (def_f2_FULL_N_hiqhp :: Bit #1) = meth_i_notFull_FIFO2 (inst_f2__sysMergeIf state0)
+	 ; (def_IF_s1_THEN_f2_FULL_N_ELSE_f1_FULL_N_hz5yr :: Bit #1) =
+	       if (bitToBool def_s1_hvncv) then def_f2_FULL_N_hiqhp else def_f1_FULL_N_h6e4f
+	 ; (def_f3_FULL_N_hqmfv :: Bit #1) = meth_i_notFull_FIFO2 (inst_f3__sysMergeIf state0)
+	 ; (def_f3_FULL_N_AND_IF_s1_THEN_f2_FULL_N_ELSE_f1_FULL_N_hj234 :: Bool) =
+	       (bitToBool def_f3_FULL_N_hqmfv) && (bitToBool def_IF_s1_THEN_f2_FULL_N_ELSE_f1_FULL_N_hz5yr)
 	 ; (act1 :: (Bool, MOD_RegN #17, ())) = meth_write_RegN (5 :: Bit #17) (inst_a__sysMergeIf state0)
 	 ; (guard1 :: Bool) = fst3 act1
 	 ; (state1 :: MOD_sysMergeIf) = state0 { inst_a__sysMergeIf = snd3 act1 }
@@ -66,12 +66,12 @@ rule_RL_r1_sysMergeIf =
 	 ; (act5 :: (Bool, MOD_FIFO2 #17, ())) = meth_enq_FIFO2 (12 :: Bit #17) (inst_f1__sysMergeIf state4)
 	 ; (guard5 :: Bool) = guard4 && (fst3 act5)
 	 ; (state5 :: MOD_sysMergeIf) = state4 { inst_f1__sysMergeIf = snd3 act5 }
-	 ; (guard6 :: Bool) = if (bitToBool def_s1__h348) then guard3 else guard5
-	 ; (state6 :: MOD_sysMergeIf) = if (bitToBool def_s1__h348) then state3 else state5
+	 ; (guard6 :: Bool) = if (bitToBool def_s1_hvncv) then guard3 else guard5
+	 ; (state6 :: MOD_sysMergeIf) = if (bitToBool def_s1_hvncv) then state3 else state5
 	 ; (act7 :: (Bool, MOD_FIFO2 #17, ())) = meth_enq_FIFO2 (22 :: Bit #17) (inst_f3__sysMergeIf state6)
 	 ; (guard7 :: Bool) = guard6 && (fst3 act7)
 	 ; (state7 :: MOD_sysMergeIf) = state6 { inst_f3__sysMergeIf = snd3 act7 }
 	 }
-     in mktuple (def_f3_i_notFull_AND_IF_s1_THEN_f2_i_notFull_ELSE__ETC___d6 && guard7) state7 ());
+     in mktuple (def_f3_FULL_N_AND_IF_s1_THEN_f2_FULL_N_ELSE_f1_FULL_N_hj234 && guard7) state7 ());
 
 -----

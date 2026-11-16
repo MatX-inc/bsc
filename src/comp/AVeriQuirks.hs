@@ -3,7 +3,7 @@ module AVeriQuirks (aVeriQuirks) where
 import Data.List(tails, partition, sortOn)
 import Data.Maybe(catMaybes)
 import IntegerUtil(integerAnd, integerOr)
-import Util(itos, makePairs)
+import Util(makePairs)
 import PPrint
 import IntLit
 import ErrorUtil(internalError)
@@ -25,15 +25,15 @@ import ASyntax
 import ASyntaxUtil
 import ForeignFunctions(isAVId, fromAVId)
 -- import AOpt(aOptBoolExpr)
-import SignalNaming
+import ASignalNaming(collectASPackageExistingIds, mkSignalNamingEnvFromASPackage, signalAExpr)
+import SignalNaming(AnchorCollision(..), SignalNameTable, SignalNamingEnv,
+                    allocSignalTempName, initSignalNameTable, reserveExistingSignalName)
 import Debug.Trace(traceM)
 
 
 
 -- =====
 -- Naming conventions
-aVeriQuirksPref :: String
-aVeriQuirksPref = "__q"
 
 debug :: Bool
 --debug = True
@@ -49,8 +49,8 @@ data QState = QState {
     qs_useNegate     :: Bool,
     qs_readableMux   :: Bool,
   -- state
-    -- unique name generator
-    uniqueId :: Integer,
+    qs_namingEnv     :: SignalNamingEnv,
+    qs_nameTable     :: SignalNameTable,
     -- definitions processed so far
     -- at the end, these become the defs of the resulting module
     defs     :: [ADef],
@@ -82,20 +82,21 @@ addDef newdef@(ADef i t e p) = do
                rlm1 = if (defPropsHasNoCSE p)
                       then rlm
                       else M.insertWith keepBest (e,t) i rlm
+               nt1 = reserveExistingSignalName (getIdBaseString i) (qs_nameTable state)
            when debug $ traceM("VeriQ adding: " ++ ppReadable newdef)
-           put state{defs = (newdef:olddefs), rlookup = rlm1 }
+           put state{ defs = (newdef:olddefs), rlookup = rlm1, qs_nameTable = nt1 }
 
 
 -- Generates a new Id from the Expression to give to it
 genIdFromAExpr :: AExpr -> QQState AId
 genIdFromAExpr expr = do
         state <- get
-        oldId <- gets uniqueId
-        put state{ uniqueId = oldId + 1 }
+        let env = qs_namingEnv state
+            (chosen, nt') = allocSignalTempName env (signalAExpr env expr) (qs_nameTable state)
+        put state{ qs_nameTable = nt' }
         return $ mkId
             noPosition -- XXX aexpr should have an instance of HasPosition
-            (mkFString (signalNameFromAExpr expr ++
-                        aVeriQuirksPref ++ itos oldId))
+            (mkFString chosen)
 
 -- Add the expression -- really the definition to the monad
 addExpr :: AType -> AExpr -> QQState AId
@@ -117,13 +118,22 @@ aVeriQuirks :: Flags -> ASPackage -> ASPackage
 aVeriQuirks flags pkg =
         evalState action initState
   where
+        namingEnv0 = mkSignalNamingEnvFromASPackage flags pkg
+        nameTable0 =
+            case initSignalNameTable namingEnv0 (collectASPackageExistingIds pkg) of
+                Left (AnchorCollision nm k1 k2) ->
+                    internalError
+                        ("AVeriQuirks: anchor collision on " ++
+                         nm ++ " (" ++ show k1 ++ " vs " ++ show k2 ++ ")")
+                Right tbl -> tbl
         initState =
             QState {
                 qs_keepAddSize = keepAddSize flags,
                 qs_rmPrimModules = removePrimModules flags,
                 qs_useNegate = useNegate flags,
                 qs_readableMux = readableMux flags,
-                uniqueId = 1,
+                qs_namingEnv = namingEnv0,
+                qs_nameTable = nameTable0,
                 defs = [],
                 rlookup = M.empty,
                 sourceTypes = sourceTypeLookup

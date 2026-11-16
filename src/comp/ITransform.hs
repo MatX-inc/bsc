@@ -20,6 +20,7 @@ import Prelude hiding ((<>))
 
 import Control.Monad(foldM, forM)
 import Control.Monad.State.Strict(State, runState, gets, get, put)
+import Data.Array(Array, listArray, (!))
 import Data.List((\\), sortOn)
 import Data.Ord(Down(..))
 import qualified Data.Map.Strict as M
@@ -40,6 +41,7 @@ import ISyntax
 import ISyntaxUtil
 import IPrims(doPrimOp)
 import IInline(iSortDs, iInline)
+import ISignalNaming(nameIModuleDefs)
 import MapTurns(Found(..), lookupTurns, insertTurns)
 import BExpr
 
@@ -84,8 +86,54 @@ iTransExprLoop e =
 
 iTransform :: ErrorHandle -> Flags -> String -> IModule a -> IModule a
 iTransform errh flags prefix =
+          applyTempNames flags .
           iInline False .                -- XXX only for debug
         iTransform1 1 errh flags prefix . iSortDs
+
+applyTempNames :: Flags -> IModule a -> IModule a
+applyTempNames flags m0 =
+    let tempMap = nameIModuleDefs flags m0
+        ds0 = imod_local_defs m0
+        nds = length ds0
+        dpos =
+            M.fromList
+                [ (i', k)
+                | (k, IDef i _ _ _) <- zip [0 :: Int ..] ds0
+                , let !i' = iTransRenameId tempMap i
+                ]
+        defsArr' = listArray (0, nds - 1) defs'
+        defs' =
+            [ IDef (iTransRenameId tempMap i) ty (renExpr e) props
+            | IDef i ty e props <- ds0
+            ]
+        renExpr = iTransRenameIdsInExprWithDefs tempMap dpos defsArr'
+        renRules (IRules sps rlist) =
+            IRules sps
+                [ r { irule_pred = renExpr (irule_pred r)
+                    , irule_body = renExpr (irule_body r)
+                    }
+                | r <- rlist
+                ]
+    in if M.null tempMap
+       then m0
+       else m0 { imod_state_insts =
+                     [ (i, sv { isv_iargs = map renExpr (isv_iargs sv) })
+                     | (i, sv) <- imod_state_insts m0
+                     ]
+               , imod_local_defs = defs'
+               , imod_rules = renRules (imod_rules m0)
+               , imod_interface =
+                     [ IEFace i args
+                           (fmap (\(e, t) -> (renExpr e, t)) mval)
+                           (fmap renRules mbody)
+                           wp fi
+                     | IEFace i args mval mbody wp fi <- imod_interface m0
+                     ]
+               , imod_expr_types =
+                     [ (renExpr e, ts)
+                     | (e, ts) <- imod_expr_types m0
+                     ]
+               }
 
 iTransform1 :: Integer -> ErrorHandle -> Flags -> String ->
                IModule a -> IModule a
@@ -1864,18 +1912,34 @@ iTransFixupDefNames flags = do
 -- given a map from old to new identifiers, replace all occurrences
 -- of the old identifier with the new in a given expression
 iTransRenameIdsInExpr :: M.Map Id Id -> IExpr a -> IExpr a
-iTransRenameIdsInExpr rename_map expr@(ICon name value@(ICValue {})) =
-    let renamed_value_def = iTransRenameIdsInExpr rename_map (iValDef value)
+iTransRenameIdsInExpr rename_map =
+    iTransRenameIdsInExprWithDefs rename_map M.empty (listArray (0, -1) [])
+
+-- Rename identifiers while tying ICValue body references back to shared
+-- renamed IDef bodies (via a pre-indexed Array, matching IInline) so DAG
+-- sharing across local defs is preserved instead of unrolling into a tree.
+iTransRenameIdsInExprWithDefs ::
+    M.Map Id Id ->
+    M.Map Id Int ->
+    Array Int (IDef a) ->
+    IExpr a ->
+    IExpr a
+iTransRenameIdsInExprWithDefs rename_map dpos def_arr (ICon name value@(ICValue {})) =
+    let name' = iTransRenameId rename_map name
+        renamed_value_def =
+            case M.lookup name' dpos of
+                Just k -> let IDef _ _ body' _ = def_arr ! k in body'
+                Nothing -> iTransRenameIdsInExprWithDefs rename_map dpos def_arr (iValDef value)
         new_value = value { iValDef = renamed_value_def }
-    in  ICon (iTransRenameId rename_map name) new_value
-iTransRenameIdsInExpr rename_map (IAps func types args) =
-    let renamed_func = iTransRenameIdsInExpr rename_map func
-        renamed_args = [iTransRenameIdsInExpr rename_map arg | arg <- args]
+    in  ICon name' new_value
+iTransRenameIdsInExprWithDefs rename_map dpos def_arr (IAps func types args) =
+    let renamed_func = iTransRenameIdsInExprWithDefs rename_map dpos def_arr func
+        renamed_args = [iTransRenameIdsInExprWithDefs rename_map dpos def_arr arg | arg <- args]
     in  IAps renamed_func types renamed_args
-iTransRenameIdsInExpr rename_map (ICon i (ICUndet t k (Just v))) =
-    let v' = iTransRenameIdsInExpr rename_map v
-    in ICon i (ICUndet t k (Just v'))
-iTransRenameIdsInExpr rename_map expr = expr
+iTransRenameIdsInExprWithDefs rename_map dpos def_arr (ICon i (ICUndet t k (Just v))) =
+    let v' = iTransRenameIdsInExprWithDefs rename_map dpos def_arr v
+    in  ICon i (ICUndet t k (Just v'))
+iTransRenameIdsInExprWithDefs _ _ _ expr = expr
 
 -- given a map from old to new identifiers, replace all occurrences
 -- of the old identifier with the new in a given definition,

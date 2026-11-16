@@ -1,0 +1,103 @@
+# Verify SignalNaming localized-edit naming, clean user binders,
+# <stem>_h<h4> unnamed temporaries, left-to-right per-callee noinline instance
+# numbering, combinational always@(...) ordering by driven LHS, and invariance
+# under -trace-intern-reverse and `bsc -u` batching (under both default flags
+# and the readable-RTL + -opt-join-defs flag bundle).
+
+set readable_flags {-no-aggressive-conditions -keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched -no-opt-aggressive-inline -no-opt-AndOr -opt-join-defs}
+
+proc check_mux_order { vfile } {
+    global subdir
+    set fp [open [file join $subdir $vfile] r]
+    set content [read $fp]
+    close $fp
+    set idxAlpha [string first "muxAlpha =" $content]
+    set idxZeta  [string first "muxZeta =" $content]
+    if { $idxAlpha < 0 || $idxZeta < 0 } {
+        fail "$vfile: expected both muxAlpha and muxZeta case assignments"
+    } elseif { $idxAlpha >= $idxZeta } {
+        fail "$vfile: expected combinational always block for muxAlpha before muxZeta"
+    } else {
+        pass "$vfile: combinational always blocks ordered by driven LHS (muxAlpha < muxZeta)"
+    }
+}
+
+proc collect_matching_wires { vfile pat } {
+    global subdir
+    set fp [open [file join $subdir $vfile] r]
+    set lines [split [read $fp] "\n"]
+    close $fp
+    set out {}
+    foreach line $lines {
+        if { [regexp $pat $line] } {
+            lappend out [string trim $line]
+        }
+    }
+    return [lsort -unique $out]
+}
+
+if { $vtest == 1 } {
+    # 1.Readable-RTL + -opt-join-defs flag bundle check and localized edit stability
+    compile_verilog_pass SignalNamingBefore.bs mkPropChurn $readable_flags
+    copy mkPropChurn.v mkPropChurn.before.v
+
+    # Unique user binders stay clean (no __h<digits> suffix), and legacy serial
+    # counter suffixes (___d<n>, __q<n>, __f<n>, __h<digits>) do not appear.
+    find_regexp mkPropChurn.before.v {reg \[15 : 0\] muxAlpha, muxZeta;}
+    find_regexp mkPropChurn.before.v {wire \[15 : 0\] a1,}
+    find_regexp_fail mkPropChurn.before.v {___d[0-9]+}
+    find_regexp_fail mkPropChurn.before.v {__q[0-9]+}
+    find_regexp_fail mkPropChurn.before.v {__f[0-9]+}
+    find_regexp_fail mkPropChurn.before.v {__h[0-9]+}
+
+    # Per-callee left-to-right noinline instance numbering:
+    # helperAlpha has 0 and 1; helperBeta starts at 0 independently.
+    find_regexp mkPropChurn.before.v {module_helperAlpha instance_helperAlpha_0\(}
+    find_regexp mkPropChurn.before.v {module_helperAlpha instance_helperAlpha_1\(}
+    find_regexp mkPropChurn.before.v {module_helperBeta instance_helperBeta_0\(}
+
+    # Combinational always@(...) case blocks sort by driven LHS.
+    check_mux_order mkPropChurn.before.v
+
+    # Compile edited module (adds local logic in rl_left and appends a second
+    # helperBeta call in rl_right while leaving rl_right's existing expressions
+    # and helperAlpha's two call sites untouched).
+    compile_verilog_pass SignalNamingAfter.bs mkPropChurn $readable_flags
+    copy mkPropChurn.v mkPropChurn.after.v
+
+    find_regexp mkPropChurn.after.v {module_helperAlpha instance_helperAlpha_0\(}
+    find_regexp mkPropChurn.after.v {module_helperAlpha instance_helperAlpha_1\(}
+    find_regexp mkPropChurn.after.v {module_helperBeta instance_helperBeta_0\(}
+    find_regexp mkPropChurn.after.v {module_helperBeta instance_helperBeta_1\(}
+    check_mux_order mkPropChurn.after.v
+
+    # Every unnamed _h<base36> temporary from rl_right in before.v must survive
+    # with the exact same signal name and RHS assignment in after.v (no serial
+    # renumbering cascade from edits in rl_left).
+    set right_assigns_before [collect_matching_wires mkPropChurn.before.v {assign .*(b0|a1|0055|00aa).*_h[0-9a-z]{4}\s*=}]
+    if { [llength $right_assigns_before] == 0 } {
+        fail "expected unnamed _h4 temporaries in rl_right of mkPropChurn.before.v"
+    } else {
+        set after_assigns [collect_matching_wires mkPropChurn.after.v {assign .*_h[0-9a-z]{4}\s*=}]
+        set missing 0
+        foreach line $right_assigns_before {
+            if { [lsearch -exact $after_assigns $line] < 0 } {
+                set missing 1
+                fail "untouched rl_right temporary drifted after local edit: $line"
+            }
+        }
+        if { $missing == 0 } {
+            pass "all untouched rl_right _h4 temporaries stayed identical across local edit"
+        }
+    }
+}
+
+reverse_intern_same_bo SignalNamingBefore.bs
+reverse_intern_same_bo SignalNamingAfter.bs
+
+reverse_intern_same_verilog SignalNamingBefore.bs mkPropChurn {-keep-fires}
+reverse_intern_same_verilog SignalNamingBefore.bs mkPropChurn $readable_flags
+reverse_intern_same_verilog SignalNamingAfter.bs mkPropChurn $readable_flags
+
+batching_verilog_pair SignalNamingBefore.bs mkPropChurn SignalNamingBatchTop.bs mkSignalNamingBatchTop {SignalNamingScramble.bs} $readable_flags
+check_verilog_regen SignalNamingBefore.bs mkPropChurn $readable_flags

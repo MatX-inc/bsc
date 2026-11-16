@@ -46,90 +46,88 @@ module mkDesign(clk,
   wire [10 : 0] result;
 
   // remaining internal signals
-  wire [5 : 0] _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_I_ETC___d45,
-	       _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_r_ETC___d36,
-	       _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_result_a_BITS_ETC___d27,
-	       _0_CONCAT_IF_0_CONCAT_result_a_BITS_8_TO_4_PLUS_ETC___d18,
-	       _0_CONCAT_result_a_BITS_8_TO_4_PLUS_0_CONCAT_IN_ETC___d9;
-  wire [4 : 0] IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCA_ETC___d42,
-	       IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCA_ETC__q4,
-	       IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_result_a_B_ETC___d33,
-	       IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_result_a_B_ETC__q3,
-	       IF_0_CONCAT_IF_0_CONCAT_result_a_BITS_8_TO_4_P_ETC___d24,
-	       IF_0_CONCAT_IF_0_CONCAT_result_a_BITS_8_TO_4_P_ETC__q2,
-	       IF_0_CONCAT_result_a_BITS_8_TO_4_PLUS_0_CONCAT_ETC___d15,
-	       IF_0_CONCAT_result_a_BITS_8_TO_4_PLUS_0_CONCAT_ETC__q1,
-	       _theResult_____1_snd__h755,
-	       notB__h260,
-	       quotient__h275;
+  wire [5 : 0] _0_CONCAT_IF_theResult_____2_snd_THEN_partRem4_ETC_h0p7m,
+	       _0_CONCAT_IF_theResult_____3_snd_THEN_partRem3_ETC_hd1af,
+	       _0_CONCAT_IF_theResult_____4_snd_THEN_partRem2_ETC_ht5s0,
+	       _0_CONCAT_IF_theResult_____5_snd_THEN_partRem1_ETC_h51bb,
+	       _0_CONCAT_partRem1_PLUS_0_CONCAT_notB_PLUS_1_h3t3u;
+  wire [4 : 0] IF_0_CONCAT_IF_theResult_____3_snd_THEN_partRe_ETC_hc218,
+	       IF_0_CONCAT_IF_theResult_____4_snd_THEN_partRe_ETC_hdho5,
+	       IF_0_CONCAT_IF_theResult_____5_snd_THEN_partRe_ETC_hxqty,
+	       IF_0_CONCAT_partRem1_PLUS_0_CONCAT_notB_PLUS_1_ETC_hg8fe,
+	       IF_theResult_____2_snd_THEN_partRem4_ELSE_IF_t_ETC_huiq6,
+	       IF_theResult_____3_snd_THEN_partRem3_ELSE_IF_t_ETC_hgtpq,
+	       IF_theResult_____4_snd_THEN_partRem2_ELSE_IF_t_ETC_hgwpn,
+	       IF_theResult_____5_snd_THEN_partRem1_ELSE_part_ETC_hjpjw,
+	       _theResult_____1_snd,
+	       notB,
+	       quotient;
 
   // value method result
   assign result =
-	     { result_a[9:5] >= result_b,
-	       _theResult_____1_snd__h755,
-	       quotient__h275 } ;
+	     { result_a[9:5] >= result_b, _theResult_____1_snd, quotient } ;
 
   // remaining internal signals
-  assign IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCA_ETC___d42 =
-	     { IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCA_ETC__q4[3:0],
-	       result_a[0] } ;
-  assign IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCA_ETC__q4 =
-	     _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_r_ETC___d36[5] ?
-	       _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_r_ETC___d36[4:0] :
-	       IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_result_a_B_ETC___d33 ;
-  assign IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_result_a_B_ETC___d33 =
-	     { IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_result_a_B_ETC__q3[3:0],
-	       result_a[1] } ;
-  assign IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_result_a_B_ETC__q3 =
-	     _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_result_a_BITS_ETC___d27[5] ?
-	       _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_result_a_BITS_ETC___d27[4:0] :
-	       IF_0_CONCAT_IF_0_CONCAT_result_a_BITS_8_TO_4_P_ETC___d24 ;
-  assign IF_0_CONCAT_IF_0_CONCAT_result_a_BITS_8_TO_4_P_ETC___d24 =
-	     { IF_0_CONCAT_IF_0_CONCAT_result_a_BITS_8_TO_4_P_ETC__q2[3:0],
-	       result_a[2] } ;
-  assign IF_0_CONCAT_IF_0_CONCAT_result_a_BITS_8_TO_4_P_ETC__q2 =
-	     _0_CONCAT_IF_0_CONCAT_result_a_BITS_8_TO_4_PLUS_ETC___d18[5] ?
-	       _0_CONCAT_IF_0_CONCAT_result_a_BITS_8_TO_4_PLUS_ETC___d18[4:0] :
-	       IF_0_CONCAT_result_a_BITS_8_TO_4_PLUS_0_CONCAT_ETC___d15 ;
-  assign IF_0_CONCAT_result_a_BITS_8_TO_4_PLUS_0_CONCAT_ETC___d15 =
-	     { IF_0_CONCAT_result_a_BITS_8_TO_4_PLUS_0_CONCAT_ETC__q1[3:0],
-	       result_a[3] } ;
-  assign IF_0_CONCAT_result_a_BITS_8_TO_4_PLUS_0_CONCAT_ETC__q1 =
-	     _0_CONCAT_result_a_BITS_8_TO_4_PLUS_0_CONCAT_IN_ETC___d9[5] ?
-	       _0_CONCAT_result_a_BITS_8_TO_4_PLUS_0_CONCAT_IN_ETC___d9[4:0] :
+  assign IF_0_CONCAT_IF_theResult_____3_snd_THEN_partRe_ETC_hc218 =
+	     _0_CONCAT_IF_theResult_____3_snd_THEN_partRem3_ETC_hd1af[5] ?
+	       _0_CONCAT_IF_theResult_____3_snd_THEN_partRem3_ETC_hd1af[4:0] :
+	       IF_theResult_____3_snd_THEN_partRem3_ELSE_IF_t_ETC_hgtpq ;
+  assign IF_0_CONCAT_IF_theResult_____4_snd_THEN_partRe_ETC_hdho5 =
+	     _0_CONCAT_IF_theResult_____4_snd_THEN_partRem2_ETC_ht5s0[5] ?
+	       _0_CONCAT_IF_theResult_____4_snd_THEN_partRem2_ETC_ht5s0[4:0] :
+	       IF_theResult_____4_snd_THEN_partRem2_ELSE_IF_t_ETC_hgwpn ;
+  assign IF_0_CONCAT_IF_theResult_____5_snd_THEN_partRe_ETC_hxqty =
+	     _0_CONCAT_IF_theResult_____5_snd_THEN_partRem1_ETC_h51bb[5] ?
+	       _0_CONCAT_IF_theResult_____5_snd_THEN_partRem1_ETC_h51bb[4:0] :
+	       IF_theResult_____5_snd_THEN_partRem1_ELSE_part_ETC_hjpjw ;
+  assign IF_0_CONCAT_partRem1_PLUS_0_CONCAT_notB_PLUS_1_ETC_hg8fe =
+	     _0_CONCAT_partRem1_PLUS_0_CONCAT_notB_PLUS_1_h3t3u[5] ?
+	       _0_CONCAT_partRem1_PLUS_0_CONCAT_notB_PLUS_1_h3t3u[4:0] :
 	       result_a[8:4] ;
-  assign _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_I_ETC___d45 =
+  assign IF_theResult_____2_snd_THEN_partRem4_ELSE_IF_t_ETC_huiq6 =
+	     { IF_0_CONCAT_IF_theResult_____3_snd_THEN_partRe_ETC_hc218[3:0],
+	       result_a[0] } ;
+  assign IF_theResult_____3_snd_THEN_partRem3_ELSE_IF_t_ETC_hgtpq =
+	     { IF_0_CONCAT_IF_theResult_____4_snd_THEN_partRe_ETC_hdho5[3:0],
+	       result_a[1] } ;
+  assign IF_theResult_____4_snd_THEN_partRem2_ELSE_IF_t_ETC_hgwpn =
+	     { IF_0_CONCAT_IF_theResult_____5_snd_THEN_partRe_ETC_hxqty[3:0],
+	       result_a[2] } ;
+  assign IF_theResult_____5_snd_THEN_partRem1_ELSE_part_ETC_hjpjw =
+	     { IF_0_CONCAT_partRem1_PLUS_0_CONCAT_notB_PLUS_1_ETC_hg8fe[3:0],
+	       result_a[3] } ;
+  assign _0_CONCAT_IF_theResult_____2_snd_THEN_partRem4_ETC_h0p7m =
 	     { 1'd0,
-	       IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCA_ETC___d42 } +
-	     { 1'd0, notB__h260 } +
+	       IF_theResult_____2_snd_THEN_partRem4_ELSE_IF_t_ETC_huiq6 } +
+	     { 1'd0, notB } +
 	     6'd1 ;
-  assign _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_r_ETC___d36 =
+  assign _0_CONCAT_IF_theResult_____3_snd_THEN_partRem3_ETC_hd1af =
 	     { 1'd0,
-	       IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_result_a_B_ETC___d33 } +
-	     { 1'd0, notB__h260 } +
+	       IF_theResult_____3_snd_THEN_partRem3_ELSE_IF_t_ETC_hgtpq } +
+	     { 1'd0, notB } +
 	     6'd1 ;
-  assign _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_result_a_BITS_ETC___d27 =
+  assign _0_CONCAT_IF_theResult_____4_snd_THEN_partRem2_ETC_ht5s0 =
 	     { 1'd0,
-	       IF_0_CONCAT_IF_0_CONCAT_result_a_BITS_8_TO_4_P_ETC___d24 } +
-	     { 1'd0, notB__h260 } +
+	       IF_theResult_____4_snd_THEN_partRem2_ELSE_IF_t_ETC_hgwpn } +
+	     { 1'd0, notB } +
 	     6'd1 ;
-  assign _0_CONCAT_IF_0_CONCAT_result_a_BITS_8_TO_4_PLUS_ETC___d18 =
+  assign _0_CONCAT_IF_theResult_____5_snd_THEN_partRem1_ETC_h51bb =
 	     { 1'd0,
-	       IF_0_CONCAT_result_a_BITS_8_TO_4_PLUS_0_CONCAT_ETC___d15 } +
-	     { 1'd0, notB__h260 } +
+	       IF_theResult_____5_snd_THEN_partRem1_ELSE_part_ETC_hjpjw } +
+	     { 1'd0, notB } +
 	     6'd1 ;
-  assign _0_CONCAT_result_a_BITS_8_TO_4_PLUS_0_CONCAT_IN_ETC___d9 =
-	     { 1'd0, result_a[8:4] } + { 1'd0, notB__h260 } + 6'd1 ;
-  assign _theResult_____1_snd__h755 =
-	     _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_I_ETC___d45[5] ?
-	       _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_I_ETC___d45[4:0] :
-	       IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCA_ETC___d42 ;
-  assign notB__h260 = ~result_b ;
-  assign quotient__h275 =
-	     { _0_CONCAT_result_a_BITS_8_TO_4_PLUS_0_CONCAT_IN_ETC___d9[5],
-	       _0_CONCAT_IF_0_CONCAT_result_a_BITS_8_TO_4_PLUS_ETC___d18[5],
-	       _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_result_a_BITS_ETC___d27[5],
-	       _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_r_ETC___d36[5],
-	       _0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_IF_0_CONCAT_I_ETC___d45[5] } ;
+  assign _0_CONCAT_partRem1_PLUS_0_CONCAT_notB_PLUS_1_h3t3u =
+	     { 1'd0, result_a[8:4] } + { 1'd0, notB } + 6'd1 ;
+  assign _theResult_____1_snd =
+	     _0_CONCAT_IF_theResult_____2_snd_THEN_partRem4_ETC_h0p7m[5] ?
+	       _0_CONCAT_IF_theResult_____2_snd_THEN_partRem4_ETC_h0p7m[4:0] :
+	       IF_theResult_____2_snd_THEN_partRem4_ELSE_IF_t_ETC_huiq6 ;
+  assign notB = ~result_b ;
+  assign quotient =
+	     { _0_CONCAT_partRem1_PLUS_0_CONCAT_notB_PLUS_1_h3t3u[5],
+	       _0_CONCAT_IF_theResult_____5_snd_THEN_partRem1_ETC_h51bb[5],
+	       _0_CONCAT_IF_theResult_____4_snd_THEN_partRem2_ETC_ht5s0[5],
+	       _0_CONCAT_IF_theResult_____3_snd_THEN_partRem3_ETC_hd1af[5],
+	       _0_CONCAT_IF_theResult_____2_snd_THEN_partRem4_ETC_h0p7m[5] } ;
 endmodule  // mkDesign
 

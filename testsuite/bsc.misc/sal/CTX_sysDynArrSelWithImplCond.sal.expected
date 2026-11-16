@@ -19,32 +19,32 @@ BEGIN
      #) ;
   
   meth_get (state0 : STATE) : Bit{8}!T =
-    LET def_idx__h428 : Bit{2}!T = CTX_RegN{2}!meth_read(state0.inst_idx)
-    IN LET def_fs_0_first____d1 : Bit{8}!T = CTX_FIFO2{8}!meth_first(state0.inst_fs_0)
-    IN LET def_fs_1_first____d2 : Bit{8}!T = CTX_FIFO2{8}!meth_first(state0.inst_fs_1)
-    IN LET def_fs_2_first____d3 : Bit{8}!T = CTX_FIFO2{8}!meth_first(state0.inst_fs_2)
-    IN LET def_fs_3_first____d4 : Bit{8}!T = CTX_FIFO2{8}!meth_first(state0.inst_fs_3)
-    IN LET def_ARR_fs_0_first_fs_1_first_fs_2_first_fs_3_first___d5 : ARRAY [0..3] OF Bit{8}!T =
-	     [[ i : [0..3] ] def_fs_0_first____d1 ] WITH [1] := def_fs_1_first____d2
-	     WITH [2] := def_fs_2_first____d3
-	     WITH [3] := def_fs_3_first____d4
-    IN ArrayPrim1{Bit{8}!T;4,2}!arrSelect(def_ARR_fs_0_first_fs_1_first_fs_2_first_fs_3_first___d5,
-					  def_idx__h428) ;
+    LET def_idx_h0ww6 : Bit{2}!T = CTX_RegN{2}!meth_read(state0.inst_idx)
+    IN LET def_fs_0_D_OUT_hg1ad : Bit{8}!T = CTX_FIFO2{8}!meth_first(state0.inst_fs_0)
+    IN LET def_fs_1_D_OUT_h2tu5 : Bit{8}!T = CTX_FIFO2{8}!meth_first(state0.inst_fs_1)
+    IN LET def_fs_2_D_OUT_h9n0j : Bit{8}!T = CTX_FIFO2{8}!meth_first(state0.inst_fs_2)
+    IN LET def_fs_3_D_OUT_hxo4u : Bit{8}!T = CTX_FIFO2{8}!meth_first(state0.inst_fs_3)
+    IN LET def_ARR_fs_0_D_OUT_fs_1_D_OUT_fs_2_D_OUT_fs_3_D_OUT_h9if0 : ARRAY [0..3] OF Bit{8}!T =
+	     [[ i : [0..3] ] def_fs_0_D_OUT_hg1ad ] WITH [1] := def_fs_1_D_OUT_h2tu5
+	     WITH [2] := def_fs_2_D_OUT_h9n0j
+	     WITH [3] := def_fs_3_D_OUT_hxo4u
+    IN ArrayPrim1{Bit{8}!T;4,2}!arrSelect(def_ARR_fs_0_D_OUT_fs_1_D_OUT_fs_2_D_OUT_fs_3_D_OUT_h9if0,
+					  def_idx_h0ww6) ;
   
   meth_RDY_get (state0 : STATE) : BOOLEAN =
-    LET def_idx__h428 : Bit{2}!T = CTX_RegN{2}!meth_read(state0.inst_idx)
-    IN LET def_fs_0_i_notEmpty____d7 : Bit{1}!T = CTX_FIFO2{8}!meth_i_notEmpty(state0.inst_fs_0)
-    IN LET def_fs_1_i_notEmpty____d8 : Bit{1}!T = CTX_FIFO2{8}!meth_i_notEmpty(state0.inst_fs_1)
-    IN LET def_fs_2_i_notEmpty____d9 : Bit{1}!T = CTX_FIFO2{8}!meth_i_notEmpty(state0.inst_fs_2)
-    IN LET def_fs_3_i_notEmpty____d10 : Bit{1}!T = CTX_FIFO2{8}!meth_i_notEmpty(state0.inst_fs_3)
-    IN Prim!bitToBool(IF Prim1{2}!primEQ(def_idx__h428, Bit{2}!mkConst(0))
-			THEN def_fs_0_i_notEmpty____d7
-			ELSE IF Prim1{2}!primEQ(def_idx__h428, Bit{2}!mkConst(1))
-			       THEN def_fs_1_i_notEmpty____d8
-			       ELSE IF Prim1{2}!primEQ(def_idx__h428, Bit{2}!mkConst(2))
-				      THEN def_fs_2_i_notEmpty____d9
-				      ELSE IF Prim1{2}!primEQ(def_idx__h428, Bit{2}!mkConst(3))
-					     THEN def_fs_3_i_notEmpty____d10
+    LET def_fs_3_EMPTY_N_hmthj : Bit{1}!T = CTX_FIFO2{8}!meth_i_notEmpty(state0.inst_fs_3)
+    IN LET def_fs_2_EMPTY_N_hzb4b : Bit{1}!T = CTX_FIFO2{8}!meth_i_notEmpty(state0.inst_fs_2)
+    IN LET def_fs_1_EMPTY_N_h5sqe : Bit{1}!T = CTX_FIFO2{8}!meth_i_notEmpty(state0.inst_fs_1)
+    IN LET def_fs_0_EMPTY_N_h1hzl : Bit{1}!T = CTX_FIFO2{8}!meth_i_notEmpty(state0.inst_fs_0)
+    IN LET def_idx_h0ww6 : Bit{2}!T = CTX_RegN{2}!meth_read(state0.inst_idx)
+    IN Prim!bitToBool(IF Prim1{2}!primEQ(def_idx_h0ww6, Bit{2}!mkConst(0))
+			THEN def_fs_0_EMPTY_N_h1hzl
+			ELSE IF Prim1{2}!primEQ(def_idx_h0ww6, Bit{2}!mkConst(1))
+			       THEN def_fs_1_EMPTY_N_h5sqe
+			       ELSE IF Prim1{2}!primEQ(def_idx_h0ww6, Bit{2}!mkConst(2))
+				      THEN def_fs_2_EMPTY_N_hzb4b
+				      ELSE IF Prim1{2}!primEQ(def_idx_h0ww6, Bit{2}!mkConst(3))
+					     THEN def_fs_3_EMPTY_N_hmthj
 					     ELSE Bit{1}!mkConst(1)
 					   ENDIF
 				    ENDIF

@@ -51,7 +51,7 @@ import PFPrint
 import PPrint(vsep, commaSep)
 import SCC(scc,tsort)
 import Id(Id, emptyId, getIdString, getIdBaseString, getIdPosition,
-          isRdyId, addToBase, mk_homeless_id, mkIdWillFire, addSuffix)
+          isRdyId, addToBase, mk_homeless_id, mkIdWillFire)
 import Position
 import Flags(Flags(..), MsgListFlag(..))
 import VModInfo(vSched, vFields, VSchedInfo, VMethodConflictInfo, VFieldInfo(..))
@@ -5671,8 +5671,23 @@ pfp = pfPrint PDReadable 0
 
 addAllMEAssumps :: [ASchedulePragma] -> [ARule] -> ([ARule],[(ARuleId,[ARuleId])])
 addAllMEAssumps pragmas rules =
-  let new_id i = addSuffix (mk_homeless_id "__me_check") i
-      pairs = concat (zipWith (addMEAssumps pragmas) rules (map new_id [0..]))
+  let stripRL s = fromMaybe s (stripPrefix "RL_" s)
+      existingNames = S.fromList (map (getIdBaseString . arule_id) rules)
+      pickUnique used base =
+        let go :: Integer -> String
+            go k =
+              let cand = if k == 1 then base else base ++ "_" ++ show k
+              in if cand `S.member` used then go (k + 1) else cand
+            chosen = go 1
+        in (S.insert chosen used, mk_homeless_id chosen)
+      step (used, acc) r =
+        let base = "__me_check_" ++ stripRL (getIdBaseString (arule_id r))
+            (used', checkId) = pickUnique used base
+            res = addMEAssumps pragmas r checkId
+            usedFinal = if null res then used else used'
+        in (usedFinal, res : acc)
+      (_, revPairs) = foldl' step (existingNames, []) rules
+      pairs = concat (reverse revPairs)
       (new_rules, orders) = unzip pairs
   in (new_rules, orders)
 

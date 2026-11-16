@@ -1,0 +1,55 @@
+package SignalNamingBefore where
+
+{-# noinline helperAlpha #-}
+helperAlpha :: Bit 16 -> Bit 16 -> Bit 16
+helperAlpha a b = (a + b) ^ 16'h5a5a
+
+{-# noinline helperBeta #-}
+helperBeta :: Bit 16 -> Bit 16
+helperBeta x = (x << 2) + 16'h0011
+
+interface PropChurnIfc =
+    feed :: Bit 16 -> Bit 2 -> Action
+    readOut :: Bit 16
+
+{-# verilog mkPropChurn #-}
+mkPropChurn :: Module PropChurnIfc
+mkPropChurn =
+    module
+        regLeft :: Reg (Bit 16) <- mkReg 0
+        regRight :: Reg (Bit 16) <- mkReg 0
+        regFeed :: Reg (Bit 16) <- mkReg 0
+        regTail :: Reg (Bit 16) <- mkReg 0
+        regSel :: Reg (Bit 2) <- mkReg 0
+        let cleanLeft = regLeft._read + 16'h0003
+
+        rules
+            "rl_left": when True ==> action
+                let a0 = helperAlpha cleanLeft (cleanLeft ^ 16'h0001)
+                regLeft := a0
+
+            "rl_right": when True ==> action
+                let b0 = helperBeta regRight._read
+                let a1 = helperAlpha b0 16'h0007
+                let muxZeta =
+                        case regSel._read of
+                            2'd0 -> b0 + 16'h0101
+                            2'd1 -> a1 ^ 16'h0202
+                            2'd2 -> (b0 & a1) + 16'h0303
+                            _    -> (b0 | a1) ^ 16'h0404
+                let muxAlpha =
+                        case regSel._read of
+                            2'd0 -> a1 + 16'h0010
+                            2'd1 -> b0 ^ 16'h0020
+                            2'd2 -> (a1 - b0) + 16'h0030
+                            _    -> (a1 ^ b0) + 16'h0040
+                regRight := ((muxZeta + muxAlpha) ^ (muxZeta & muxAlpha)) ^ ((b0 + 16'h0055) & (a1 + 16'h00aa))
+
+            "rl_tail": when True ==> action
+                regTail := regFeed._read + 16'h0009
+
+        interface
+            feed x sel = action
+                regSel := sel
+                regFeed := x
+            readOut = regLeft ^ regRight ^ regTail

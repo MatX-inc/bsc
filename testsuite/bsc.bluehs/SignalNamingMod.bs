@@ -1,0 +1,41 @@
+package SignalNamingMod where
+
+import FIFOF
+import RWire
+
+interface SignalNamingIfc =
+    step :: Bit 8 -> Bit 3 -> ActionValue (Bit 8)
+    peek :: Bit 8
+
+{-# verilog mkSignalNamingMod #-}
+mkSignalNamingMod :: Module SignalNamingIfc
+mkSignalNamingMod =
+    module
+        regA :: Reg (Bit 8) <- mkReg 0
+        rw :: RWire (Bit 8) <- mkRWire
+        cr :: Array (Reg (Bit 8)) <- mkCReg 2 0
+        fifo :: FIFOF (Bit 8) <- mkFIFOF
+        let cr0 = primSelectFn noPosition cr 0
+            cr1 = primSelectFn noPosition cr 1
+
+        rules
+            "rl_pipe": when fifo.notEmpty ==> action
+                let fval = fifo.first
+                let cval = cr0._read
+                let sliced = fval[3:0] ++ cval[7:4]
+                rw.wset sliced
+                regA := regA + 1
+                fifo.deq
+
+        interface
+            step x idx =
+                do
+                    let rwVal = case rw.wget of
+                                    Valid v -> v
+                                    Invalid -> 0
+                    let rA = regA._read
+                    let dynBit = zeroExtend (rA[idx : idx])
+                    fifo.enq (x + rwVal + dynBit)
+                    cr1 := x
+                    return (rA + x)
+            peek = regA + cr1._read

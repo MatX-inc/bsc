@@ -25,43 +25,40 @@ BEGIN
      #) ;
   
   rule_RL_r (state0 : STATE) : [ BOOLEAN, STATE ] =
-    LET def_c2__h220 : Bit{1}!T = CTX_RegN{1}!meth_read(state0.inst_c2)
-    IN LET def_c1__h218 : Bit{1}!T = CTX_RegN{1}!meth_read(state0.inst_c1)
-    IN LET def_c3__h278 : Bit{1}!T = CTX_RegN{1}!meth_read(state0.inst_c3)
-    IN LET def_c4__h326 : Bit{1}!T = CTX_RegN{1}!meth_read(state0.inst_c4)
-    IN LET def_c3_AND_NOT_c2___d6 : BOOLEAN =
-	     Prim!bitToBool(def_c3__h278) AND (NOT Prim!bitToBool(def_c2__h220))
-    IN LET def_c2_AND_c3___d9 : BOOLEAN = Prim!bitToBool(def_c2__h220) AND Prim!bitToBool(def_c3__h278)
-    IN LET def_c2_AND_c3_AND_c4_0___d11 : BOOLEAN = def_c2_AND_c3___d9 AND Prim!bitToBool(def_c4__h326)
-    IN LET def_c4_0_AND_NOT_c1___d13 : BOOLEAN =
-	     Prim!bitToBool(def_c4__h326) AND (NOT Prim!bitToBool(def_c1__h218))
-    IN LET def_c4_0_AND_NOT_c1_3_AND_c3___d14 : BOOLEAN =
-	     def_c4_0_AND_NOT_c1___d13 AND Prim!bitToBool(def_c3__h278)
-    IN LET def_c1_AND_c2___d3 : BOOLEAN = Prim!bitToBool(def_c1__h218) AND Prim!bitToBool(def_c2__h220)
-    IN LET def_c3_AND_NOT_c2_AND_NOT_c1___d8 : BOOLEAN =
-	     def_c3_AND_NOT_c2___d6 AND (NOT Prim!bitToBool(def_c1__h218))
-    IN LET def_c2_AND_c3_AND_c4_0_1_AND_c1___d12 : BOOLEAN =
-	     def_c2_AND_c3_AND_c4_0___d11 AND Prim!bitToBool(def_c1__h218)
-    IN LET def_c4_0_AND_NOT_c1_3_AND_c3_4_AND_NOT_c2___d15 : BOOLEAN =
-	     def_c4_0_AND_NOT_c1_3_AND_c3___d14 AND (NOT Prim!bitToBool(def_c2__h220))
+    LET def_c2_hrnqm : Bit{1}!T = CTX_RegN{1}!meth_read(state0.inst_c2)
+    IN LET def_c1_hgmom : Bit{1}!T = CTX_RegN{1}!meth_read(state0.inst_c1)
+    IN LET def_c3_huw5l : Bit{1}!T = CTX_RegN{1}!meth_read(state0.inst_c3)
+    IN LET def_c3_AND_NOT_c2_hfl6c : BOOLEAN =
+	     Prim!bitToBool(def_c3_huw5l) AND (NOT Prim!bitToBool(def_c2_hrnqm))
+    IN LET def_c4_h0td5 : Bit{1}!T = CTX_RegN{1}!meth_read(state0.inst_c4)
+    IN LET def_c2_AND_c3_h670w : BOOLEAN = Prim!bitToBool(def_c2_hrnqm) AND Prim!bitToBool(def_c3_huw5l)
+    IN LET def_c2_AND_c3_AND_c4_hrt6h : BOOLEAN = def_c2_AND_c3_h670w AND Prim!bitToBool(def_c4_h0td5)
+    IN LET def_c4_AND_NOT_c1_hij9c : BOOLEAN =
+	     Prim!bitToBool(def_c4_h0td5) AND (NOT Prim!bitToBool(def_c1_hgmom))
+    IN LET def_c4_AND_NOT_c1_AND_c3_hgotn : BOOLEAN =
+	     def_c4_AND_NOT_c1_hij9c AND Prim!bitToBool(def_c3_huw5l)
+    IN LET def_c1_AND_c2_hka6d : BOOLEAN = Prim!bitToBool(def_c1_hgmom) AND Prim!bitToBool(def_c2_hrnqm)
+    IN LET def_c3_AND_NOT_c2_AND_NOT_c1_hkj2q : BOOLEAN =
+	     def_c3_AND_NOT_c2_hfl6c AND (NOT Prim!bitToBool(def_c1_hgmom))
+    IN LET def_c2_AND_c3_AND_c4_AND_c1_hc6dd : BOOLEAN =
+	     def_c2_AND_c3_AND_c4_hrt6h AND Prim!bitToBool(def_c1_hgmom)
+    IN LET def_c4_AND_NOT_c1_AND_c3_AND_NOT_c2_hdunb : BOOLEAN =
+	     def_c4_AND_NOT_c1_AND_c3_hgotn AND (NOT Prim!bitToBool(def_c2_hrnqm))
     IN LET act1 : [ CTX_RegN{17}!STATE, Unit!T ] =
 	     CTX_RegN{17}!meth_write(Bit{17}!mkConst(0), state0.inst_w)
-    IN LET state1 : STATE = IF def_c1_AND_c2___d3 THEN state0 WITH .inst_w := act1.1 ELSE state0 ENDIF
+    IN LET state1 : STATE = IF def_c1_AND_c2_hka6d THEN state0 WITH .inst_w := act1.1 ELSE state0 ENDIF
     IN LET act2 : [ CTX_RegN{17}!STATE, Unit!T ] =
 	     CTX_RegN{17}!meth_write(Bit{17}!mkConst(1), state1.inst_x)
     IN LET state2 : STATE =
-	     IF def_c3_AND_NOT_c2_AND_NOT_c1___d8 THEN state1 WITH .inst_x := act2.1 ELSE state1 ENDIF
+	     IF def_c3_AND_NOT_c2_AND_NOT_c1_hkj2q THEN state1 WITH .inst_x := act2.1 ELSE state1 ENDIF
     IN LET act3 : [ CTX_RegN{17}!STATE, Unit!T ] =
 	     CTX_RegN{17}!meth_write(Bit{17}!mkConst(2), state2.inst_y)
     IN LET state3 : STATE =
-	     IF def_c2_AND_c3_AND_c4_0_1_AND_c1___d12 THEN state2 WITH .inst_y := act3.1 ELSE state2 ENDIF
+	     IF def_c2_AND_c3_AND_c4_AND_c1_hc6dd THEN state2 WITH .inst_y := act3.1 ELSE state2 ENDIF
     IN LET act4 : [ CTX_RegN{17}!STATE, Unit!T ] =
 	     CTX_RegN{17}!meth_write(Bit{17}!mkConst(3), state3.inst_z)
     IN LET state4 : STATE =
-	     IF def_c4_0_AND_NOT_c1_3_AND_c3_4_AND_NOT_c2___d15
-	       THEN state3 WITH .inst_z := act4.1
-	       ELSE state3
-	     ENDIF
+	     IF def_c4_AND_NOT_c1_AND_c3_AND_NOT_c2_hdunb THEN state3 WITH .inst_z := act4.1 ELSE state3 ENDIF
     IN ( TRUE, state4 ) ;
   
 END

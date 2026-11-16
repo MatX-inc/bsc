@@ -111,7 +111,7 @@ if { $vtest == 1 } {
 compile_verilog_pass TestDoubleNormEager.bs mkTestDoubleNormEager {-hack-eager-pack-unpack}
 if { $vtest == 1 } {
     find_n_strings mkTestDoubleNormEager.v "?" 2
-    find_n_strings mkTestDoubleNormEager.v {assign _read = (r == 5'd0) ? r : { 1'd1, ~INV_r__q1[3:0] } ;} 1
-    find_n_strings mkTestDoubleNormEager.v {(_write_1 == 5'd0) ? _write_1 : { 1'd1, ~INV_write_1__q2[3:0] } ;} 1
+    find_regexp mkTestDoubleNormEager.v {assign _read = \(r == 5'd0\) \? r : \{ 1'd1, ~INV_r_h[0-9a-z]+\[3:0\] \} ;}
+    find_regexp mkTestDoubleNormEager.v {\(_write_1 == 5'd0\) \?[ \t\n]*_write_1 :[ \t\n]*\{ 1'd1, ~INV_write_1_h[0-9a-z]+\[3:0\] \} ;}
     find_n_strings mkTestDoubleNormEager.v {assign _read = r ;} 0
 }

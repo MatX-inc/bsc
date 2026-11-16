@@ -2,23 +2,23 @@ module ANoInline (aNoInline) where
 
 import Util(itos)
 import Position(noPosition)
+import ErrorUtil(internalError)
 import Flags(Flags)
 import Id(mkId, getIdBaseString, idQuality)
 import DefProp(defPropsHasNoCSE)
 import FStringCompat(mkFString)
 import Control.Monad.State
+import qualified Data.List as L
 import qualified Data.Map as M
 import ASyntax
 import ASyntaxUtil(mapMAExprs)
-import SignalNaming
+import ASignalNaming(collectAPackageExistingIds, mkSignalNamingEnvFromAPackage, signalAExpr)
+import SignalNaming(AnchorCollision(..), SignalNameTable, SignalNamingEnv,
+                    allocSignalTempName, initSignalNameTable, reserveExistingSignalName)
 
 
 -- ===============
 -- Naming conventions
-
--- new defs generated in this stage will be named "<aNoInlinePref><#>"
-aNoInlinePref :: String
-aNoInlinePref = "__f"
 
 -- instances of noinline functions will be named with this prefix
 instPrefix :: String
@@ -28,8 +28,8 @@ instPrefix = "instance_"
 -- State for the Monad
 
 data NIState = NIState {
-    -- unique name generator
-    nis_uniqueId :: Integer,
+    nis_namingEnv :: SignalNamingEnv,
+    nis_nameTable :: SignalNameTable,
     -- definitions processed so far
     nis_defs     :: [ADef],
     -- reverse lookup of defs processed or added so far,
@@ -53,16 +53,17 @@ addDef newdef@(ADef i t e p) = do
                rlm1 = if defPropsHasNoCSE p
                       then rlm
                       else M.insertWith keepBest (e, t) i rlm
-           put (state { nis_defs = (newdef:olddefs), nis_rlookup = rlm1 })
+               nt1 = reserveExistingSignalName (getIdBaseString i) (nis_nameTable state)
+           put (state { nis_defs = (newdef:olddefs), nis_rlookup = rlm1, nis_nameTable = nt1 })
 
 -- Generates a new Id from the expression to give to it
 -- (This is only ever used for ANoInlineFunCall, so it need not be so general.)
 genIdFromAExpr :: AExpr -> NIStateMonad AId
 genIdFromAExpr expr = do
     state <- get
-    uniqueNum <- gets nis_uniqueId
-    put (state { nis_uniqueId = uniqueNum + 1 })
-    let newIdStr = signalNameFromAExpr expr ++ aNoInlinePref ++ itos uniqueNum
+    let env = nis_namingEnv state
+        (newIdStr, nt') = allocSignalTempName env (signalAExpr env expr) (nis_nameTable state)
+    put (state { nis_nameTable = nt' })
     return $ mkId
                noPosition -- XXX aexpr should have an instance of HasPosition
                (mkFString newIdStr)
@@ -70,7 +71,6 @@ genIdFromAExpr expr = do
 -- Add the expression -- really the definition to the monad
 addExpr :: AType -> AExpr -> NIStateMonad AId
 addExpr t e = do
-    ds <- gets nis_defs
     rlm <- gets nis_rlookup
     case ( M.lookup (e,t) rlm ) of
         Nothing ->
@@ -92,9 +92,19 @@ addExpr t e = do
 aNoInline :: Flags -> APackage -> APackage
 aNoInline flags apkg =
     let
+        namingEnv0 = mkSignalNamingEnvFromAPackage flags apkg
+        nameTable0 =
+            case initSignalNameTable namingEnv0 (collectAPackageExistingIds apkg) of
+                Left (AnchorCollision nm k1 k2) ->
+                    internalError
+                        ("ANoInline: anchor collision on " ++
+                         nm ++ " (" ++ show k1 ++ " vs " ++ show k2 ++ ")")
+                Right tbl -> tbl
+
         -- initial state
         initState = NIState {
-                              nis_uniqueId = 1,
+                              nis_namingEnv = namingEnv0,
+                              nis_nameTable = nameTable0,
                               nis_defs = [],
                               nis_rlookup = M.empty
                             }
@@ -183,15 +193,17 @@ liftAExpr _ expr = return expr
 updateNoInlineDefs :: [ADef] -> [ADef]
 updateNoInlineDefs defs =
     let
-        updateDef :: ADef -> (Integer, [ADef]) -> (Integer, [ADef])
-        updateDef (ADef di dt (ANoInlineFunCall ft fi f es) props) (n, ds) =
-            let (ANoInlineFun m ts ps _) = f
-                inst_name = instPrefix ++ getIdBaseString fi ++ "_" ++ itos n
-                f' = (ANoInlineFun m ts ps (Just inst_name))
-                d' = (ADef di dt (ANoInlineFunCall ft fi f' es) props)
-            in  (n+1, d':ds)
-        updateDef d (n, ds) = (n, d:ds)
+        updateDef :: (M.Map String Integer, [ADef]) -> ADef -> (M.Map String Integer, [ADef])
+        updateDef (counts, ds) (ADef di dt (ANoInlineFunCall ft fi f es) props) =
+            let callee = getIdBaseString fi
+                n = M.findWithDefault 0 callee counts
+                (ANoInlineFun m ts ps _) = f
+                inst_name = instPrefix ++ callee ++ "_" ++ itos n
+                f' = ANoInlineFun m ts ps (Just inst_name)
+                d' = ADef di dt (ANoInlineFunCall ft fi f' es) props
+            in  (M.insert callee (n + 1) counts, d' : ds)
+        updateDef (counts, ds) d = (counts, d : ds)
     in
-        snd $ foldr updateDef (0,[]) defs
+        reverse $ snd $ L.foldl' updateDef (M.empty, []) defs
 
 -- ===============

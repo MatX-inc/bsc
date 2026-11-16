@@ -2825,8 +2825,7 @@ proc compare_file_filtered { output {expected ""} {bre_options ""} {ere_options 
 proc compare_file_filter_ids { output {expected ""} {bre_options ""} {ere_options ""} } {
 
     append bre_options ""
-    append ere_options { -e s/__h\[0-9\]\+(\$|\[^0-9A-Za-z_\])/__hNNNN\\1/g}
-    append ere_options { -e s/__d\[0-9\]\+(\$|\[^0-9A-Za-z_\])/__dNNNN\\1/g}
+    append ere_options { -e "s/(___d\[0-9\]+|__d\[0-9\]+|___h\[0-9\]+|__h\[0-9\]+|__q\[0-9\]+|_h\[0-9a-z\]\[0-9a-z\]\[0-9a-z\]\[0-9a-z\](\[0-9a-z\]\[0-9a-z\]\[0-9a-z\]\[0-9a-z\](_\[0-9\]+)?)?)(\$|\[^0-9A-Za-z_\])/_hNNNN\\4/g"}
 
     compare_file_filtered $output $expected $bre_options $ere_options
 }
