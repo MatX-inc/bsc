@@ -21,16 +21,18 @@ import CtxRed (cCtxReduceIO)
 import Deriving (derive)
 import Error (ErrorHandle, bsError, initErrorHandle)
 import FStringCompat (mkFString)
-import FixupDefs (fixupDefs)
-import Flags (Flags)
+import FixupDefs (fixupDefs, mkDictBuckets, mkDictRedirects)
+import Flags (Flags (..))
 import FlagsDecode (adjustFinalFlags, decodeFlags, defaultFlags)
 import IConv (iConvPackage)
 import IExpand (iExpandStrings)
 import IExpandUtils (HDef, HExpr)
+import ISimpDicts (iSimpDicts)
 import ISimplify (iSimplify)
 import ISyntax
 import Id (Id, getIdBaseString, getIdString)
 import Lex (LFlags (..), lexStart)
+import LiftDicts (liftDictsPkg)
 import MakeSymTab (cConvInst, mkSymTab)
 import Parse (parse)
 import ParseOp (parseOps)
@@ -83,12 +85,15 @@ compileStrings errh flags source = do
   symt <- mkSymTab errh mctx
   (tmod, tcErrors, _, tcATF) <- cTypeCheck errh flags symt (cConvInst errh symt mctx)
   when tcErrors $ bsError errh []
-  imod <- iConvPackage errh flags symt (mergeCATFCaches tcATF ctxATF) (simplify flags tmod)
+  let smod = simplify flags tmod
+      (lifted, liftedDefs) = if liftDicts flags then liftDictsPkg errh flags symt smod else (smod, [])
+  imod <- iConvPackage errh flags symt (mergeCATFCaches tcATF ctxATF) liftedDefs lifted
   let found = [b | CImpSign _ _ (CSignature i _ _ _) <- impsigs, Just b <- [M.lookup (getIdString i) binmap]]
       binmods = [(p, h) | (_, _, _, p, h) <- found]
   internalSymt <- mkSymTab errh (replaceImportedSignatures mctx [s | (_, _, s, _, _) <- found])
-  let (imodf, alldefsList) = fixupDefs imod binmods
-      IPackage _ _ _ defs atf = iSimplify imodf
+  let redirects = mkDictRedirects (mkDictBuckets binmods) imod binmods
+      (imodf, alldefsList) = fixupDefs redirects imod binmods
+      IPackage _ _ _ defs atf = iSimplify (iSimpDicts imodf)
       alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
       atfAll = foldl' mergeIATFCaches atf [ipkg_atf_cache m | (m, _) <- binmods]
   pure (internalSymt, alldefs, atfAll, defs)
