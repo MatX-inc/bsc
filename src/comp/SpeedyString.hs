@@ -3,13 +3,15 @@
 module SpeedyString(SString, toString, fromString, fromEnumName,
                     (++), concat, filter,
                     InternSnapshot(..), snapshotInternState, validSnapshot,
+                    snapshotProblem, restoreInternState, internCount,
                     renderInternTable, sstringId) where
 
 import Prelude hiding((++), concat, filter)
 import qualified Prelude((++), filter)
 import System.IO.Unsafe(unsafePerformIO)
+import Control.DeepSeq(rnf)
 import Control.Exception(evaluate)
-import Control.Monad(forM_)
+import Control.Monad(forM_, when)
 import Data.Array.Base(unsafeRead, unsafeWrite)
 import Data.Array.IO(IOArray, IOUArray, newArray)
 import Data.Bits((.&.), shiftL, shiftR)
@@ -19,6 +21,7 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Builder as BB
 import Data.Char(chr, ord, toUpper, isDigit)
 import Data.List(intersperse)
+import Data.Maybe(isNothing)
 import Numeric(showHex)
 -- import qualified NotSoSpeedyString
 import ErrorUtil (internalError)
@@ -277,10 +280,54 @@ snapshotInternState = do
     ss <- spellingsFrom t 0
     return (InternSnapshot n (zip [0 ..] ss))
 
+internCount :: IO Int
+internCount = fmap tNext (readIORef table)
+
 validSnapshot :: InternSnapshot -> Bool
-validSnapshot (InternSnapshot n entries) =
-    n >= 0 && map fst entries == [0 .. n - 1] &&
-    Set.size (Set.fromList (map snd entries)) == n
+validSnapshot = isNothing . snapshotProblem
+
+-- Why a snapshot is not valid, if it is not: internNextId must be some
+-- n >= 0, the ids 0 .. n - 1 in order, and the spellings distinct.
+snapshotProblem :: InternSnapshot -> Maybe String
+snapshotProblem (InternSnapshot n entries)
+    | n < 0 = Just ("internNextId is " <> show n)
+    | otherwise = go 0 Set.empty entries
+  where
+    go i _ [] | i == n = Nothing
+              | otherwise = Just (show i <> " entries, but internNextId is " <>
+                                  show n)
+    go i seen ((j, s) : es)
+        | i >= n = Just ("more than internNextId (" <> show n <> ") entries")
+        | j /= i = Just ("entry " <> show i <> " has id " <> show j)
+        | Set.member s seen = Just ("entry " <> show i <> " repeats " <> show s)
+        | otherwise = go (i + 1) (Set.insert s seen) es
+
+-- Rebuild the table from a snapshot (snapshotInternState) taken in another
+-- process, so that SStrings made here compare as they did there.  Snapshot
+-- entry i becomes entry i; interning its spelling again returns it.
+--
+-- Only into an untouched table: before flags are parsed, a .bo or .ba is
+-- decoded, or any Id or FString (a CAF included) is forced.  Otherwise, or
+-- if the snapshot is not valid, the result is Left and the table is
+-- unchanged; so a second restore is refused unless the first was empty,
+-- which changed nothing.  Single compiler thread, as for the interner.
+restoreInternState :: InternSnapshot -> IO (Either String ())
+restoreInternState snap@(InternSnapshot n entries) = do
+    evaluate (rnf (n, entries))
+    t <- readIORef table
+    case () of
+      _ | tNext t /= 0 ->
+            return (Left ("restore must come before anything is interned, " <>
+                          "but " <> show (tNext t) <> " strings are interned"))
+        | Just problem <- snapshotProblem snap -> return (Left problem)
+        | otherwise -> do
+            forM_ entries $ \(i, s) -> do
+              h <- evaluate (hashStr s)
+              SString d <- case genKey s of
+                             Just k  -> internGen k
+                             Nothing -> internPlain h s
+              when (d /= i) err
+            return (Right ())
 
 -- Shaped like aeson's derived encoding, one entry per line, ASCII so that no
 -- locale applies.  JSON reads a high then a low surrogate as one code point.
