@@ -1041,24 +1041,20 @@ genModule
             getIOPropsA flags pps (Just sched_info'') amod_final
     t <- dump errh flags t DFAPackageIOproperties dumpnames aioprops
 
-    -- Additional info from the Verilog backend
-    -- * vprog = the Verilog data structure, for recording in the .ba file,
-    --           so that it's available to bluetcl
-    (t, vprog)
-        <- if (backend flags == Just Verilog)
-           then do (t', v)
-                       <- genModuleVerilog
-                             errh pps flags dumpnames t prefix modstr
-                             blurb methodConflictBlurb methodConflictBVI
-                             vPathInfo sched_info'' aioprops amod_final
-                   return (t', Just v)
-           else return (t, Nothing)
+    t <- if (backend flags == Just Verilog)
+         then do (t', _vfilenames)
+                     <- genModuleVerilog
+                           errh pps flags dumpnames t prefix modstr
+                           blurb methodConflictBlurb methodConflictBVI
+                           vPathInfo sched_info'' aioprops amod_final
+                 return t'
+         else return t
 
     t <- if (genABin flags)
          then writeABin errh pps flags dumpnames t prefix
                   modstr srcName (orig_cqt wi)
                   sched_info'' methodConflict vPathInfo
-                  amod_final vprog
+                  amod_final
          else return t
 
     -- Wrapper generation
@@ -1086,9 +1082,9 @@ genModule
 writeABin :: ErrorHandle -> [PProp] -> Flags -> DumpNames -> TimeInfo ->
              String -> String -> String -> CQType ->
              AScheduleInfo -> MethodDumpInfo -> VPathInfo ->
-             APackage -> Maybe VProgram -> IO (TimeInfo)
+             APackage -> IO (TimeInfo)
 writeABin errh pps flags dumpnames t prefix modstr srcName oqt
-          sched_info methodConflict vPathInfo amod vprog =
+          sched_info methodConflict vPathInfo amod =
     do
        start flags DFwriteABin
 
@@ -1177,7 +1173,7 @@ genModuleVerilog :: ErrorHandle
                  -> VIOProps -- port properties (from the APackage)
                  -> APackage
                  -> IO (TimeInfo,
-                        VProgram)  -- generated Verilog
+                        [VFileName]) -- the Verilog files written
 genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                  blurb methodConflictBlurb methodConflictBVI vPathInfo scheduleInfo
                  aioprops atsPackage =
@@ -1321,8 +1317,8 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        t <- dump errh flags t DFwriteVerilog dumpnames vfilenames
 
        -- Return
-       -- * the Verilog structure (for accessing in bluetcl)
-       return (t, vprog)
+       -- * the Verilog file names written
+       return (t, vfilenames)
 
 
 -- Write a Verilog program to file (along with its use file)

@@ -24,6 +24,7 @@ get_i                          I     3
 -----
 
 Verilog file created: mkVMuxLookup.v
+Elaborated module file created: mkVMuxLookup.ba
 code generation for mkVMuxWired starts
 === APackageIOproperties (APkgProps_VMux mkVMuxWired):
 Name                         I/O  size props
@@ -48,6 +49,7 @@ EN_data_in                     I     1 unused
 -----
 
 Verilog file created: mkVMuxWired.v
+Elaborated module file created: mkVMuxWired.ba
 code generation for sysAPkgProps_VMux starts
 Warning: "APkgProps_VMux.bsv", line 80, column 8: (G0010)
   Rule "peek" was treated as more urgent than "pB". Conflicts:
@@ -95,4 +97,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysAPkgProps_VMux.v
+Elaborated module file created: sysAPkgProps_VMux.ba
 All packages are up to date.

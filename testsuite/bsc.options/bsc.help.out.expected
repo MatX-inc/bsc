@@ -28,7 +28,7 @@ Compiler flags:
 -demote-errors list     treat a list of errors as warnings (``:'' sep list of tags)
 -dump-formats formats   waveform formats to compile into the simulation (comma-separated subset of vcd,fst,fsdb; or none)
 -e module               top-level module for simulation
--elab                   generate a .ba file after elaboration and scheduling
+-elab                   generate a .ba file after elaboration and scheduling (on by default with -sim, -verilog and -systemc; -no-elab suppresses)
 -fdir dir               working directory for relative file paths during elaboration
 -g module               generate code for ``module'' (requires -sim or -verilog)
 -help                   generate help message
