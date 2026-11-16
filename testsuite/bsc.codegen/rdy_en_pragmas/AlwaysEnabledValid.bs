@@ -1,6 +1,6 @@
 package AlwaysEnabledValid where
 
--- G0129 (a C b on c), demotable for an environment that never asserts both
+-- G0134 (a C b on c), demotable for an environment that never asserts both
 -- valid bits in the same cycle.
 
 interface AEValid =

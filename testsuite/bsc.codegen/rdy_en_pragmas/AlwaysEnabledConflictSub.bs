@@ -2,7 +2,7 @@ package AlwaysEnabledConflictSub where
 
 import FIFOF
 
--- G0129: both methods call f.enq, which conflicts with itself.
+-- G0134: both methods call f.enq, which conflicts with itself.
 -- always_enabled is given on the module, not the interface.
 
 interface AEConflictSub =

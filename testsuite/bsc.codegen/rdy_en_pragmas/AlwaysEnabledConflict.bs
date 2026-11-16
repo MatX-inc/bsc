@@ -1,6 +1,6 @@
 package AlwaysEnabledConflict where
 
--- G0129: always_enabled a and b both write c, so a C b.  Demoted, the
+-- G0134: always_enabled a and b both write c, so a C b.  Demoted, the
 -- hardware adds 1 to c per cycle where any serial order adds 3.
 
 interface AEConflict =

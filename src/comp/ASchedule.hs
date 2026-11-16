@@ -1799,12 +1799,12 @@ aSchedule_step3 errh flags prefix pps amod ( scConflictMap0
       traceM (pp $ sep [text "External Scheduling Info:",
                         nest 2 $ pPrint PDReadable 0 vSchedInfo])
 
-  -- G0129 is demotable, for environments that keep conflicting
+  -- G0134 is demotable, for environments that keep conflicting
   -- always_enabled methods from acting in the same cycle
   let ae_errs = checkAlwaysEnabledMethods nm pps ifs vSchedInfo
       ae_demoted = case (demoteErrors flags) of
                      AllMsgs -> True
-                     SomeMsgs tags -> "G0129" `elem` tags
+                     SomeMsgs tags -> "G0134" `elem` tags
   when (not (null ae_errs)) $
     if ae_demoted
     then convIO $ bsErrorDemotable errh ae_errs
