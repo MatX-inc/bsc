@@ -91,6 +91,17 @@ CDEBUG ?= -UUSE_ENTER
 CFLAGS += $(PROF) $(COPT) $(CDEBUG)
 CXXFLAGS += $(PROF) $(COPT) $(CDEBUG) 
 
+# The debug information names the compile directory and the sources, so the
+# installed archives would differ between checkout directories; the checkout
+# is mapped to `.` in them (and in __FILE__), and a debugger is pointed at
+# the tree once (gdb's substitute-path, lldb's target.source-map). Apple's
+# archiver writes each member's modification time unless ZERO_AR_DATE is
+# set; GNU ar writes none.
+PREFIX_MAP = -ffile-prefix-map=$(abspath $(TOP))=.
+CFLAGS += $(PREFIX_MAP)
+CXXFLAGS += $(PREFIX_MAP)
+export ZERO_AR_DATE = 1
+
 # Description of library of Bluesim primitives
 LIB_PRIM = libbsprim.a
 PRIM_OBJS = prim_ops.o wide_data.o mem_alloc.o target.o \
