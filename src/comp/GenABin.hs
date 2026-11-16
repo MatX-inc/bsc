@@ -740,7 +740,7 @@ instance Bin Flags where
           do
              a_120 <- fromBin; a_121 <- fromBin; a_122 <- fromBin; a_123 <- fromBin; a_124 <- fromBin;
              a_125 <- fromBin; a_126 <- fromBin; a_127 <- fromBin; a_128 <- fromBin; a_129 <- fromBin;
-             a_130 <- fromBin; a_131 <- fromBin; a_132 <- fromBin; a_133 <- fromBin; a_134 <- fromBin
+             a_130 <- fromBin; a_131 <- fromBin; a_132 <- fromBin; a_133 <- fromBin; a_134 <- fromBin; a_135 <- fromBin
              return (a_120, a_121, a_122, a_123, a_124, a_125, a_126, a_127,
                      a_128, a_129, a_130, a_131, a_132, a_133, a_134)
         {-# NOINLINE rd_chunk9 #-}
