@@ -521,8 +521,10 @@ describeFlags showHidden =
 traceflags :: [String]
 traceflags = [
           "check-bin-roundtrip",
+          "check-isimplify-memo",
           "debug-eval-free-vars",
           "hack-no-const-cond-batch",
+          "hack-no-isimplify-memo",
           "hack-no-let-batch",
           "hack-no-typed-let-batch",
           "no-use-layout",

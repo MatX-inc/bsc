@@ -1,0 +1,44 @@
+package ISimplifyMemo where
+
+-- Source for the ISimplify self-reference guard tests (isimplify.exp):
+-- class methods used at known instances, whose selections from the
+-- instance dictionaries ISimplify resolves statically when the guard
+-- finds the dictionary unreachable from the selected field, and one
+-- instance whose method recurses at its own type (on an Integer, so
+-- elaboration unrolls it), whose dictionary is reachable from its own
+-- field and must be left to the evaluator.
+
+class Encode a n | a -> n where
+    encode :: a -> Bit n
+
+instance Encode Bool 1 where
+    encode b = pack b
+
+instance Encode (UInt k) k where
+    encode x = pack x
+
+instance (Encode a sa, Encode b sb) => Encode (a, b) (TAdd sa sb) where
+    encode (x, y) = encode x ++ encode y
+
+-- the self-referential dictionary: "step" calls itself at UInt 8
+class Step a where
+    step :: Integer -> a -> a
+
+instance Step (UInt 8) where
+    step n x = if n == 0 then x else step (n - 1) (x + 1)
+
+instance (Step a, Step b) => Step (a, b) where
+    step n (x, y) = (step n x, step n y)
+
+{-# verilog sysISimplifyMemo #-}
+sysISimplifyMemo :: Module Empty
+sysISimplifyMemo = module
+    cnt :: Reg (UInt 8) <- mkReg 0
+    pair :: Reg (UInt 8, UInt 8) <- mkReg (0, 0)
+    rules
+      "go": when True ==>
+        action
+          cnt := step 3 cnt
+          pair := step 2 pair
+          $display "%b %0d %0d" (encode (cnt, cnt == 1)) (step 1 cnt) (pair.fst + pair.snd)
+      "done": when cnt == 9 ==> $finish 0

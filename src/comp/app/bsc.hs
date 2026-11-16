@@ -111,7 +111,7 @@ import ISimpDicts(iSimpDicts)
 import FixupDefs(fixupDefs, updDef, mkDictBuckets, DictEvMap, DictRedirects,
                  mkDictEvMapAndRedirects, extendDictRedirects)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
-import ISimplify(iSimplify)
+import ISimplify(iSimplify, iSimplifyStats)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
 import GenBin(genBinFile, CPackageBin(..), stripImpSigs, checkRoundTrip, sortSched)
 import GenWrap(genWrap, WrapInfo(..))
@@ -248,7 +248,7 @@ ctypeStatsDump :: IO ()
 ctypeStatsDump =
     when ("-trace-ctype-stats" `elem` progArgs) $ do
       stats <- concat <$> sequence [cTypeConsStats, groundCTypeStats,
-                                    iConvTStats, binTypeStats]
+                                    iConvTStats, binTypeStats, iSimplifyStats]
       mapM_ (\ (k, v) -> putStrLnF ("CTYPE-STAT " ++ k ++ " " ++ show v))
             stats
 
@@ -637,13 +637,13 @@ compilePackage
     t <- dump errh flags t DFfixup dumpnames imodf
 
     start flags DFisimpdicts
-    let imodsd = iSimpDicts imodf
+    let (imodsd, dictBodies) = iSimpDicts imodf
     iPCheck flags symt imodsd "isimpdicts"
     t <- dump errh flags t DFisimpdicts dumpnames imodsd
 
     start flags DFisimplify
     let imods :: IPackage HeapData
-        imods = iSimplify imodsd
+        imods = iSimplify alldefs dictBodies imodsd
     iPCheck flags symt imods "isimplify"
     t <- dump errh flags t DFisimplify dumpnames imods
     stats flags DFisimplify imods

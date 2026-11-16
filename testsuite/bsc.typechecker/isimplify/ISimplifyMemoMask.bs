@@ -1,0 +1,46 @@
+package ISimplifyMemoMask where
+
+-- Source for the ISimplify self-reference guard tests (isimplify.exp):
+-- a method selection (foo at UInt 8) whose selected field references
+-- two lifted dictionaries.  The first is built from an instance context
+-- no method uses, so iSimpDicts' beta-reduction drops that argument
+-- from its body and its two bodies differ in whether they reach the
+-- Foo (UInt 8) dictionary; the second reaches the first.  The guard's
+-- sets cannot answer this site and it falls back to the original walk.
+
+class Foo a where
+    foo :: a -> Bit 8
+
+class Bar a where
+    bar :: a -> Bit 8
+
+class Baz a where
+    baz :: a -> Bit 8
+
+helper :: (Bar a) => a -> Bit 8
+helper p = bar p
+
+helper2 :: (Baz a) => a -> Bit 8
+helper2 p = baz p
+
+instance Foo (UInt 8) where
+    foo x = helper (x, x) + helper2 (Just (x, x))
+
+-- the context Foo a is used by no method
+instance (Foo a) => Bar (a, b) where
+    bar _ = 0
+
+instance (Bar a) => Baz (Maybe a) where
+    baz m = case m of
+              Just p -> helper p + 1
+              Nothing -> 0
+
+{-# verilog sysISimplifyMemoMask #-}
+sysISimplifyMemoMask :: Module Empty
+sysISimplifyMemoMask = module
+    cnt :: Reg (UInt 8) <- mkReg 0
+    rules
+      "go": when True ==> action
+          cnt := cnt + 1
+          $display "%0d" (foo cnt)
+      "done": when cnt == 9 ==> $finish 0
