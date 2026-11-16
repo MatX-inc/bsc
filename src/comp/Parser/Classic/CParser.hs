@@ -10,6 +10,7 @@ import Parse
 import IntLit
 import FStringCompat
 import PreStrings(fsBar, fsStar, fsHash, fsDollar, fsLT, fsLTGT, fsLsh, fsNoinline, fsMinus,
+                  fsUnderUnder,
                   fsASSERT, fsFire, fsEnabled, fsNo, fsImplicit, fsConditions,
                   fsCan, fsSchedule, fsFirst, fsClockCrossing, fsRule,
                   fsEmpty, fsConfOp, fsHide, fsHideAll,
