@@ -812,6 +812,7 @@ data ErrMsg =
         | WIncoherentMatch String String
         | WOrphanInst String
         | WTransitiveIncoherentMatch String String String
+        | WTypedHole String [String] -- ^ inferred type, bloogle approximate matches
         | EModInstWrongArgs [Position]
         | EAmbiguous [(String, Position, [(String, [Position])])]
         | EAmbiguousExplCtx [Doc] [Doc] Doc
@@ -4718,6 +4719,13 @@ missingEndKeywordSuggestion :: Maybe String -> String
 missingEndKeywordSuggestion Nothing = ""
 missingEndKeywordSuggestion (Just kw) =
     ".  Perhaps " ++ quote kw ++ " is missing?"
+
+-- bloogle results appended to a diagnostic (see -bloogle-db)
+bloogleMatchesDoc :: String -> [String] -> Doc
+bloogleMatchesDoc _ [] = empty
+bloogleMatchesDoc kind ms =
+    s2par ("bloogle found these " ++ kind ++ " matches:") $$
+    nest 2 (vcat (map text ms))
 
 -- -----
 
