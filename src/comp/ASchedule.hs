@@ -18,6 +18,7 @@ import Prelude hiding ((<>))
 #endif
 
 import Data.List
+import Data.Function(on)
 import Data.Maybe
 import Control.Monad(when, foldM)
 import Control.Monad.Except(ExceptT, runExceptT, throwError)
@@ -51,7 +52,8 @@ import PFPrint
 import PPrint(vsep, commaSep)
 import SCC(scc,tsort)
 import Id(Id, emptyId, getIdString, getIdBaseString, getIdPosition,
-          isRdyId, addToBase, mk_homeless_id, mkIdWillFire, addSuffix)
+          isRdyId, addToBase, mk_homeless_id, mkIdWillFire, addSuffix,
+          cmpIdByName)
 import Position
 import Flags(Flags(..), MsgListFlag(..))
 import VModInfo(vSched, vFields, VSchedInfo, VMethodConflictInfo, VFieldInfo(..))
@@ -297,25 +299,25 @@ instance Eq CSNode where
 
 instance Ord CSNode where
   compare (CSN_Sched i1 n1) (CSN_Sched i2 n2)
-      | n1 == -1 && n2 == -1 = compare i1 i2 -- temporary nodes use id order
+      | n1 == -1 && n2 == -1 = cmpIdByName i1 i2 -- temporary nodes use lexical id order
       | n1 == -1 = GT
       | n2 == -1 = LT
       | otherwise = compare n1 n2 -- ordinary nodes use numeric order
   compare a@(CSN_Exec i1 n1) b@(CSN_Exec i2 n2)
-      | n1 == -1 && n2 == -1 = compare i1 i2 -- temporary nodes use id order
+      | n1 == -1 && n2 == -1 = cmpIdByName i1 i2 -- temporary nodes use lexical id order
       | n1 == -1 = GT
       | n2 == -1 = LT
       | otherwise = compare n1 n2 -- ordinary nodes use numeric order
   compare (CSN_Sched i1 n1) (CSN_Exec i2 n2)
-      -- temporary nodes use id order, then Sched < Exec
-      | n1 == -1 && n2 == -1 = case (compare i1 i2) of { EQ -> LT; ord -> ord }
+      -- temporary nodes use lexical id order, then Sched < Exec
+      | n1 == -1 && n2 == -1 = case (cmpIdByName i1 i2) of { EQ -> LT; ord -> ord }
       | n1 == -1 = GT
       | n2 == -1 = LT
       -- ordinary nodes use numeric order, then Sched < Exec
       | otherwise =  case (compare n1 n2) of { EQ -> LT; ord -> ord }
   compare (CSN_Exec i1 n1) b@(CSN_Sched i2 n2)
-      -- temporary nodes use id order, then Exec > Sched
-      | n1 == -1 && n2 == -1 = case (compare i1 i2) of { EQ -> GT; ord -> ord }
+      -- temporary nodes use lexical id order, then Exec > Sched
+      | n1 == -1 && n2 == -1 = case (cmpIdByName i1 i2) of { EQ -> GT; ord -> ord }
       | n1 == -1 = GT
       | n2 == -1 = LT
       -- ordinary nodes use numeric order, then Exec > Sched
@@ -749,11 +751,11 @@ aSchedule_step1 errh flags prefix pps amod = do
 
   -- Rules that share no instance have no conflicting method uses, so
   -- the conflict maps visit only the rules sharing one with each rule.
-  let conflictCands = mkRuleCandidates ruleMethodUseMap
+  let conflictCands = mkRuleCandidates ruleNames ruleMethodUseMap
 
   -- Check that the actions in a rule are parallel composable.
   -- This may throw an error
-  disjointState1 <- verifySafeRuleActions flags userDefs rulePCConflictUseMap disjointState0
+  disjointState1 <- verifySafeRuleActions flags userDefs ruleNames rulePCConflictUseMap disjointState0
 
   -- make a rule-between-methods map for verifying static schedules
   let ruleBetweenMap = makeRuleBetweenMap state
@@ -761,7 +763,7 @@ aSchedule_step1 errh flags prefix pps amod = do
   -- Check that the actions in a rule can be merged with submodules
   -- to produce a static rule order (if not, taint the .ba file)
   gen_backend1 <- verifyStaticScheduleOneRule errh flags gen_backend0
-                      ruleBetweenMap rulePCConflictUseMap
+                      ruleNames ruleBetweenMap rulePCConflictUseMap
 
   when trace_sched_steps $ traceM "verifySafeRuleActions"
 
@@ -769,7 +771,7 @@ aSchedule_step1 errh flags prefix pps amod = do
   -- Disjoint testing (part 2 of 2)
 
   let cf_rules_set = S.fromList (extractCFPairsSP schedPragmas)
-  let cf_rules_test r1 r2 = ordPair (r1, r2) `S.member` cf_rules_set
+  let cf_rules_test r1 r2 = ordPairBy cmpIdByName (r1, r2) `S.member` cf_rules_set
 
       -- Adjust the the number of copies of a method that are available
       -- to take into account the fact that methods which are composable
@@ -818,7 +820,7 @@ aSchedule_step1 errh flags prefix pps amod = do
       -- rule disjoint info, and rule method use map.
 
   (cfConflictMap0, setToTestForStaticSchedule_cf, disjointState3) <-
-      mkConflictMap flags disjointState2
+      mkConflictMap flags disjointState2 ruleNames
                     ruleMethodUseMap conflictCands ncSetCF cf_or_disjoint
 
   -- for better memory performance, force the computation
@@ -837,7 +839,7 @@ aSchedule_step1 errh flags prefix pps amod = do
       cf_map_test r1 r2 = isNothing $ G.lookup (r1, r2) cfConflictMap0
 
   (pcConflictMap0, setToTestForStaticSchedule_pc, disjointState4) <-
-      mkConflictMap flags disjointState3
+      mkConflictMap flags disjointState3 ruleNames
                     ruleMethodUseMap conflictCands ncSetPC cf_map_test
 
   -- for better memory performance, force the computation
@@ -861,7 +863,7 @@ aSchedule_step1 errh flags prefix pps amod = do
       -- Using the conflict test, build an initial conflict graph
       -- for methods and rules (just the method conflict edges)
   (scConflictMap0, setToTestForStaticSchedule_sc, disjointState5) <-
-      mkConflictMap flags disjointState4
+      mkConflictMap flags disjointState4 ruleNames
                     ruleMethodUseMap conflictCands ncSetSC pc_map_test
 
   -- for better memory performance, force the computation
@@ -1000,9 +1002,12 @@ aSchedule_step1 errh flags prefix pps amod = do
       no_arg_valmethod (UUExpr (AMethCall {ae_args = []}) _) = True
       no_arg_valmethod _ = False
       add_doms (d1,u1) (d2,u2) = (nub (d1 ++ d2), nub (u1 ++ u2))
+      cmpMethodIdByName (MethodId o1 m1) (MethodId o2 m2) =
+          cmpIdByName o1 o2 `mappend` cmpIdByName m1 m2
       method_domains = M.unionsWith add_doms method_domain_maps
       cross_domain_methods = [ (mid, (doms,us))
-                             | (mid, (doms,us)) <- M.toList method_domains
+                             | (mid, (doms,us)) <- sortBy (cmpMethodIdByName `on` fst)
+                                                          (M.toList method_domains)
                              , length doms > 1
                              ]
       errCrossDomain (mid, (doms,us)) =
@@ -1358,19 +1363,27 @@ aSchedule_step2 errh flags prefix pps urgency_pairs amod ( scConflictMap0
       -- ascending order, so the adjacency lists are unchanged;
       -- -no-sched-transposed restores the all-pairs probe, for debug)
       scGraphFinal = tr "let scGraphFinal" $
-          if (not (schedTransposed flags))
-          then [(r,[r' | r' <- G.vertices scConflictMapFinal, r' /= r,
-                    (r',r) `G.notMember` scConflictMapFinal,
-                    (r,r') `G.member` scConflictMapFinal])
-              | r <- G.vertices scConflictMapFinal]
-          else
-          let vset = S.fromList (G.vertices scConflictMapFinal)
-              out_edges r = maybe [] M.keys
-                                (G.getOutEdgeMap scConflictMapFinal r)
-          in  [(r,[r' | r' <- out_edges r, r' /= r,
-                        r' `S.member` vset,
-                        (r',r) `G.notMember` scConflictMapFinal])
-                  | r <- G.vertices scConflictMapFinal]
+          let rulePosMap = M.fromList (zip ruleNames [(0::Int)..])
+              cmpRuleRank a b =
+                  case (M.lookup a rulePosMap, M.lookup b rulePosMap) of
+                    (Just ia, Just ib) -> compare ia ib
+                    (Just _,  Nothing) -> LT
+                    (Nothing, Just _)  -> GT
+                    (Nothing, Nothing) -> cmpIdByName a b
+              verts = sortBy cmpRuleRank (G.vertices scConflictMapFinal)
+          in  if (not (schedTransposed flags))
+              then [(r,[r' | r' <- verts, r' /= r,
+                        (r',r) `G.notMember` scConflictMapFinal,
+                        (r,r') `G.member` scConflictMapFinal])
+                  | r <- verts]
+              else
+              let vset = S.fromList verts
+                  out_edges r = maybe [] (sortBy cmpRuleRank . M.keys)
+                                    (G.getOutEdgeMap scConflictMapFinal r)
+              in  [(r,[r' | r' <- out_edges r, r' /= r,
+                            r' `S.member` vset,
+                            (r',r) `G.notMember` scConflictMapFinal])
+                      | r <- verts]
 
   -- dump scgraphFinal if flagged
   when trace_scgraph $
@@ -1449,7 +1462,7 @@ aSchedule_step2 errh flags prefix pps urgency_pairs amod ( scConflictMap0
   -- urgency cycles, than to wait and report cycles in the combined graph.
   _ <- tr "urgency order" $
            convEM errh $
-           flattenUrgencyMap (schedTransposed flags) nm urgencyMap
+           flattenUrgencyMap (schedTransposed flags) nm urgencyNodes urgencyMap
 
   -- trace flag to warn if some user-specified urgencies were not added
   when (trace_no_urgency_edge && not (null schedUrgencyEdges_dropped)) $
@@ -1691,8 +1704,7 @@ aSchedule_step3 errh flags prefix pps amod ( scConflictMap0
   let rule_order_get r = M.findWithDefault (rule_order_err r) r rule_order_map
   let r1_before_r2 r1 r2 = compare (rule_order_get r1) (rule_order_get r2) == GT -- because of reverse order
 
-  let cf_pair_set = S.fromList (extractCFPairsSP schedPragmas)
-  let cf_pairs = S.toList (cf_pair_set)
+  let cf_pairs = extractCFPairsSP schedPragmas
 
   -- add an edge after each me_check rule (to make it not later than needed)
   let mkMEEdge order (a,_) =
@@ -2471,9 +2483,16 @@ mkCombinedGraph ruleNames urgencyMap scGraphFinal scConflictMap sched_id_order u
             (mkCSNExec sched_id_order i1, mkCSNSched sched_id_order i2, CSE_Urgency e)
         mkUrgEdge i1 i2 e@(UEArbitraryChoice) =
             (mkCSNSched sched_id_order i1, mkCSNSched sched_id_order i2, CSE_Urgency e)
+        rulePosMap = M.fromList (zip ruleNames [(0::Int)..])
+        cmpRuleRank a b =
+            case (M.lookup a rulePosMap, M.lookup b rulePosMap) of
+              (Just ia, Just ib) -> compare ia ib
+              (Just _,  Nothing) -> LT
+              (Nothing, Just _)  -> GT
+              (Nothing, Nothing) -> cmpIdByName a b
         urg_edges = [ mkUrgEdge i1 i2 e
-                    | (i1,ns) <- G.toList urgencyMap
-                    , (i2,e)  <- ns
+                    | (i1,ns) <- sortBy (cmpRuleRank `on` fst) (G.toList urgencyMap)
+                    , (i2,e)  <- sortBy (cmpRuleRank `on` fst) ns
                     ]
 
         -- convert sc graph edges to CSN edges
@@ -2741,8 +2760,18 @@ extractMEPairsSP sps =
         mkAllPairs (SPSchedule _) = []
         mkAllPairs (SPMutuallyExclusive ids) = mkMEPairs ids
         mkAllPairs (SPConflictFree ids) = []
+        canonKey (xs, ys) =
+            let k1 = map getIdString xs
+                k2 = map getIdString ys
+            in if k1 <= k2 then (k1, k2) else (k2, k1)
+        dedup _ [] = []
+        dedup seen (p:ps) =
+            let k = canonKey p
+            in if k `S.member` seen
+               then dedup seen ps
+               else p : dedup (S.insert k seen) ps
     in
-        nub (map ordPair (concatMap mkAllPairs sps))
+        dedup S.empty (concatMap mkAllPairs sps)
 
 extractCFPairsSP :: [ASchedulePragma] -> [(ARuleId,ARuleId)]
 extractCFPairsSP sps =
@@ -2754,7 +2783,7 @@ extractCFPairsSP sps =
         mkAllPairs (SPMutuallyExclusive ids) = []
         mkAllPairs (SPConflictFree ids) = mkPairs ids
     in
-        nub (map ordPair (concatMap mkAllPairs sps))
+        nub (map (ordPairBy cmpIdByName) (concatMap mkAllPairs sps))
 
 createArbitraryMEPairs :: (ARuleId, [ARuleId]) -> [(ARuleId,ARuleId)]
 createArbitraryMEPairs (nid, aids) =
@@ -3434,7 +3463,7 @@ makeRuleBetweenEdges ruleBetweenMap ruleMethodUseMap ruleNames sched_id_order =
                                 [] -> Nothing
 
                     rules_between_one_rule =
-                        mapMaybe checkOneInstance (M.toList r1_usemap)
+                        mapMaybe checkOneInstance (sortBy (cmpIdByName `on` fst) (M.toList r1_usemap))
                 in case rules_between_one_rule of
                         ((Left r):_) ->
                             let node = mkCSNExec_tmp r
@@ -3455,8 +3484,11 @@ makeRuleBetweenEdges ruleBetweenMap ruleMethodUseMap ruleNames sched_id_order =
               r1_result ++ checkOneRule rest
         checkOneRule [] = []
 
+        ordered_rule_uses =
+            [ (r, entry) | r <- ruleNames, Just entry <- [M.lookup r ruleMethodUseMap] ]
+
         (new_nodes_dups, new_edgess) =
-            unzip $ checkOneRule (M.toList ruleMethodUseMap)
+            unzip $ checkOneRule ordered_rule_uses
         new_edges = concat new_edgess
         new_nodes = fastNub new_nodes_dups
     in (new_nodes, new_edges)
@@ -3555,7 +3587,7 @@ findRuleBeforeMethods ifcRuleNames userRuleNames
                    (rule_method_pairs ++ meth_method_pairs)
                    M.empty
       hasRuleBefore :: [(AId,[Either ARuleId AMethodId])]
-      hasRuleBefore = [ (m,nub xs) | (m,xs) <- M.toList before ]
+      hasRuleBefore = [ (m,nub xs) | m <- ifcRuleNames, Just xs <- [M.lookup m before] ]
   in
       hasRuleBefore
 
@@ -4176,12 +4208,15 @@ doQueries errh flags rule_names rule_disjoint relationDB =
 --   RuleDisjointTest :: ARuleId -> ARuleId -> Bool
 --   RuleUsesMap      :: M.Map RuleId RuleUses
 
-mkConflictMap :: Flags -> DisjointTestState ->
+mkConflictMap :: Flags -> DisjointTestState -> [ARuleId] ->
                  RuleMethodUseMap -> RuleCandidates ->
                  NoConflictSet -> RuleDisjointTest ->
                  SM (ConflictMap, S.Set (ARuleId, ARuleId), DisjointTestState)
-mkConflictMap flags dtstate rule_meth_map cands ncset ignore_conflicts =
+mkConflictMap flags dtstate ruleNames rule_meth_map cands ncset ignore_conflicts =
     let
+        ordered_rules =
+            [ (r, entry) | r <- ruleNames, Just entry <- [M.lookup r rule_meth_map] ]
+
         checkOneUse :: Bool -> AExpr -> AExpr ->
                        ([(MethodId, MethodId)], Bool, DisjointTestState) ->
                        ((MethodId, AExpr), (MethodId, AExpr)) ->
@@ -4230,28 +4265,28 @@ mkConflictMap flags dtstate rule_meth_map cands ncset ignore_conflicts =
           SM ([(ARuleId, [(ARuleId, [Conflicts])])], S.Set (ARuleId, ARuleId), DisjointTestState)
         checkRule (ps, igns, dts) ru@(rule1, (p1, usemap1)) = do
           let rule2s = if not (schedTransposed flags)
-                       then M.toList rule_meth_map
+                       then ordered_rules
                        else ruleCandidates cands usemap1
           (es, igns', dts') <- foldM (checkUses ru) ([], igns, dts) rule2s
           let ps' = ((rule1, es):ps)
           return (ps', igns', dts')
     in
         do (res, igns, dtstate') <-
-               foldM checkRule ([], S.empty, dtstate) (M.toList rule_meth_map)
+               foldM checkRule ([], S.empty, dtstate) ordered_rules
            convIO $ traceExprCounts "mkConflictMap" dtstate dtstate'
            return (G.fromList res, igns, dtstate')
 
 -- ----------
 
--- The rules of a RuleMethodUseMap in its order, and the positions of the
+-- The rules of a RuleMethodUseMap in ruleNames order, and the positions of the
 -- rules using each instance.
 data RuleCandidates =
     RuleCandidates (UA.Array Int (ARuleId, (AExpr, MethodIdMap)))
                    (M.Map AId IS.IntSet)
 
-mkRuleCandidates :: RuleMethodUseMap -> RuleCandidates
-mkRuleCandidates rule_meth_map =
-    let rs = M.toList rule_meth_map
+mkRuleCandidates :: [ARuleId] -> RuleMethodUseMap -> RuleCandidates
+mkRuleCandidates ruleNames rule_meth_map =
+    let rs = [ (r, entry) | r <- ruleNames, Just entry <- [M.lookup r rule_meth_map] ]
         users = M.fromListWith IS.union
                     [ (obj, IS.singleton i)
                     | (i, (_, (_, usemap))) <- zip [0..] rs,
@@ -4366,7 +4401,7 @@ conflicts :: NoConflictSet -> MethodIdMap ->  MethodIdMap ->
 conflicts ncset us1 us2 =
     -- traces ( "conflicts: " ++ ppReadable us ++ ppReadable us' ) $
     [ ((id1,c1), (id2,c2))
-      | (obj, methset1) <- M.toList us1,
+      | (obj, methset1) <- sortBy (cmpIdByName `on` fst) (M.toList us1),
         (Just methset2) <- [M.lookup obj us2],
         let (num, noConflict) = ncInstance ncset obj,
         -- number the second use's methods once, not once per pair
@@ -4456,11 +4491,19 @@ mkUrgencyMap vs es =
     let graph1 = foldl G.addVertex G.empty vs
     in  foldl G.addEdge graph1 es
 
-flattenUrgencyMap :: Bool -> Id -> UrgencyMap -> ErrorMonad [ARuleId]
-flattenUrgencyMap transposed moduleId umap =
+flattenUrgencyMap :: Bool -> Id -> [ARuleId] -> UrgencyMap -> ErrorMonad [ARuleId]
+flattenUrgencyMap transposed moduleId urgencyNodes umap =
     let
-        -- vertices of the graph
-        vs = G.vertices umap
+        urgPosMap = M.fromList (zip urgencyNodes [(0::Int)..])
+        cmpUrgRank a b =
+            case (M.lookup a urgPosMap, M.lookup b urgPosMap) of
+              (Just ia, Just ib) -> compare ia ib
+              (Just _,  Nothing) -> LT
+              (Nothing, Just _)  -> GT
+              (Nothing, Nothing) -> cmpIdByName a b
+
+        -- vertices of the graph in urgencyNodes order
+        vs = sortBy cmpUrgRank (G.vertices umap)
 
         -- Convert umap to the format expected by tsort (topological sort).
         -- The pair (r1,r2) is added if there is a directed edge (r2,r1)
@@ -4469,13 +4512,10 @@ flattenUrgencyMap transposed moduleId umap =
         -- than reverse the output of tsort, we get urgency order for
         -- unconstrained rules in the order in which they appeared in
         -- the code.
-        -- (the reversed adjacency is accumulated from the edge list
-        -- rather than probed for all vertex pairs; sources arrive in
-        -- ascending order from G.toList, matching the scan over vs;
-        -- with transposed=False, probe all pairs, for debug)
         rev_adj = M.fromListWith (flip (++))
-                      [ (r, [r']) | (r', vws) <- G.toList umap,
-                                    (r, _) <- vws ]
+                      [ (r, [r'])
+                        | (r', vws) <- sortBy (cmpUrgRank `on` fst) (G.toList umap),
+                          (r, _) <- sortBy (cmpUrgRank `on` fst) vws ]
         ugraph = if (not transposed)
                  then [(r, [r' | r' <- vs,
                                  r' /= r,
@@ -4606,7 +4646,8 @@ makeRuleMethodUseMaps setPC ruleUseMap =
         -- XXX it works fine without the filter now
         rule_meth_map = M.map convRuleUses full_use_map
           where
-            convRuleUses (p, m) = (p, M.map (map convMethodUses . M.toList) m)
+            convRuleUses (p, m) =
+                (p, M.map (map convMethodUses . sortBy (cmpIdByName `on` fst) . M.toList) m)
 
             -- A rule uses a method when any of its uses happens, so the
             -- conditions are ORed; ANDing them could hide a real conflict.
@@ -4626,8 +4667,8 @@ makeRuleMethodUseMaps setPC ruleUseMap =
               singleMethodConfls =
                   [ (m, uses)
                       | -- find all methods that are used at least twice
-                        (objId, mus) <- M.toList usemap,
-                        p@(methId, uses@(_:_:_)) <- M.toList mus,
+                        (objId, mus) <- sortBy (cmpIdByName `on` fst) (M.toList usemap),
+                        p@(methId, uses@(_:_:_)) <- sortBy (cmpIdByName `on` fst) (M.toList mus),
                         let m = MethodId objId methId,
                         -- ... that are not PC with itself
                         not (ncMember setPC m m)
@@ -4642,7 +4683,7 @@ makeRuleMethodUseMaps setPC ruleUseMap =
                               -- find all pairs of used methods
                               -- (known to be on the same instance)
                               p@((methId1,uses1), (methId2,uses2))
-                                  <- uniquePairs (M.toList uses),
+                                  <- uniquePairs (sortBy (cmpIdByName `on` fst) (M.toList uses)),
                               -- that conflict with each other
                               let m1 = MethodId instId methId1,
                               let m2 = MethodId instId methId2,
@@ -4671,9 +4712,9 @@ makeRuleMethodUseMaps setPC ruleUseMap =
 --
 -- If any conflict remains, an error is reported
 
-verifySafeRuleActions :: Flags -> [ADef] -> RulePCConflictUseMap ->
+verifySafeRuleActions :: Flags -> [ADef] -> [ARuleId] -> RulePCConflictUseMap ->
                          DisjointTestState -> SM DisjointTestState
-verifySafeRuleActions flags userDefs rulePCConflictUseMap dtstate = do
+verifySafeRuleActions flags userDefs ruleNames rulePCConflictUseMap dtstate = do
       let
         --checkOneRule: returns all pairs of method uses (in a particular
         --              rule) that are not PC (according to setPC)
@@ -4687,7 +4728,7 @@ verifySafeRuleActions flags userDefs rulePCConflictUseMap dtstate = do
               pairConflicts =
                   [ (v1,v2,rule,rp) |
                       -- all pairs of used methods on the same state
-                      (inst, usePairs) <- M.toList usePairsMap,
+                      (inst, usePairs) <- sortBy (cmpIdByName `on` fst) (M.toList usePairsMap),
                       ((m1,uses1), (m2,uses2)) <- usePairs,
                       -- Extract the UniqueUses (for error message and
                       -- BDD analysis)
@@ -4706,8 +4747,11 @@ verifySafeRuleActions flags userDefs rulePCConflictUseMap dtstate = do
                   ]
           in pairConflicts ++ singleConflicts
 
+        ordered_pc_uses =
+            [ (r, entry) | r <- ruleNames, Just entry <- [M.lookup r rulePCConflictUseMap] ]
+
         -- allConflicts: all calls that are conflicting, according to setPC
-        allConflicts = concatMap checkOneRule (M.toList rulePCConflictUseMap)
+        allConflicts = concatMap checkOneRule ordered_pc_uses
 
 
       -- We will now discard the conflicts between rules that are disjoint
@@ -4846,10 +4890,10 @@ makeRuleBetweenMap avis =
 
 verifyStaticScheduleOneRule ::
     ErrorHandle -> Flags -> Maybe Backend ->
-    RuleBetweenMap -> RulePCConflictUseMap ->
+    [ARuleId] -> RuleBetweenMap -> RulePCConflictUseMap ->
     SM (Maybe Backend)
 verifyStaticScheduleOneRule errh flags gen_backend
-                            ruleBetweenMap rulePCConflictUseMap =
+                            ruleNames ruleBetweenMap rulePCConflictUseMap =
     let
         -- for one-rule checking, a rule between the method in either order
         -- is an error, so look up both directions
@@ -4864,7 +4908,7 @@ verifyStaticScheduleOneRule errh flags gen_backend
         checkOneRule (rule, (_, _, usePairsMap)) =
            let
                badPairs = [ (m1,m2,rs)
-                              | (inst, usePairs) <- M.toList usePairsMap,
+                              | (inst, usePairs) <- sortBy (cmpIdByName `on` fst) (M.toList usePairsMap),
                                 ((methId1,_), (methId2,_)) <- usePairs,
                                 let m1 = MethodId inst methId1,
                                 let m2 = MethodId inst methId2,
@@ -4875,7 +4919,10 @@ verifyStaticScheduleOneRule errh flags gen_backend
                then Nothing
                else Just (rule, badPairs)
 
-        err_pairs = mapMaybe checkOneRule (M.toList rulePCConflictUseMap)
+        ordered_pc_uses =
+            [ (r, entry) | r <- ruleNames, Just entry <- [M.lookup r rulePCConflictUseMap] ]
+
+        err_pairs = mapMaybe checkOneRule ordered_pc_uses
 
         mkErr (r, ms) =
             let mkPair (m1, m2, rs) = (pfpString m1, pfpString m2,
@@ -4932,12 +4979,14 @@ verifyStaticScheduleTwoRules errh flags gen_backend moduleId
                              ruleNames erdb cf_pairs setToTest
                              reachmap seq_map seq_graph sched_id_order =
     let
-        cf_rules_test r1 r2 = ordPair (r1, r2) `S.member` cf_pairs
+        cf_rules_test r1 r2 = ordPairBy cmpIdByName (r1, r2) `S.member` cf_pairs
+
+        ruleRank = M.fromList (zip ruleNames [0 :: Int ..])
 
         -- Only pairs that are exclusive, asserted conflict_free, or in
         -- setToTest are examined, so enumerate each rule's candidate
-        -- partners from those, in the ascending order the scan of the
-        -- later map entries would have visited them.
+        -- partners from those, in the ruleNames order the scan of the
+        -- later rule entries visits them.
         ExclusiveRulesDB excl_map = erdb
         cf_partner_index = M.fromListWith S.union $ concat
             [ [ (a, S.singleton b), (b, S.singleton a) ]
@@ -4957,13 +5006,16 @@ verifyStaticScheduleTwoRules errh flags gen_backend moduleId
             [Either EMsg (ARuleId, ARuleId, [(MethodId, MethodId)])]
         checkOneRule ((r1, (_, r1_usemap)):rest) =
           let
-              -- the later rules among the candidates (M.toList visits
-              -- the rest of the map in ascending order); with
-              -- -no-sched-transposed, scan all the later rules
+              rk1 = M.findWithDefault (-1) r1 ruleRank
+              -- the later rules among the candidates in ruleNames order;
+              -- with -no-sched-transposed, scan all the later rules
               r2s = if (schedTransposed flags)
-                    then [ r2 | r2 <- S.toAscList (candidate_partners r1),
-                                r2 > r1,
-                                r2 `M.member` ruleMethodUseMap ]
+                    then map snd $ sortBy (compare `on` fst)
+                           [ (rk2, r2)
+                           | r2 <- S.toList (candidate_partners r1),
+                             Just rk2 <- [M.lookup r2 ruleRank],
+                             rk2 > rk1,
+                             r2 `M.member` ruleMethodUseMap ]
                     else map fst rest
 
               excl_or_cf r1 r2 = areRulesExclusive erdb r1 r2 ||
@@ -5016,7 +5068,8 @@ verifyStaticScheduleTwoRules errh flags gen_backend moduleId
                         in
                             bad_pairs_one_instance
                     bad_pairs_one_rule =
-                        concatMap checkOneInstance (M.toList r1_usemap)
+                        concatMap checkOneInstance
+                            (sortBy (cmpIdByName `on` fst) (M.toList r1_usemap))
                     (left_pairs, right_pairs) = separate bad_pairs_one_rule
 
                     pfpMethUse ((m1,m2),rs) = (pfpString m1, pfpString m2,
@@ -5067,8 +5120,11 @@ verifyStaticScheduleTwoRules errh flags gen_backend moduleId
               concatMap checkSecondRule r2s ++ checkOneRule rest
         checkOneRule [] = []
 
+        ordered_rule_uses =
+            [ (r, entry) | r <- ruleNames, Just entry <- [M.lookup r ruleMethodUseMap] ]
+
         (pair_errs, raw_edges) =
-            separate $ checkOneRule (M.toList ruleMethodUseMap)
+            separate $ checkOneRule ordered_rule_uses
 
         edges = [ (mkCSNExec sched_id_order r1, mkCSNExec sched_id_order r2, CSE_Conflict [CArbitraryChoice])
                       | (r1, r2, _) <- raw_edges ]

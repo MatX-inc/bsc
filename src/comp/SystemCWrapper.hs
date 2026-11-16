@@ -23,6 +23,7 @@ import Data.Maybe(maybeToList, mapMaybe)
 import PPrint
 import Data.List(intersperse, partition)
 import qualified Data.Map as M
+import qualified Data.Set as S
 
 --import Debug.Trace
 
@@ -137,12 +138,19 @@ wrapSystemC flags sim_system = do
                 always_rdy = (isRdyId mid) && (isAlwaysRdy pps mid)
             in if ((null ports) || always_rdy) then Nothing else Just (mid, ports)
         port_entries = mapMaybe mk_port_map_entry method_info
-        port_map = M.fromList port_entries
-        merged_port_map =
+        merged_port_entries =
           let (rs,nrs) = partition (isRdyId . fst) port_entries
-              non_rdy_map = M.fromList nrs
-              rdy_map     = M.fromList [ (dropReadyPrefixId mid, ps) | (mid,ps) <- rs ]
-          in M.unionWith (++) non_rdy_map rdy_map
+              rdy_map  = M.fromListWith (++) [ (dropReadyPrefixId mid, ps) | (mid,ps) <- rs ]
+              nrs_set  = S.fromList (map fst nrs)
+              dedupRdy _ [] = []
+              dedupRdy seen ((mid, _):rest) =
+                  let base = dropReadyPrefixId mid
+                  in if base `S.member` seen
+                     then dedupRdy seen rest
+                     else (base, M.findWithDefault [] base rdy_map) :
+                          dedupRdy (S.insert base seen) rest
+          in [ (mid, ps ++ M.findWithDefault [] mid rdy_map) | (mid, ps) <- nrs ] ++
+             dedupRdy nrs_set rs
         mk_port_decl (n,i,is_input,_) =
             let t = if (n == 1)
                     then boolType
@@ -153,7 +161,7 @@ wrapSystemC flags sim_system = do
             in  decl $ (mkVar (getIdBaseString i)) `ofType` pt
         port_decls  = concat [ [comment ((getIdBaseString m) ++ " method ports") (blankLines 0)] ++
                                (map mk_port_decl ps)
-                             | (m,ps) <- M.toList merged_port_map
+                             | (m,ps) <- merged_port_entries
                              ]
 
         -- utility functions for grouping methods by domain
@@ -189,7 +197,7 @@ wrapSystemC flags sim_system = do
         ctor_hack   = ctor (mkVar "SC_CTOR") [mkVar name]
         mk_init i   = let nm = getIdBaseString i
                       in (var nm) `cCall` [mkStr nm]
-        meth_ports  = [ i | ports <- M.elems merged_port_map, (_,i,_,_) <- ports ]
+        meth_ports  = [ i | (_,ports) <- merged_port_entries, (_,i,_,_) <- ports ]
         ilist       = map mk_init (clk_inputs ++ rst_inputs ++ meth_ports) ++
                       [ (var "_model_inst") `cCall` [mkNULL]
                       , (var "_model_hdl") `cCall` [mkNULL]
@@ -237,12 +245,12 @@ wrapSystemC flags sim_system = do
         clk_stmts i =
             let nm = getIdBaseString i
                 ins = [ (n,id)
-                      | (mid,ports) <- M.toList port_map
+                      | (mid,ports) <- port_entries
                       , same_dom nm mid
                       , (n,id,True,_) <- ports
                       ]
                 outs = [ (mid,id,n,act)
-                       | (mid,ports) <- M.toList port_map
+                       | (mid,ports) <- port_entries
                        , same_dom nm mid
                        , (n,id,False,act) <- ports
                        ]

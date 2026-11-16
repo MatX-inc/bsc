@@ -1,0 +1,20 @@
+package AlwaysReadyOrder where
+
+interface AlwaysReadyIfc =
+  zetaOut :: Bit 8   {-# always_ready #-}
+  alphaOut :: Bit 8  {-# always_ready #-}
+
+{-# verilog mkAlwaysReadyOrder #-}
+mkAlwaysReadyOrder :: Module AlwaysReadyIfc
+mkAlwaysReadyOrder = module
+  gateZ :: Reg Bool <- mkReg False
+  gateA :: Reg Bool <- mkReg False
+  valZ :: Reg (Bit 8) <- mkReg 1
+  valA :: Reg (Bit 8) <- mkReg 2
+  rules
+    "toggle": when True ==> action
+      gateZ := not gateZ
+      gateA := not gateA
+  interface
+    zetaOut = valZ when gateZ
+    alphaOut = valA when gateA

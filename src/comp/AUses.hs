@@ -71,6 +71,7 @@ import qualified Data.Set as S
 import Position
 import Id
 import FStringCompat
+import Data.Function(on)
 import Data.List(partition, sortOn)
 import qualified Data.List as L
 import Util
@@ -79,7 +80,7 @@ import PVPrint
 import ErrorUtil(internalError)
 import Prim
 import IntLit
-import Control.Monad(liftM, mapAndUnzipM, when)
+import Control.Monad(foldM, liftM, mapAndUnzipM, when)
 import Control.Monad.State.Strict(State, runState, get, put)
 -- import Debug.Trace
 
@@ -184,13 +185,139 @@ extractCondition (UUExpr _ uc) = useCondToAExpr uc
 
 useCondToAExpr :: UseCond -> AExpr
 useCondToAExpr uc = foldl aAnd aTrue exprs
-  where true_list = S.toList (true_exprs uc)
-        false_list = map aNot (S.toList (false_exprs uc))
-        eq_list = map mkEq (M.toList (eq_map uc))
+  where ord = reverse (uc_rev_order uc)
+        true_list = [ e | e <- ord, e `S.member` true_exprs uc ]
+        false_list = [ aNot e | e <- ord, e `S.member` false_exprs uc ]
+        eq_list = [ mkEq (e, i) | e <- ord, Just i <- [M.lookup e (eq_map uc)] ]
         mkEq  (e,i)  = APrim defaultAId aTBool PrimEQ [e, ASInt defaultAId (aType e) i]
-        neq_list = concatMap mkNEq (M.toList (neq_map uc))
+        neq_list = [ n | e <- ord, Just is <- [M.lookup e (neq_map uc)], n <- mkNEq (e, is) ]
         mkNEq (e,is) = map (\i -> APrim defaultAId aTBool PrimBNot [mkEq (e,i)]) (S.toList is)
         exprs = true_list ++ false_list ++ eq_list ++ neq_list
+
+-- Intern-order-independent strict comparisons on Id, AType, and AExpr
+infixr 6 `thenCmp`
+thenCmp :: Ordering -> Ordering -> Ordering
+thenCmp EQ o = o
+thenCmp o _ = o
+
+cmpIdStrictByName :: Id -> Id -> Ordering
+cmpIdStrictByName a b
+    | a == b = EQ
+    | otherwise =
+        cmpIdByName a b `thenCmp`
+        compare (getFString (getIdQual a)) (getFString (getIdQual b)) `thenCmp`
+        compare (getFString (getIdBase a)) (getFString (getIdBase b))
+
+cmpListBy :: (a -> a -> Ordering) -> [a] -> [a] -> Ordering
+cmpListBy _ [] [] = EQ
+cmpListBy _ [] (_:_) = LT
+cmpListBy _ (_:_) [] = GT
+cmpListBy cmp (x:xs) (y:ys) = cmp x y `thenCmp` cmpListBy cmp xs ys
+
+cmpMaybeBy :: (a -> a -> Ordering) -> Maybe a -> Maybe a -> Ordering
+cmpMaybeBy _ Nothing Nothing = EQ
+cmpMaybeBy _ Nothing (Just _) = LT
+cmpMaybeBy _ (Just _) Nothing = GT
+cmpMaybeBy cmp (Just x) (Just y) = cmp x y
+
+cmpDoubleTotal :: Double -> Double -> Ordering
+cmpDoubleTotal x y
+    | isNaN x && isNaN y = EQ
+    | isNaN x = LT
+    | isNaN y = GT
+    | otherwise = compare x y
+
+aTypeTag :: AType -> Int
+aTypeTag (ATBit {}) = 0
+aTypeTag (ATString {}) = 1
+aTypeTag ATReal = 2
+aTypeTag (ATArray {}) = 3
+aTypeTag (ATTuple {}) = 4
+aTypeTag (ATAbstract {}) = 5
+
+cmpATypeByName :: AType -> AType -> Ordering
+cmpATypeByName (ATBit s1) (ATBit s2) = compare s1 s2
+cmpATypeByName (ATString m1) (ATString m2) = compare m1 m2
+cmpATypeByName ATReal ATReal = EQ
+cmpATypeByName (ATArray l1 t1) (ATArray l2 t2) =
+    compare l1 l2 `thenCmp` cmpATypeByName t1 t2
+cmpATypeByName (ATTuple ts1) (ATTuple ts2) =
+    cmpListBy cmpATypeByName ts1 ts2
+cmpATypeByName (ATAbstract i1 ss1) (ATAbstract i2 ss2) =
+    cmpIdStrictByName i1 i2 `thenCmp` compare ss1 ss2
+cmpATypeByName a b = compare (aTypeTag a) (aTypeTag b)
+
+aExprTag :: AExpr -> Int
+aExprTag (APrim {}) = 0
+aExprTag (AMethCall {}) = 1
+aExprTag (AMethValue {}) = 2
+aExprTag (ATuple {}) = 3
+aExprTag (ATupleSel {}) = 4
+aExprTag (ANoInlineFunCall {}) = 5
+aExprTag (AFunCall {}) = 6
+aExprTag (ATaskValue {}) = 7
+aExprTag (ASPort {}) = 8
+aExprTag (ASParam {}) = 9
+aExprTag (ASDef {}) = 10
+aExprTag (ASInt {}) = 11
+aExprTag (ASReal {}) = 12
+aExprTag (ASStr {}) = 13
+aExprTag (ASAny {}) = 14
+aExprTag (ASClock {}) = 15
+aExprTag (ASReset {}) = 16
+aExprTag (ASInout {}) = 17
+aExprTag (AMGate {}) = 18
+
+cmpAExprByName :: AExpr -> AExpr -> Ordering
+cmpAExprByName (APrim _ t op es) (APrim _ t' op' es') =
+    cmpATypeByName t t' `thenCmp` compare op op' `thenCmp` cmpListBy cmpAExprByName es es'
+cmpAExprByName (AMethCall t aid mid es) (AMethCall t' aid' mid' es') =
+    cmpATypeByName t t' `thenCmp` cmpIdStrictByName aid aid' `thenCmp`
+    cmpIdStrictByName mid mid' `thenCmp` cmpListBy cmpAExprByName es es'
+cmpAExprByName (AMethValue t aid mid) (AMethValue t' aid' mid') =
+    cmpATypeByName t t' `thenCmp` cmpIdStrictByName aid aid' `thenCmp` cmpIdStrictByName mid mid'
+cmpAExprByName (ATuple t es) (ATuple t' es') =
+    cmpATypeByName t t' `thenCmp` cmpListBy cmpAExprByName es es'
+cmpAExprByName (ATupleSel t e idx) (ATupleSel t' e' idx') =
+    cmpATypeByName t t' `thenCmp` compare idx idx' `thenCmp` cmpAExprByName e e'
+cmpAExprByName (ANoInlineFunCall t aid af es) (ANoInlineFunCall t' aid' af' es') =
+    cmpATypeByName t t' `thenCmp` cmpIdStrictByName aid aid' `thenCmp`
+    compare af af' `thenCmp` cmpListBy cmpAExprByName es es'
+cmpAExprByName (AFunCall t aid af isC es) (AFunCall t' aid' af' isC' es') =
+    cmpATypeByName t t' `thenCmp` cmpIdStrictByName aid aid' `thenCmp` compare af af' `thenCmp`
+    compare isC isC' `thenCmp` cmpListBy cmpAExprByName es es'
+cmpAExprByName (ATaskValue t aid af isC n) (ATaskValue t' aid' af' isC' n') =
+    cmpATypeByName t t' `thenCmp` cmpIdStrictByName aid aid' `thenCmp` compare af af' `thenCmp`
+    compare isC isC' `thenCmp` compare n n'
+cmpAExprByName (ASPort t aid) (ASPort t' aid') =
+    cmpATypeByName t t' `thenCmp` cmpIdStrictByName aid aid'
+cmpAExprByName (ASParam t aid) (ASParam t' aid') =
+    cmpATypeByName t t' `thenCmp` cmpIdStrictByName aid aid'
+cmpAExprByName (ASDef t aid) (ASDef t' aid') =
+    cmpATypeByName t t' `thenCmp` cmpIdStrictByName aid aid'
+cmpAExprByName (ASInt _ t il) (ASInt _ t' il') =
+    cmpATypeByName t t' `thenCmp` compare il il'
+cmpAExprByName (ASReal _ t r) (ASReal _ t' r') =
+    cmpATypeByName t t' `thenCmp` cmpDoubleTotal r r'
+cmpAExprByName (ASStr _ t str) (ASStr _ t' str') =
+    cmpATypeByName t t' `thenCmp` compare str str'
+cmpAExprByName (ASAny t me) (ASAny t' me') =
+    cmpATypeByName t t' `thenCmp` cmpMaybeBy cmpAExprByName me me'
+cmpAExprByName (ASClock _ (AClock o g)) (ASClock _ (AClock o' g')) =
+    cmpAExprByName o o' `thenCmp` cmpAExprByName g g'
+cmpAExprByName (ASReset _ (AReset w)) (ASReset _ (AReset w')) =
+    cmpAExprByName w w'
+cmpAExprByName (ASInout _ (AInout w)) (ASInout _ (AInout w')) =
+    cmpAExprByName w w'
+cmpAExprByName (AMGate t oid cid) (AMGate t' oid' cid') =
+    cmpATypeByName t t' `thenCmp` cmpIdStrictByName oid oid' `thenCmp` cmpIdStrictByName cid cid'
+cmpAExprByName a b = compare (aExprTag a) (aExprTag b)
+
+sortByIdKey :: [(Id, v)] -> [(Id, v)]
+sortByIdKey = L.sortBy (cmpIdStrictByName `on` fst)
+
+sortByAExprKey :: [(AExpr, v)] -> [(AExpr, v)]
+sortByAExprKey = L.sortBy (cmpAExprByName `on` fst)
 
 useDropCond :: UniqueUse -> UniqueUse
 useDropCond (UUExpr e c) = UUExpr e ucTrue
@@ -206,15 +333,15 @@ type MethodActionUses = M.Map Id (M.Map Id [AAction])
 
 toListMethodExprUses :: MethodExprUses -> [(MethodId, [UniqueUse])]
 toListMethodExprUses mus =
-    [ (MethodId objId methId, map (\ (e,c) -> UUExpr e c) (M.toList uses))
-          | (objId, methmap) <- M.toList mus,
-            (methId, uses) <- M.toList methmap ]
+    [ (MethodId objId methId, map (\ (e,c) -> UUExpr e c) (sortByAExprKey (M.toList uses)))
+          | (objId, methmap) <- sortByIdKey (M.toList mus),
+            (methId, uses) <- sortByIdKey (M.toList methmap) ]
 
 toListMethodActionUses :: MethodActionUses -> [(MethodId, [UniqueUse])]
 toListMethodActionUses mus =
     [ (MethodId objId methId, map UUAction uses)
-          | (objId, methmap) <- M.toList mus,
-            (methId, uses) <- M.toList methmap ]
+          | (objId, methmap) <- sortByIdKey (M.toList mus),
+            (methId, uses) <- sortByIdKey (M.toList methmap) ]
 
 -- ----------
 
@@ -227,13 +354,13 @@ type FFuncActionUses = M.Map FFuncId [AAction]
 
 toListFFExprUses :: FFuncExprUses -> [(FFuncId, [UniqueUse])]
 toListFFExprUses fus =
-    [ (fId, map (\ (e,c) -> UUExpr e c) (M.toList uses))
-          | (fId, uses) <- M.toList fus ]
+    [ (fId, map (\ (e,c) -> UUExpr e c) (sortByAExprKey (M.toList uses)))
+          | (fId, uses) <- sortByIdKey (M.toList fus) ]
 
 toListFFActionUses :: FFuncActionUses -> [(FFuncId, [UniqueUse])]
 toListFFActionUses fus =
     [ (fId, map UUAction uses)
-          | (fId, uses) <- M.toList fus ]
+          | (fId, uses) <- sortByIdKey (M.toList fus) ]
 
 -- ----------
 
@@ -408,15 +535,44 @@ mergeActionUses uss =
 mergeExprUsesM :: [RExprUses] -> UCM (RExprUses)
 mergeExprUsesM uss = do
   let
+      mergePairM :: (Ord k) => (k -> k -> Ordering) ->
+                    (v -> v -> UCM v) -> M.Map k v -> M.Map k v -> UCM (M.Map k v)
+      mergePairM _ _ m1 m2
+          | M.null m2 = return m1
+          | M.null m1 = return m2
+      mergePairM _ fn m1 m2
+          | M.size m1 == 1 =
+              let (k1, b) = M.findMin m1
+              in  case M.lookup k1 m2 of
+                    Nothing -> return (M.insert k1 b m2)
+                    Just a  -> do c <- fn a b
+                                  return (M.adjust (const c) k1 m2)
+      mergePairM cmpK fn m1 m2 =
+          let insertOne m' (k, a) =
+                  case M.lookup k m' of
+                    Nothing -> return (M.insert k a m')
+                    Just b  -> do c <- fn a b
+                                  return (M.insert k c m')
+          in  foldM insertOne m1 (L.sortBy (cmpK `on` fst) (M.toList m2))
+
+      mergeManyM :: (Ord k) => (k -> k -> Ordering) ->
+                    (v -> v -> UCM v) -> [M.Map k v] -> UCM (M.Map k v)
+      mergeManyM _ _ [] = return M.empty
+      mergeManyM cmpK fn (m:ms) = foldM (mergePairM cmpK fn) m ms
+
+      cmpRKey :: RKey -> RKey -> Ordering
+      cmpRKey = cmpAExprByName `on` rkExpr
+
       mergeUsesFnM :: M.Map RKey UseCond -> M.Map RKey UseCond ->
                       UCM (M.Map RKey UseCond)
-      mergeUsesFnM us1 us2 = map_unionWithM orUseCondM us1 us2
+      mergeUsesFnM us1 us2 = mergePairM cmpRKey orUseCondM us1 us2
 
       mergeMethodUsesM :: [MethodExprUsesK RKey] -> UCM (MethodExprUsesK RKey)
-      mergeMethodUsesM ms = map_unionsWithM (map_unionWithM mergeUsesFnM) ms
+      mergeMethodUsesM ms =
+          mergeManyM cmpIdStrictByName (mergePairM cmpIdStrictByName mergeUsesFnM) ms
 
       mergeFFuncUsesM :: [FFuncExprUsesK RKey] -> UCM (FFuncExprUsesK RKey)
-      mergeFFuncUsesM fs = map_unionsWithM mergeUsesFnM fs
+      mergeFFuncUsesM fs = mergeManyM cmpIdStrictByName mergeUsesFnM fs
 
       (muss, fuss) = unzip uss
   merged_mus <- mergeMethodUsesM muss
@@ -557,7 +713,7 @@ rumToMethodUseMap m =
     let usesToMethMap (pred, RuleUses preds domain range) =
             let toE (e, c) = UUExpr e c
                 toA a = UUAction a
-                convE = M.map (M.map (map toE . M.toList)) . getMethodExprUses
+                convE = M.map (M.map (map toE . sortByAExprKey . M.toList)) . getMethodExprUses
                 convA = M.map (M.map (map toA)) . getMethodActionUses
             in  (pred, M.unionsWith (M.unionWith (++)) [convE preds, convE domain, convA range])
     in  M.map usesToMethMap m
@@ -577,8 +733,8 @@ rumGetMethodIdMap m r =
 -- (a flattened version of "rumGetMethodIdMap")
 rumGetMethodIds :: RuleUsesMap -> ARuleId -> [MethodId]
 rumGetMethodIds m r = [ MethodId objId methId
-                        | (objId, methset) <- M.toList $ rumGetMethodIdMap m r,
-                          methId <- S.toList methset ]
+                        | (objId, methset) <- sortByIdKey (M.toList (rumGetMethodIdMap m r)),
+                          methId <- L.sortBy cmpIdStrictByName (S.toList methset) ]
 
 -- ==============================
 -- Expr collection monad
@@ -719,20 +875,46 @@ cse e@(ANoInlineFunCall { }) = cseWithArgs e
 cse e@(AFunCall { }) = cseWithArgs e
 cse e = return e
 
--- true expressions, false expressions, equality set, not-equality set
+-- true expressions, false expressions, equality set, not-equality set,
+-- and causal insertion order (reversed) for deterministic emission
 data UseCond = UseCond { true_exprs :: S.Set AExpr,
                          false_exprs :: S.Set AExpr,
                          eq_map :: M.Map AExpr IntLit,
-                         neq_map :: M.Map AExpr (S.Set IntLit)
+                         neq_map :: M.Map AExpr (S.Set IntLit),
+                         uc_rev_order :: [AExpr]
                        }
-  deriving (Show, Eq, Ord)
+  deriving (Show)
+
+instance Eq UseCond where
+  UseCond t1 f1 eq1 neq1 _ == UseCond t2 f2 eq2 neq2 _ =
+      t1 == t2 && f1 == f2 && eq1 == eq2 && neq1 == neq2
+
+instance Ord UseCond where
+  compare (UseCond t1 f1 eq1 neq1 _) (UseCond t2 f2 eq2 neq2 _) =
+      compare (t1, f1, eq1, neq1) (t2, f2, eq2, neq2)
 
 instance NFData UseCond where
-  rnf (UseCond t f eq neq) = rnf4 t f eq neq
+  rnf (UseCond t f eq neq ord) = rnf5 t f eq neq ord
 
 ucTrue, ucFalse :: UseCond
-ucTrue  = UseCond S.empty S.empty M.empty M.empty
-ucFalse = UseCond (S.singleton (aFalse)) S.empty M.empty M.empty
+ucTrue  = UseCond S.empty S.empty M.empty M.empty []
+ucFalse = UseCond (S.singleton (aFalse)) S.empty M.empty M.empty [aFalse]
+
+ucHasAny :: AExpr -> UseCond -> Bool
+ucHasAny e uc =
+    S.member e (true_exprs uc) ||
+    S.member e (false_exprs uc) ||
+    M.member e (eq_map uc) ||
+    M.member e (neq_map uc)
+
+ucRecord :: AExpr -> UseCond -> [AExpr]
+ucRecord e uc
+    | ucHasAny e uc = uc_rev_order uc
+    | otherwise     = e : uc_rev_order uc
+
+ucFilterOrder :: [AExpr] -> UseCond -> UseCond
+ucFilterOrder revOrd uc =
+    uc { uc_rev_order = filter (`ucHasAny` uc) revOrd }
 
 {-
 isTrueUseCond uc = S.null (true_exprs uc) &&
@@ -765,7 +947,9 @@ preOrUseCond uc1 uc2 =
                     (M.intersectionWith eq_match (eq_map uc1) (eq_map uc2))
         shared_neq = M.filter (not . S.null) $
                      (M.intersectionWith S.intersection) (neq_map uc1) (neq_map uc2)
-        shared_uc = UseCond shared_true shared_false shared_eq shared_neq
+        shared_uc =
+            ucFilterOrder (uc_rev_order uc1)
+                (UseCond shared_true shared_false shared_eq shared_neq [])
         true1 = (true_exprs uc1) `S.difference` shared_true
         true2 = (true_exprs uc2) `S.difference` shared_true
         false1 = (false_exprs uc1) `S.difference` shared_false
@@ -779,14 +963,19 @@ preOrUseCond uc1 uc2 =
            where base_result = s1 `S.difference` s2
         neq1 = M.differenceWith neq_diff (neq_map uc1) shared_neq
         neq2 = M.differenceWith neq_diff (neq_map uc2) shared_neq
-        uc1_rest = UseCond true1 false1 eq1 neq1
-        uc2_rest = UseCond true2 false2 eq2 neq2
+        uc1_rest =
+            ucFilterOrder (uc_rev_order uc1)
+                (UseCond true1 false1 eq1 neq1 [])
+        uc2_rest =
+            ucFilterOrder (uc_rev_order uc2)
+                (UseCond true2 false2 eq2 neq2 [])
         or_expr = aOr (useCondToAExpr uc1_rest) (useCondToAExpr uc2_rest)
 
 orUseCond :: UseCond -> UseCond -> UseCond
 orUseCond  uc1 uc2 = if (isTrue or_expr) then uc else uc'
   where (uc, or_expr) = preOrUseCond uc1 uc2
-        uc' = uc { true_exprs = S.insert or_expr (true_exprs uc) }
+        uc' = uc { true_exprs = S.insert or_expr (true_exprs uc)
+                 , uc_rev_order = ucRecord or_expr uc }
 
 orUseCondM :: UseCond -> UseCond -> UCM UseCond
 orUseCondM uc1 uc2 = do
@@ -795,7 +984,8 @@ orUseCondM uc1 uc2 = do
     return (uc)
    else do
     or_expr' <- cse or_expr
-    let uc' = uc { true_exprs = S.insert or_expr' (true_exprs uc) }
+    let uc' = uc { true_exprs = S.insert or_expr' (true_exprs uc)
+                 , uc_rev_order = ucRecord or_expr' uc }
     return uc'
 
 -- Ravi's original comments:
@@ -841,8 +1031,9 @@ doNEq x i uc =
       Just j ->
           if (i == j) then ucFalse else uc
       Nothing ->
-         let neq' = M.insertWith (S.union) x (S.singleton i) (neq_map uc)
-         in uc { neq_map = neq' }
+         let ord' = ucRecord x uc
+             neq' = M.insertWith (S.union) x (S.singleton i) (neq_map uc)
+         in uc { neq_map = neq', uc_rev_order = ord' }
 
 doEQ :: AExpr -> IntLit -> UseCond -> UseCond
 doEQ x i uc =
@@ -852,25 +1043,31 @@ doEQ x i uc =
       case (M.lookup x (neq_map uc)) of
         Just s ->
             if (i `S.member` s) then ucFalse
-            else let eq' = M.insert x i (eq_map uc)
+            else let ord' = ucRecord x uc
+                     eq' = M.insert x i (eq_map uc)
                      neq' = M.delete x (neq_map uc)
-                 in uc { eq_map = eq', neq_map = neq' }
-        Nothing -> let eq' = M.insert x i (eq_map uc)
-                   in uc { eq_map = eq' }
+                 in uc { eq_map = eq', neq_map = neq', uc_rev_order = ord' }
+        Nothing -> let ord' = ucRecord x uc
+                       eq' = M.insert x i (eq_map uc)
+                   in uc { eq_map = eq', uc_rev_order = ord' }
 
 addFalse :: AExpr -> UseCond -> UseCond
 addFalse e uc
     | isFalse e                    = uc
     | e `S.member` (true_exprs uc) = ucFalse
     | isTrue e                     = ucFalse
-    | otherwise                    = uc { false_exprs = S.insert e (false_exprs uc) }
+    | otherwise                    =
+        let ord' = ucRecord e uc
+        in uc { false_exprs = S.insert e (false_exprs uc), uc_rev_order = ord' }
 
 addTrue :: AExpr -> UseCond -> UseCond
 addTrue e uc
     | e `S.member` (false_exprs uc) = ucFalse
     | isFalse e                     = ucFalse
     | isTrue e                      = uc
-    | otherwise                     = uc { true_exprs = S.insert e (true_exprs uc) }
+    | otherwise                     =
+        let ord' = ucRecord e uc
+        in uc { true_exprs = S.insert e (true_exprs uc), uc_rev_order = ord' }
 
 -- ==============================
 -- Function: Build the RuleUsesMap and use it to build the MethodUsesMap
