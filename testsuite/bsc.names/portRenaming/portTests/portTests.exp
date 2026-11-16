@@ -7,7 +7,20 @@ compile_fail_error Test08.bsv P0157 1 "-verilog"
 ### Test for AR/AE attributes
 
 ### Tests for basic working
-compile_verilog_pass Test01.bsv 
+
+# Under Verilator these `link_verilog_no_main_pass' checks cannot work:
+# bsc_build_vsim_verilator has no link-without-main flow (its own XXX
+# comment says so).  Its sim_main.cpp driver unconditionally drives
+# CLK/RST_N on the top module, but these self-contained `module Tb();'
+# testbenches have no ports at all; the script also locates the top
+# module only in a file named Tb.v, whereas `Tb' here lives in TbNN.v.
+# The port-renaming content is still checked under Verilator: each
+# TbNN.v verilates cleanly against its generated mkDesign_NN.v (named
+# port connections resolve), and the compile checks below still run.
+# iverilog links (and the rest of the suite) are unaffected.
+verinorun verilator "bsc_build_vsim_verilator has no link-without-main flow (port-less top `Tb' in TbNN.v: sim_main.cpp needs a CLK/RST_N-ported top in a self-named .v file)"
+
+compile_verilog_pass Test01.bsv
 link_verilog_no_main_pass {Tb01.v mkDesign_01.v} Tb
 
 compile_verilog_pass Test02.bsv 
@@ -30,5 +43,7 @@ link_verilog_no_main_pass {Tb07.v mkDesign_07.v} Tb
 
 #Test for module with precompiled interface
 compile_verilog_pass IFC.bsv
-compile_verilog_pass Test09.bsv 
+compile_verilog_pass Test09.bsv
 link_verilog_no_main_pass {Tb09.v mkDesign_09.v} Tb
+
+verinorun_end
