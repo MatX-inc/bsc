@@ -1,7 +1,6 @@
 module VIOProps (VIOProps, getIOProps, getIOPropsA) where
 
 import Data.List(intersect, nub, tails, sortBy)
-import Data.Ord(comparing)
 import Data.Maybe(catMaybes, isNothing, fromMaybe, isJust)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -296,13 +295,6 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
         defuseMap = getDefUses ds
 
         -- given a signal, this determines its props
-        -- under -stable-verilog, iterate a signal's users in text
-        -- order (Set order is Ord AId = interning order); the joined
-        -- prop list's order reaches the emitted Ports comment
-        userList uset | stableVerilog flags =
-                          sortBy (comparing getIdBaseString) (S.toList uset)
-                      | otherwise = S.toList uset
-
         getSignalInProp :: AId -> [VeriPortProp]
         getSignalInProp i =
             let
@@ -334,7 +326,7 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
                                       else if okUse i user_e
                                            then Just [user]
                                            else Nothing
-                                      | user <- userList user_set,
+                                      | user <- S.toList user_set,
                                         let user_e = adef_expr $ getDef user ]
                          in
                              -- if any are not direct uses,
@@ -1707,11 +1699,8 @@ getIOPropsA _flags pps mschedinfo apkg =
                            [(AId, AUse)])
         mkArmClassMaps si =
             let multMap = M.fromList (concatMap genMethodMult vs)
-                -- blob ORDER never reaches this analysis's results
-                -- (arm classes are keyed maps/sets), so the
-                -- -stable-verilog canonical ordering is not needed here
                 (expr_blobs, action_blobs) =
-                    ratToBlobs False (asi_method_uses_map si) multMap
+                    ratToBlobs (asi_method_uses_map si) multMap
                                (asi_resource_alloc_table si)
                 edb = asi_exclusive_rules_db si
                 (ASchedule _ rev_exec_order) = asi_schedule si
