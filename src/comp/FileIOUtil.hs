@@ -9,6 +9,7 @@ module FileIOUtil
     ,readBinaryFileMaybe
     ,readBinaryFileCatch
     ,writeFileCatch
+    ,writeFileBuilderCatch
     ,writeBinaryFileCatch
     ,appendFileCatch
     ,removeFileCatch
@@ -47,12 +48,12 @@ import qualified Control.Exception as CE
 import System.IO.Error(ioeGetErrorString)
 import Control.Monad(when)
 import Control.Exception(handle)
-import Data.Word
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as B
+import qualified Data.ByteString.Builder as BB
 
 import Util(concatMapM, mapFst)
 import FileNameUtil(dirName, getRelativeFilePath)
@@ -242,12 +243,20 @@ writeFileCatch errh fname content = do
     catchIO (writeFileCompat fname content)
             (fileWriteError errh emptyContext noPosition fname)
 
-writeBinaryFileCatch :: ErrorHandle -> FilePath -> [Word8] -> IO ()
+-- Writes UTF-8 bytes as they are built (the Builder counterpart of
+-- writeFileCatch, whose String is written UTF-8 encoded)
+writeFileBuilderCatch :: ErrorHandle -> FilePath -> BB.Builder -> IO ()
+writeFileBuilderCatch errh fname content = do
+    checkDirectory fname (fileWriteError errh emptyContext noPosition fname)
+    catchIO (withBinaryFile fname WriteMode (\hdl -> BB.hPutBuilder hdl content))
+            (fileWriteError errh emptyContext noPosition fname)
+
+writeBinaryFileCatch :: ErrorHandle -> FilePath -> B.ByteString -> IO ()
 writeBinaryFileCatch errh fname content = do
     -- check if the directory exists, and report an error if not
     checkDirectory fname (fileWriteError errh emptyContext noPosition fname)
     -- try to write the file
-    catchIO (B.writeFile fname $ B.pack content)
+    catchIO (B.writeFile fname content)
             (fileWriteError errh emptyContext noPosition fname)
 
 appendFileCatch :: ErrorHandle -> FilePath -> String -> IO ()
