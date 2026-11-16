@@ -12,6 +12,7 @@ module BinData ( Byte
                , section
                , Lazy(..), toBinLazy, fromBinLazy
                , encodeIO, encodeV2
+               , encodeV2Strip, keepPositions
                , decode, decodeStrict, decodeWithHash
                , binTypeStats
                ) where
@@ -605,11 +606,6 @@ stringIdx w s = do
       modifyIORef' (wStrs w) (s :)
       return n
 
--- The file-name transform (-remap-path-prefix) is applied before
--- sharing, so the key is the stored (remapped) value: positions that
--- remap equal share a single entry.  It runs once per (pos_is_stdlib,
--- pos_file), its only inputs; a later position reuses the FString the
--- first one interned.
 writePosition :: W -> Position -> IO ()
 writePosition w p =
   runOut (shared wPosKeys wPositions (pos_key p) (writeBytes p)) w
@@ -2108,6 +2104,46 @@ encodeV2 x = do
   runOut (toBin x) w
   finishW2 w st
 
+-- Format 2 where every position the selector picks is stored with its
+-- line and column dropped (its file kept), except under keepPositions.
+-- Also returns every string written, in first-occurrence order.  The
+-- output is a pure function of the stored (stripped) content: keys are
+-- taken after stripping, and the memos of type2, which compare
+-- unstripped values, are bypassed under keepPositions.
+encodeV2Strip :: (Bin a) => Maybe (Position -> Bool) -> a ->
+                 IO (B.ByteString, [FString])
+encodeV2Strip sel x = do
+  st <- newW2With sel
+  w <- newWWith (Just st)
+  runOut (toBin x) w
+  strs <- readIORef (wStrs w)
+  bs <- finishW2 w st
+  return (bs, reverse strs)
+
+-- Write with every position kept, under encodeV2Strip
+keepPositions :: Out () -> Out ()
+keepPositions out = Out $ \w ->
+  case wV2 w of
+    Nothing -> runOut out w
+    Just st -> do
+      old <- readIORef (w2Keep st)
+      writeIORef (w2Keep st) True
+      runOut out w
+      writeIORef (w2Keep st) old
+
+-- A position as encodeV2Strip stores it
+stripPos2 :: W2 -> Position -> IO Position
+stripPos2 st p =
+  case w2Strip st of
+    Just sel | sel p -> do
+      keep <- readIORef (w2Keep st)
+      return (if keep then p else p { pos_line = -1, pos_column = -1 })
+    _ -> return p
+
+-- Whether type2's memos may be used (see encodeV2Strip)
+memoOn2 :: W2 -> IO Bool
+memoOn2 st = not <$> readIORef (w2Keep st)
+
 apKey2 :: Int -> Int -> Int
 apKey2 na nb
   | na < 0 || nb < 0 || na > 0x7fffffff || nb > 0x7fffffff =
@@ -2170,6 +2206,9 @@ data W2 = W2
   , w2WordMemo  :: !(IORef (IM.IntMap [(Type, Int)]))
   , w2VarMemo   :: !(IORef (IM.IntMap [(Type, Int)]))
   , w2TyConMemo :: !(IORef (M.Map (Int, Int) [(TyCon, Int)]))
+    -- encodeV2Strip's selector, and whether keepPositions is in force
+  , w2Strip    :: !(Maybe (Position -> Bool))
+  , w2Keep     :: !(IORef Bool)
   , w2Ids      :: !Table2
   , w2Pos      :: !Table2
   , w2Types    :: !Table2
@@ -2178,10 +2217,14 @@ data W2 = W2
   }
 
 newW2 :: IO W2
-newW2 =
+newW2 = newW2With Nothing
+
+newW2With :: Maybe (Position -> Bool) -> IO W2
+newW2With sel =
   W2 <$> newIORef IM.empty <*> newIORef M.empty <*> newIORef IM.empty
      <*> newIORef M.empty <*> newIORef M.empty <*> newIORef M.empty
      <*> newIORef IM.empty <*> newIORef IM.empty <*> newIORef M.empty
+     <*> pure sel <*> newIORef False
      <*> newTable2 <*> newTable2 <*> newTable2 <*> newTable2 <*> newTable2
 
 -- The bodies region is complete: add the five tables, the string table,
@@ -2204,8 +2247,8 @@ payload2 w payload = inBuffer w payload $ \b -> do
 
 id2 :: W -> W2 -> Id -> IO Int
 id2 w st i = do
-  let Position f l c _ = getIdPosition i
-      props = getIdProps i
+  pos@(Position f l c _) <- stripPos2 st (getIdPosition i)
+  let props = getIdProps i
       kb = fstringId (getIdBase i)
       kr = IdRest (fstringId (getIdQual i)) (fstringId f) l c props
   m <- readIORef (w2IdKeys st)
@@ -2214,7 +2257,7 @@ id2 w st i = do
     Nothing -> do
       -- the payload of writeBytes: position, qualifier, base, properties
       n <- if null props
-           then do np <- pos2 w st (getIdPosition i)
+           then do np <- pos2 w st pos
                    nq <- stringIdx w (getIdQual i)
                    nb <- stringIdx w (getIdBase i)
                    addEntryWith2 (w2Ids st) $ \e -> do
@@ -2223,17 +2266,16 @@ id2 w st i = do
       modifyIORef' (w2IdKeys st) (IM.insertWith M.union kb (M.singleton kr n))
       return n
 
--- The file name is remapped as in format 1; the key is the stored
--- (remapped) position.
+-- The key is the stored (stripped) position.
 pos2 :: W -> W2 -> Position -> IO Int
-pos2 w st p@(Position f l c lib) = do
+pos2 w st p0 = do
+  p@(Position f l c lib) <- stripPos2 st p0
   let k = PosKey2 (fstringId f) l c lib
-      p' = p
   m <- readIORef (w2PosKeys st)
   case M.lookup k m of
     Just n -> return n
     Nothing -> do
-      n <- payload2 w (writeBytes p') >>= addEntry2 (w2Pos st)
+      n <- payload2 w (writeBytes p) >>= addEntry2 (w2Pos st)
       modifyIORef' (w2PosKeys st) (M.insert k n)
       return n
 
@@ -2259,12 +2301,14 @@ itype2 w st t = do
 -- instead of a lookup per node; a type variable by its name; and a TCon
 -- node by its tycon's name.
 type2 :: W -> W2 -> Type -> IO Int
-type2 w st t =
+type2 w st t = do
+  on <- memoOn2 st
   let wd = typeCanonId t
-  in case t of
-       _ | wd >= 0 -> memo (w2WordMemo st) wd
-       TVar (TyVar i _ _) -> memo (w2VarMemo st) (fstringId (getIdBase i))
-       _ -> type2' w st t
+  case t of
+    _ | not on -> type2' w st t
+    _ | wd >= 0 -> memo (w2WordMemo st) wd
+    TVar (TyVar i _ _) -> memo (w2VarMemo st) (fstringId (getIdBase i))
+    _ -> type2' w st t
   where memo ref k = do
           memoM <- readIORef ref
           let cands = IM.findWithDefault [] k memoM
@@ -2293,8 +2337,9 @@ type2' w st t =
       let !na = fstringId (getIdBase i)
           !nq = fstringId (getIdQual i)
           name = (na, nq)
+      on <- memoOn2 st
       memoM <- readIORef (w2TyConMemo st)
-      let memo = M.findWithDefault [] name memoM
+      let memo = if on then M.findWithDefault [] name memoM else []
       case [ n | (tc', n) <- memo, sameTyCon tc tc' ] of
         (n : _) -> return n
         [] -> do
@@ -2305,7 +2350,8 @@ type2' w st t =
                  wbByte b 1; wbByte b 0; wbIdx b ni
                  runOut (writeBytes mk) w'
                  wbIdx b ns
-          modifyIORef' (w2TyConMemo st) (M.insert name (take 4 ((tc, n) : memo)))
+          when on $
+            modifyIORef' (w2TyConMemo st) (M.insert name (take 4 ((tc, n) : memo)))
           return n
     TDefMonad _ -> internalError "BinData.type2: TDefMonad"
     _ -> entry2 w (w2Types st) (w2TyKeys st) (writeBytes t)

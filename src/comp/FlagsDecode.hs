@@ -14,6 +14,7 @@ module FlagsDecode(
 
              showFlags, showFlagsRaw,
              showFlagsLst, showFlagsAllLst,
+             traceflags,
              getFlagValueString,
         ) where
 
@@ -33,7 +34,7 @@ import Data.List.Split(splitWhen)
 import Version(bluespec)
 import Backend
 import FileNameUtil(hasDotSuf, takeSuf,
-                    bscSrcSuffix, bsvSrcSuffix,
+                    bscSrcSuffix, bsvSrcSuffix, bupSuffix,
                     cSuffix, cxxSuffix, cppSuffix, ccSuffix,
                     objSuffix, arSuffix,
                     verSuffix, verSuffix2, verSuffix3, verSuffix4, verSuffix5,
@@ -191,6 +192,13 @@ decodeArgs prog args cdir =
                                        else (warnings, DUsage)
                       else case (partition isBlueSrcFile anames) of
                              ([name], []) -> (warnings, checkBSrcFlags flags name)
+                             -- the untyped package that -signature-only wrote
+                             ([], [name]) | hasDotSuf bupSuffix name ->
+                                 if (frontEndMode flags /= CheckOnly) || updCheck flags
+                                 then (warnings, DError [(cmdPosition, EGeneric
+                                          ("A .bup file is checked with -check-only " ++
+                                           "and without -u: " ++ name))])
+                                 else (warnings, checkBSrcFlags flags name)
                              ([name], names) ->
                                  -- This is the case of a Bluespec source name accompanied
                                  -- by more things which are not Bluespec source names.
@@ -255,6 +263,10 @@ checkBSrcFlags flags filename =
     -- -c generates from .ba files, not from source
     if not (null (codegenNames flags))
     then DError [(cmdPosition, EGenWithSrcFile filename)]
+    else
+    -- the front-end-only modes stop before code generation
+    if (frontEndMode flags /= FullCompile) && (backend flags /= Nothing)
+    then DError [(cmdPosition, EFrontEndOnlyBackend)]
     else
     -- if generate is requested, require a backend
     if not (null (genName flags)) && (backend flags == Nothing)
@@ -554,6 +566,9 @@ traceflags = [
           "trace-inst-tree",
           "trace-instance-overlap",
           "trace-intern-table",
+          "trace-bup",
+          "bup-full-imports",
+          "bup-keep-positions",
           "legacy-inst-index",
           "legacy-defer-instances",
           "trace-ctype-stats",
@@ -774,7 +789,8 @@ defaultFlags bluespecdir = Flags {
         warnRedundantProvisos = False,
         warnUndetPred = False,
         semanticPortsComment = False,
-        rebuildSymTab = False
+        rebuildSymTab = False,
+        frontEndMode = FullCompile
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -838,7 +854,9 @@ decodeFlags (('-':s):ss) (sets,warnings, bad, flags) =
           case flagtype of
             Toggle doflag _ -> decodeFlags ss (s:sets, perhaps_warn, bad, doflag flags True)
             NoArg dofunc _ ->
-              if (null ss) || (isFlag (head ss)) || (isSrcFile (head ss)) then
+              -- a .bup is the input of -check-only, not an argument
+              if (null ss) || (isFlag (head ss)) || (isSrcFile (head ss)) ||
+                 (hasDotSuf bupSuffix (head ss)) then
                 case (dofunc flags) of
                   Left flags' -> decodeFlags ss (s:sets, perhaps_warn, bad, flags')
                   Right emsg -> decodeFlags ss (sets, perhaps_warn, emsg:bad, flags)
@@ -1232,6 +1250,11 @@ externalFlags = [
         ("c",
          (Arg "module" (\f s -> Left (f {codegenNames = codegenNames f ++ [s]})) (Just (FRTListString codegenNames)),
           "generate code for `module' from its elaborated .ba file", Visible)),
+
+        ("check-only",
+         (Toggle (\f x -> f {frontEndMode = if x then CheckOnly else FullCompile})
+                 (showIfTrue ((== CheckOnly) . frontEndMode)),
+          "typecheck against imported .bi files and write the result (.btp)", Hidden)),
 
         ("check-assert",
          (Toggle (\f x -> f {testAssert=x}) (showIfTrue testAssert),
@@ -1681,6 +1704,11 @@ externalFlags = [
          (Toggle (\f x -> f {timeStamps=x}) (showIfTrue timeStamps),
           "include timestamps in generated files", Visible)),
 
+        ("signature-only",
+         (Toggle (\f x -> f {frontEndMode = if x then SignatureOnly else FullCompile})
+                 (showIfTrue ((== SignatureOnly) . frontEndMode)),
+          "write only the package interface (.bi), from imported .bi files", Hidden)),
+
         ("show-version",
          (Toggle (\f x -> f {showVersion=x}) (showIfTrue showVersion),
           "include compiler version in generated files", Visible)),
@@ -2058,6 +2086,7 @@ showFlagsRaw flags =
           ("extraVerbose", show (extraVerbose flags)),
           ("fdir", show (fdir flags)),
           ("finalcleanup", show (finalcleanup flags)),
+          ("frontEndMode", show (frontEndMode flags)),
           ("genABin", show (genABin flags)),
           ("genName", show (genName flags)),
           ("genSysC", show (genSysC flags)),

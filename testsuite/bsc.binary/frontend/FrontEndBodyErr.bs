@@ -1,0 +1,7 @@
+package FrontEndBodyErr where
+
+-- A type error in a body, below an interface that is fine (see
+-- frontend.exp)
+
+answer :: Integer
+answer = True
