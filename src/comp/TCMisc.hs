@@ -862,6 +862,16 @@ instance PPrint Reduction where
     pPrint d p (Reduction qs sb us minst mpkg) =
         pPrint d p ((qs, sb, us), (minst, mpkg))
 
+-- The predicate's class as the current symbol table has it: a Pred embeds
+-- its Class by value, and an earlier table's record lacks instances added
+-- by GenWrap, Deriving, or CtxReduce.
+currentClass :: Class -> TI Class
+currentClass c = do
+    r <- getSymTab
+    return $ case findSClass r (name c) of
+               Just c' | name c' == name c -> c'
+               _ -> c
+
 reducePred :: [EPred] -> DVS -> VPred -> TI (Maybe Reduction)
 reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
     pushSatStackContext
@@ -983,7 +993,8 @@ reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
                          sb''  = sb' { solvedClass = Just c }
                      return $ Just (Reduction qs sb'' fd_subst minst mpkg)
 
-    let cands = genCandidates c bound_tyvars dvs pr'
+    ic <- currentClass c
+    let cands = genCandidates ic bound_tyvars dvs pr'
         isTry (Try _) = True
         isTry _       = False
     r <- if any isTry cands then f False cands else return Nothing
@@ -1143,7 +1154,8 @@ findFunDepConflict (VPred _ (PredWithPositions (IsIn c ts) pos _)) = do
                   Defer     -> walk is
                   Conflict  -> return (Just (pr', h))
                   Match _   -> return Nothing
-        walk (genInsts c bound_tyvars Nothing pr')
+        ic <- currentClass c
+        walk (genInsts ic bound_tyvars Nothing pr')
 
 dvsSub :: Subst -> DVS -> DVS
 dvsSub s dvs = dvs
@@ -2244,7 +2256,8 @@ isReduciblePred (VPred i pp@(PredWithPositions p@(IsIn c ts) pos anc)) = do
                             Conflict -> return False
                             Match () -> return True
                             _       -> g eps
-    let is' = genInsts c bvs Nothing p'
+    ic <- currentClass c
+    let is' = genInsts ic bvs Nothing p'
     r <- f False is'
     return r
 
