@@ -1,0 +1,77 @@
+package StructVecAfter where
+
+import Vector
+
+struct InnerMeta =
+    imCode :: Bit 8
+    imFlags :: Bit 4
+  deriving (Bits, Eq)
+
+-- fhPad widened from Bit 8 to Bit 24, shifting bit positions of fhSeq and fhMeta
+struct FrameHdr =
+    fhSeq :: Bit 8
+    fhMeta :: InnerMeta
+    fhPad :: Bit 24
+  deriving (Bits, Eq)
+
+-- vhSpare widened from Bit 8 to Bit 24 on packable interface
+interface ViewHdr =
+    vhTag :: Bit 8
+    vhSpare :: Bit 24
+  deriving (Bits)
+
+-- ehSalt widened from Bit 8 to Bit 16 in custom Bits instance
+struct EncodedHdr =
+    ehKey :: Bit 8
+    ehSalt :: Bit 16
+
+instance Bits EncodedHdr 24 where
+    pack s = (s.ehKey ^ 8'h5a) ++ s.ehSalt
+    unpack b = EncodedHdr { ehKey = b[23:16] ^ 8'h5a; ehSalt = b[15:0] }
+
+interface StructVecIfc =
+    step :: Bit 4 -> Bit 8 -> Bool -> ActionValue (Bit 8)
+    fusedOut :: Bit 16
+    auxOut :: Bit 8
+
+{-# verilog mkStructVecMod #-}
+mkStructVecMod :: Module StructVecIfc
+mkStructVecMod =
+    module
+        hdrReg :: Reg FrameHdr <- mkRegU
+        altHdrReg :: Reg FrameHdr <- mkRegU
+        viewReg :: Reg ViewHdr <- mkRegU
+        -- Second tuple element widened from Bit 8 to Bit 24
+        pairReg :: Reg (Tuple2 (Bit 8) (Bit 24)) <- mkRegU
+        encReg :: Reg EncodedHdr <- mkRegU
+        -- Vector resized from 6 to 10 elements
+        lanesReg :: Reg (Vector 10 (Bit 8)) <- mkRegU
+
+        interface
+            step slotIdx val pickAlt =
+                do
+                    lanesReg := update lanesReg slotIdx val
+                    let chosenSum = select lanesReg 1 + 8'd1
+                    let xorMeta = hdrReg.fhMeta.imCode ^ val
+                    let pushedSum = (if pickAlt then altHdrReg._read else hdrReg._read).fhSeq + val
+                    let nextCode =
+                            (hdrReg.fhSeq + val) ^
+                            xorMeta ^
+                            (tpl_1 pairReg + val) ^
+                            (encReg.ehKey + val) ^
+                            (viewReg.vhTag + val) ^
+                            (select lanesReg 2 + val) ^
+                            pushedSum ^
+                            chosenSum
+                    hdrReg := FrameHdr {
+                        fhSeq = nextCode;
+                        fhMeta = InnerMeta { imCode = xorMeta; imFlags = truncate (select lanesReg 2 + val) };
+                        fhPad = hdrReg.fhPad
+                    }
+                    return (nextCode ^ chosenSum ^ pushedSum ^ (tpl_1 pairReg + val))
+
+            fusedOut = ((hdrReg.fhSeq ++ hdrReg.fhMeta.imCode) + 16'h0001) ^ 16'h5a5a
+
+            auxOut =
+                (hdrReg.fhSeq ^ altHdrReg.fhSeq ^ hdrReg.fhMeta.imCode ^ tpl_1 pairReg ^ encReg.ehKey ^ viewReg.vhTag ^ select lanesReg 2) ^
+                truncate ((hdrReg.fhSeq ++ hdrReg.fhMeta.imCode) + 16'h0001)

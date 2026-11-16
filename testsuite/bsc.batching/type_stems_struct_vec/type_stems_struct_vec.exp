@@ -1,0 +1,98 @@
+# Verify provenance-driven struct, nested-struct, packable-interface, tuple,
+# custom-Bits, fused concatenation, pushed selector, and vector/slot naming
+# stems, plus zero wire-name/digest churn on unaffected projections and
+# boundary wires when sibling fields widen or vectors resize.
+
+set naming_flags {-keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched -no-opt-aggressive-inline -no-opt-AndOr -opt-join-defs}
+
+proc write_same_pkg_variant { src_bs dst_dir } {
+    global subdir
+    set full_dir [file join $subdir $dst_dir]
+    file delete -force $full_dir
+    file mkdir $full_dir
+    set in_fh [open [file join $subdir $src_bs] r]
+    set txt [read $in_fh]
+    close $in_fh
+    regsub {^package StructVec(Before|After) where} $txt {package StructVecPkg where} txt2
+    set out_fh [open [file join $full_dir StructVecPkg.bs] w]
+    puts -nonewline $out_fh $txt2
+    close $out_fh
+}
+
+proc extract_matching_wire_names { vfile pattern } {
+    global subdir
+    set full [file join $subdir $vfile]
+    set fh [open $full r]
+    set txt [read $fh]
+    close $fh
+    set found {}
+    foreach tok [regexp -all -inline {[A-Za-z_][A-Za-z0-9_$]*} $txt] {
+        if { [regexp $pattern $tok] } {
+            lappend found $tok
+        }
+    }
+    return [lsort -unique $found]
+}
+
+if { $vtest == 1 } {
+    write_same_pkg_variant StructVecBefore.bs v_before
+    write_same_pkg_variant StructVecAfter.bs v_after
+
+    compile_verilog_pass v_before/StructVecPkg.bs mkStructVecMod [concat $naming_flags {-p v_before:+ -bdir v_before -vdir v_before}]
+    copy v_before/mkStructVecMod.v mkStructVecBefore.v
+
+    compile_verilog_pass v_after/StructVecPkg.bs mkStructVecMod [concat $naming_flags {-p v_after:+ -bdir v_after -vdir v_after}]
+    copy v_after/mkStructVecMod.v mkStructVecAfter.v
+
+    # 1. User binder preservation (chosenSum and pushedSum stay clean)
+    find_regexp mkStructVecBefore.v {\mchosenSum\M}
+    find_regexp mkStructVecAfter.v {\mchosenSum\M}
+    find_regexp mkStructVecBefore.v {\mpushedSum\M}
+    find_regexp mkStructVecAfter.v {\mpushedSum\M}
+
+    # 2. Type-derived stems + boundary wires keep identical stems and _h<h4>
+    #    digests across sibling-field widening and vector resizing.
+    set stable_patterns {
+        {^hdrReg_h[0-9a-z]{4}$}
+        {^altHdrReg_h[0-9a-z]{4}$}
+        {^viewReg_h[0-9a-z]{4}$}
+        {^pairReg_h[0-9a-z]{4}$}
+        {^lanesReg_h[0-9a-z]{4}$}
+        {^fhSeq_h[0-9a-z]{4}$}
+        {^pairReg_tpl_1_PLUS_step_2_h[0-9a-z]{4}$}
+        {^lanesReg_2_PLUS_step_2_h[0-9a-z]{4}$}
+        {^fhSeq_CONCAT_imCode_h[0-9a-z]{4}$}
+        {^fhSeq_CONCAT_imCode_PLUS_1_h[0-9a-z]{4}$}
+        {^pairReg_tpl_1_XOR_ehKey_XOR_vhTag_XOR_lanesReg_2_h[0-9a-z]{4}$}
+    }
+
+    foreach pat $stable_patterns {
+        set before_matches [extract_matching_wire_names mkStructVecBefore.v $pat]
+        set after_matches [extract_matching_wire_names mkStructVecAfter.v $pat]
+        if { [llength $before_matches] == 0 } {
+            fail "expected wire matching $pat in mkStructVecBefore.v"
+        } else {
+            pass "found wire matching $pat in mkStructVecBefore.v: $before_matches"
+        }
+        if { $before_matches eq $after_matches } {
+            pass "zero name/digest churn for $pat ($before_matches)"
+        } else {
+            fail "churn on $pat: before=$before_matches vs after=$after_matches"
+        }
+    }
+
+    # 3. Vector MSB update concat stems reflect NLitSlot (step_1_EQ_5 / step_1_EQ_9)
+    #    and PStepElem (lanesReg_5 / lanesReg_9).
+    find_regexp mkStructVecBefore.v {\mIF_step_1_EQ_5_THEN_step_2_ELSE_lanesReg_5_CON_ETC_h[0-9a-z]{4}\M}
+    find_regexp mkStructVecAfter.v {\mIF_step_1_EQ_9_THEN_step_2_ELSE_lanesReg_9_CON_ETC_h[0-9a-z]{4}\M}
+
+    file delete -force [file join $subdir v_before] [file join $subdir v_after]
+}
+
+reverse_intern_same_bo StructVecBefore.bs
+reverse_intern_same_verilog StructVecBefore.bs mkStructVecMod $naming_flags
+check_verilog_regen StructVecBefore.bs mkStructVecMod $naming_flags
+
+reverse_intern_same_bo StructVecAfter.bs
+reverse_intern_same_verilog StructVecAfter.bs mkStructVecMod $naming_flags
+check_verilog_regen StructVecAfter.bs mkStructVecMod $naming_flags

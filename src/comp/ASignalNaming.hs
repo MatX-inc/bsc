@@ -1,10 +1,12 @@
 {-# LANGUAGE BangPatterns #-}
 module ASignalNaming (
+    AProvLookup,
     mkSignalNamingEnvFromAPackage,
     mkSignalNamingEnvFromASPackage,
     signalAType,
     signalAExpr,
     signalAExprWithStems,
+    signalAExprWithProv,
     signalAExprStem,
     signalNameFromAExpr,
     signalNameFromAExprDefault,
@@ -16,11 +18,13 @@ module ASignalNaming (
 ) where
 
 import qualified Data.IntMap.Strict as IM
+import qualified Data.IntSet as IS
 import qualified Data.List as L
 import qualified Data.Map.Strict as M
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as S
 
+import ASourceTypes (provenanceLookup, sourceTypeKey)
 import ASyntax (
     AAbstractInput(..),
     AClock(..),
@@ -75,6 +79,7 @@ import SignalNaming (
     isClockOrResetPortName,
     isDefAnchorId,
     isDefTempId,
+    lookupArgNamedLit,
     lowerResolvedMethodRead,
     mkDefOrPort,
     mkSignalConcat,
@@ -85,11 +90,14 @@ import SignalNaming (
     mkSignalPort,
     mkSignalTuple,
     mkSignalTupleSel,
+    nliMatchesBitLit,
     resolveOutputGate,
+    selectProvenanceSignalExpr,
     signalExprStem,
     signalExprType,
     wireInfoSpecialNames
     )
+import SourceProvenance (NamedLitInfo, ProvFact(..))
 
 isIfWrapperPrim :: PrimOp -> Bool
 isIfWrapperPrim PrimExpIf = True
@@ -277,12 +285,36 @@ signalAType (ATAbstract aid szs)
     | aid == idPrimUnit = SignalBit 0
     | otherwise = SignalAbstract (getIdString aid) szs
 
-dropAPrimUnitArgs :: [AExpr] -> [AExpr]
-dropAPrimUnitArgs = filter (not . isAUnitArg)
-  where
-    isAUnitArg :: AExpr -> Bool
-    isAUnitArg (ASInt i (ATBit 0) _) = i == idPrimUnit
-    isAUnitArg _ = False
+type AProvLookup = AExpr -> [ProvFact AExpr]
+
+noAProv :: AProvLookup
+noAProv _ = []
+
+isAUnitArg :: AExpr -> Bool
+isAUnitArg (ASInt i (ATBit 0) _) = i == idPrimUnit
+isAUnitArg _ = False
+
+aLitMatches :: AExpr -> NamedLitInfo -> Bool
+aLitMatches (ASInt _ (ATBit w) lit) nli = nliMatchesBitLit w (ilValue lit) nli
+aLitMatches _ _ = False
+
+isSelfAExpr :: Maybe Id -> AExpr -> AExpr -> Bool
+isSelfAExpr mSelfId cur candidate
+    | candidate == cur = True
+    | Just sid <- mSelfId
+    , ASDef _ did <- candidate = did == sid
+    | otherwise = False
+
+skipsAProv :: AExpr -> Bool
+skipsAProv (ASDef {}) = True
+skipsAProv (ASPort {}) = True
+skipsAProv (ASParam {}) = True
+skipsAProv (ASClock {}) = True
+skipsAProv (ASReset {}) = True
+skipsAProv (ASInout {}) = True
+skipsAProv (AMGate {}) = True
+skipsAProv (ATaskValue {}) = True
+skipsAProv _ = False
 
 signalAExpr :: SignalNamingEnv -> AExpr -> SignalExpr
 signalAExpr env expr = signalAExprWithStems env M.empty expr
@@ -300,30 +332,107 @@ exprNameFromAExpr :: SignalNamingEnv -> AExpr -> ExprName
 exprNameFromAExpr env expr = exprName env (signalAExpr env expr)
 
 signalAExprWithStems :: SignalNamingEnv -> M.Map Id String -> AExpr -> SignalExpr
-signalAExprWithStems env stemMap (APrim _ (ATBit outW) PrimSelect [arg]) =
-    let se = signalAExprWithStems env stemMap arg
+signalAExprWithStems env stemMap expr =
+    signalAExprWithProv env noAProv stemMap expr
+
+signalAExprWithProv ::
+    SignalNamingEnv ->
+    AProvLookup ->
+    M.Map Id String ->
+    AExpr ->
+    SignalExpr
+signalAExprWithProv env lookupProv stemMap expr =
+    signalAExprWithProvSelf env lookupProv stemMap Nothing expr
+
+signalAExprWithProvSelf ::
+    SignalNamingEnv ->
+    AProvLookup ->
+    M.Map Id String ->
+    Maybe Id ->
+    AExpr ->
+    SignalExpr
+signalAExprWithProvSelf env lookupProv stemMap mSelfId expr =
+    signalAExprGo env lookupProv stemMap mSelfId 0 expr
+
+signalAExprGo ::
+    SignalNamingEnv ->
+    AProvLookup ->
+    M.Map Id String ->
+    Maybe Id ->
+    Int ->
+    AExpr ->
+    SignalExpr
+signalAExprGo env lookupProv stemMap mSelfId depth (APrim _ _ PrimRange [_, _, arg]) =
+    signalAExprGo env lookupProv stemMap mSelfId depth arg
+signalAExprGo env lookupProv stemMap mSelfId depth (APrim _ _ p [arg])
+    | isIfWrapperPrim p =
+        signalAExprGo env lookupProv stemMap mSelfId depth arg
+signalAExprGo env lookupProv stemMap mSelfId depth expr
+    | depth < 8 && not (skipsAProv expr) =
+        let facts = lookupProv expr
+        in case if null facts
+                then Nothing
+                else selectProvenanceSignalExpr
+                         env
+                         (signalAType (ae_type expr))
+                         (isSelfAExpr mSelfId expr)
+                         (signalAExprGo env lookupProv stemMap Nothing (depth + 1))
+                         (aLitMatches expr)
+                         facts of
+               Just se -> se
+               Nothing ->
+                   signalAExprStructural env lookupProv stemMap (depth + 1) facts expr
+    | otherwise =
+        signalAExprStructural env lookupProv stemMap (depth + 1) [] expr
+
+lowerAArgWithFacts ::
+    SignalNamingEnv ->
+    AProvLookup ->
+    M.Map Id String ->
+    Int ->
+    [ProvFact AExpr] ->
+    (Int, AExpr) ->
+    SignalExpr
+lowerAArgWithFacts env lookupProv stemMap nextDepth facts (argIdx, arg)
+    | not (null facts)
+    , Just nli <- lookupArgNamedLit argIdx facts
+    , aLitMatches arg nli =
+        SignalNamedLit (signalAType (ae_type arg)) nli
+    | otherwise =
+        signalAExprGo env lookupProv stemMap Nothing nextDepth arg
+
+signalAExprStructural ::
+    SignalNamingEnv ->
+    AProvLookup ->
+    M.Map Id String ->
+    Int ->
+    [ProvFact AExpr] ->
+    AExpr ->
+    SignalExpr
+signalAExprStructural env lookupProv stemMap nextDepth _ (APrim _ (ATBit outW) PrimSelect [arg]) =
+    let se = signalAExprGo env lookupProv stemMap Nothing nextDepth arg
         inW =
             case signalExprType se of
                 SignalBit w -> w
                 _ -> outW
     in mkSignalExtract outW inW se (mkSignalNat (outW - 1)) (mkSignalNat 0)
-signalAExprWithStems env stemMap (APrim _ (ATBit outW) PrimExtract [arg, hi, lo]) =
-    let se = signalAExprWithStems env stemMap arg
-        shi = signalAExprWithStems env stemMap hi
-        slo = signalAExprWithStems env stemMap lo
+signalAExprStructural env lookupProv stemMap nextDepth _ (APrim _ (ATBit outW) PrimExtract [arg, hi, lo]) =
+    let se = signalAExprGo env lookupProv stemMap Nothing nextDepth arg
+        shi = signalAExprGo env lookupProv stemMap Nothing nextDepth hi
+        slo = signalAExprGo env lookupProv stemMap Nothing nextDepth lo
         inW =
             case signalExprType se of
                 SignalBit w -> w
                 _ -> outW
     in mkSignalExtract outW inW se shi slo
-signalAExprWithStems env stemMap (APrim _ _ PrimRange [_, _, arg]) =
-    signalAExprWithStems env stemMap arg
-signalAExprWithStems env stemMap (APrim _ _ PrimIntegerToBit [APrim _ _ PrimStringToInteger [s]]) =
-    signalAExprWithStems env stemMap s
-signalAExprWithStems env stemMap (APrim _ _ p [arg])
-    | isIfWrapperPrim p = signalAExprWithStems env stemMap arg
-signalAExprWithStems env stemMap (APrim _ (ATBit outW) PrimZeroExt [arg]) =
-    let se = signalAExprWithStems env stemMap arg
+signalAExprStructural env lookupProv stemMap nextDepth _ (APrim _ _ PrimRange [_, _, arg]) =
+    signalAExprGo env lookupProv stemMap Nothing nextDepth arg
+signalAExprStructural env lookupProv stemMap nextDepth _ (APrim _ _ PrimIntegerToBit [APrim _ _ PrimStringToInteger [s]]) =
+    signalAExprGo env lookupProv stemMap Nothing nextDepth s
+signalAExprStructural env lookupProv stemMap nextDepth _ (APrim _ _ p [arg])
+    | isIfWrapperPrim p = signalAExprGo env lookupProv stemMap Nothing nextDepth arg
+signalAExprStructural env lookupProv stemMap nextDepth _ (APrim _ (ATBit outW) PrimZeroExt [arg]) =
+    let se = signalAExprGo env lookupProv stemMap Nothing nextDepth arg
     in case signalExprType se of
            SignalBit inW ->
                let padW = outW - inW
@@ -331,86 +440,157 @@ signalAExprWithStems env stemMap (APrim _ (ATBit outW) PrimZeroExt [arg]) =
                   then se
                   else mkSignalConcat [mkSignalInt (SignalBit padW) 0, se]
            _ -> SignalPrim (SignalBit outW) PrimZeroExt [se]
-signalAExprWithStems env stemMap (APrim _ (ATBit outW) PrimTrunc [arg]) =
-    let se = signalAExprWithStems env stemMap arg
+signalAExprStructural env lookupProv stemMap nextDepth _ (APrim _ (ATBit outW) PrimTrunc [arg]) =
+    let se = signalAExprGo env lookupProv stemMap Nothing nextDepth arg
     in case signalExprType se of
            SignalBit inW ->
                mkSignalExtract outW inW se (mkSignalNat (outW - 1)) (mkSignalNat 0)
            _ -> SignalPrim (SignalBit outW) PrimTrunc [se]
-signalAExprWithStems env stemMap (APrim _ _ PrimConcat es) =
-    mkSignalConcat (map (signalAExprWithStems env stemMap) es)
-signalAExprWithStems env stemMap (APrim _ ty p es) =
-    SignalPrim (signalAType ty) p (map (signalAExprWithStems env stemMap) es)
-signalAExprWithStems env _ (ATupleSel ty (AMethValue _ instId methId) idx1) =
+signalAExprStructural env lookupProv stemMap nextDepth _ (APrim _ _ PrimConcat es) =
+    mkSignalConcat (map (signalAExprGo env lookupProv stemMap Nothing nextDepth) es)
+signalAExprStructural env lookupProv stemMap nextDepth facts (APrim _ ty p es) =
+    let ses =
+            map
+                (lowerAArgWithFacts env lookupProv stemMap nextDepth facts)
+                (zip [0 :: Int ..] es)
+    in SignalPrim (signalAType ty) p ses
+signalAExprStructural env _ _ _ _ (ATupleSel ty (AMethValue _ instId methId) idx1) =
     lowerResolvedMethodRead env Nothing (signalAType ty) instId methId (Just idx1) []
-signalAExprWithStems env stemMap (ATupleSel ty (AMethCall _ instId methId rawArgs) idx1) =
-    let sArgs = map (signalAExprWithStems env stemMap) (dropAPrimUnitArgs rawArgs)
+signalAExprStructural env lookupProv stemMap nextDepth facts (ATupleSel ty mc@(AMethCall _ instId methId rawArgs) idx1) =
+    let mFacts = if null facts then lookupProv mc else facts
+        indexedArgs = [ (k, a) | (k, a) <- zip [1 :: Int ..] rawArgs, not (isAUnitArg a) ]
+        sArgs = map (lowerAArgWithFacts env lookupProv stemMap nextDepth mFacts) indexedArgs
     in lowerResolvedMethodRead env Nothing (signalAType ty) instId methId (Just idx1) sArgs
-signalAExprWithStems env stemMap (ATupleSel ty inner idx1) =
-    mkSignalTupleSel (signalAType ty) (signalAExprWithStems env stemMap inner) idx1
-signalAExprWithStems env _ (AMethValue ty instId methId) =
+signalAExprStructural env lookupProv stemMap nextDepth _ (ATupleSel ty inner idx1) =
+    mkSignalTupleSel (signalAType ty) (signalAExprGo env lookupProv stemMap Nothing nextDepth inner) idx1
+signalAExprStructural env _ _ _ _ (AMethValue ty instId methId) =
     lowerResolvedMethodRead env Nothing (signalAType ty) instId methId Nothing []
-signalAExprWithStems env stemMap (AMethCall ty instId methId rawArgs) =
-    let sArgs = map (signalAExprWithStems env stemMap) (dropAPrimUnitArgs rawArgs)
+signalAExprStructural env lookupProv stemMap nextDepth facts (AMethCall ty instId methId rawArgs) =
+    let indexedArgs = [ (k, a) | (k, a) <- zip [1 :: Int ..] rawArgs, not (isAUnitArg a) ]
+        sArgs = map (lowerAArgWithFacts env lookupProv stemMap nextDepth facts) indexedArgs
     in lowerResolvedMethodRead env Nothing (signalAType ty) instId methId Nothing sArgs
-signalAExprWithStems env stemMap (ATuple ty elems) =
-    mkSignalTuple (signalAType ty) (map (signalAExprWithStems env stemMap) elems)
-signalAExprWithStems env stemMap (ANoInlineFunCall ty objId (ANoInlineFun fn params ports _) rawArgs) =
+signalAExprStructural env lookupProv stemMap nextDepth _ (ATuple ty elems) =
+    mkSignalTuple (signalAType ty) (map (signalAExprGo env lookupProv stemMap Nothing nextDepth) elems)
+signalAExprStructural env lookupProv stemMap nextDepth facts (ANoInlineFunCall ty objId (ANoInlineFun fn params ports _) rawArgs) =
     SignalNoInlineCall
         (signalAType ty)
         (cleanGenBase objId)
         fn
         params
         ports
-        (map (signalAExprWithStems env stemMap) rawArgs)
-signalAExprWithStems env stemMap (AFunCall ty _ fn isCFlag rawArgs) =
-    SignalFunCall (signalAType ty) fn isCFlag (map (signalAExprWithStems env stemMap) rawArgs)
-signalAExprWithStems _ _ (ATaskValue ty _ fn isCFlag cookie) =
+        (map (lowerAArgWithFacts env lookupProv stemMap nextDepth facts) (zip [0 :: Int ..] rawArgs))
+signalAExprStructural env lookupProv stemMap nextDepth facts (AFunCall ty _ fn isCFlag rawArgs) =
+    SignalFunCall
+        (signalAType ty)
+        fn
+        isCFlag
+        (map (lowerAArgWithFacts env lookupProv stemMap nextDepth facts) (zip [0 :: Int ..] rawArgs))
+signalAExprStructural _ _ _ _ _ (ATaskValue ty _ fn isCFlag cookie) =
     SignalTaskValue (signalAType ty) fn isCFlag cookie
-signalAExprWithStems env _ (ASPort ty pid) =
+signalAExprStructural env _ _ _ _ (ASPort ty pid) =
     mkSignalPort env (signalAType ty) (getIdBaseString pid)
-signalAExprWithStems _ _ (ASParam ty pid) =
+signalAExprStructural _ _ _ _ _ (ASParam ty pid) =
     SignalParam (signalAType ty) (getIdBaseString pid)
-signalAExprWithStems env stemMap (ASDef ty did) =
+signalAExprStructural env _ stemMap _ _ (ASDef ty did) =
     let nm = M.findWithDefault (getIdBaseString did) did stemMap
     in mkDefOrPort env (signalAType ty) nm
-signalAExprWithStems _ _ (ASInt _ ty lit) =
+signalAExprStructural _ _ _ _ _ (ASInt _ ty lit) =
     mkSignalInt (signalAType ty) (ilValue lit)
-signalAExprWithStems _ _ (ASReal _ ty r) =
+signalAExprStructural _ _ _ _ _ (ASReal _ ty r) =
     SignalRealLit (signalAType ty) r
-signalAExprWithStems _ _ (ASStr _ ty s) =
+signalAExprStructural _ _ _ _ _ (ASStr _ ty s) =
     SignalStr (signalAType ty) s
-signalAExprWithStems env stemMap (ASAny ty mVal) =
-    SignalAny (signalAType ty) (fmap (signalAExprWithStems env stemMap) mVal)
-signalAExprWithStems env stemMap (ASClock _ (AClock osc gate)) =
+signalAExprStructural env lookupProv stemMap nextDepth _ (ASAny ty mVal) =
+    SignalAny (signalAType ty) (fmap (signalAExprGo env lookupProv stemMap Nothing nextDepth) mVal)
+signalAExprStructural env lookupProv stemMap nextDepth _ (ASClock _ (AClock osc gate)) =
     SignalClock
-        (signalAExprWithStems env stemMap osc)
-        (signalAExprWithStems env stemMap gate)
-signalAExprWithStems env stemMap (ASReset _ (AReset wire)) =
-    SignalReset (signalAExprWithStems env stemMap wire)
-signalAExprWithStems env stemMap (ASInout ty (AInout wire)) =
-    SignalInout (signalAType ty) (signalAExprWithStems env stemMap wire)
-signalAExprWithStems env _ (AMGate _ instId clkId) =
+        (signalAExprGo env lookupProv stemMap Nothing nextDepth osc)
+        (signalAExprGo env lookupProv stemMap Nothing nextDepth gate)
+signalAExprStructural env lookupProv stemMap nextDepth _ (ASReset _ (AReset wire)) =
+    SignalReset (signalAExprGo env lookupProv stemMap Nothing nextDepth wire)
+signalAExprStructural env lookupProv stemMap nextDepth _ (ASInout ty (AInout wire)) =
+    SignalInout (signalAType ty) (signalAExprGo env lookupProv stemMap Nothing nextDepth wire)
+signalAExprStructural env _ _ _ _ (AMGate _ instId clkId) =
     resolveOutputGate env Nothing instId clkId
 
 -- ============================================================
 -- Whole-APackage unnamed temporary naming (for AConv)
 -- ============================================================
 
+dedupInts :: [Int] -> [Int]
+dedupInts = go IS.empty
+  where
+    go _ [] = []
+    go !seen (x : xs)
+        | IS.member x seen = go seen xs
+        | otherwise = x : go (IS.insert x seen) xs
+
 nameAPackageDefs :: Flags -> APackage -> M.Map Id Id
 nameAPackageDefs flags apkg =
     let env = mkSignalNamingEnvFromAPackage flags apkg
         ds = apkg_local_defs apkg
+        rawProv = apkg_provenance apkg
+        lookupProv0 = provenanceLookup ds rawProv
+        defProvMap =
+            if null rawProv
+            then M.empty
+            else M.fromList
+                     [ (sourceTypeKey e, fsDef)
+                     | ADef i t e _ <- ds
+                     , let fsDef = lookupProv0 (ASDef t i)
+                     , not (null fsDef)
+                     ]
+        lookupProv expr
+            | null rawProv = []
+            | otherwise =
+                let fs0 = lookupProv0 expr
+                in if not (null fs0)
+                   then fs0
+                   else M.findWithDefault [] (sourceTypeKey expr) defProvMap
         nds = zip [0 :: Int ..] ds
         posMap = M.fromList [ (i, n) | (n, ADef i _ _ _) <- nds ]
-        deps e = mapMaybe (\v -> M.lookup v posMap) (aVars e)
-        graph = [ (n, deps e) | (n, ADef _ _ e _) <- nds ]
+        synDeps e = mapMaybe (\v -> M.lookup v posMap) (aVars e)
+        provDeps selfIdx e
+            | null rawProv = []
+            | otherwise =
+                filter (/= selfIdx) $
+                concatMap
+                    (\f ->
+                        case f of
+                            PFactAccess base _ -> synDeps base
+                            PFactConcat parts -> concatMap synDeps parts
+                            _ -> [])
+                    (lookupProv e)
+        synGraph = [ (n, dedupInts (synDeps e)) | (n, ADef _ _ e _) <- nds ]
+        combGraph =
+            [ (n, dedupInts (synDeps e ++ provDeps n e))
+            | (n, ADef _ _ e _) <- nds
+            ]
         defByIdx = IM.fromList nds
         topoIdxs =
-            case tsort graph of
-                Right ns -> ns
-                Left sccs ->
-                    internalError ("ASignalNaming.nameAPackageDefs: cycle: " ++ ppReadable sccs)
+            if null rawProv
+            then case tsort synGraph of
+                     Right ns -> ns
+                     Left sccs ->
+                         internalError ("ASignalNaming.nameAPackageDefs: cycle: " ++ ppReadable sccs)
+            else case tsort combGraph of
+                     Right ns -> ns
+                     Left cycSccs ->
+                         let cycSet = IS.fromList (concat cycSccs)
+                             prunedGraph =
+                                 [ if IS.member n cycSet
+                                   then (n, dedupInts (synDeps e))
+                                   else (n, dedupInts (synDeps e ++ provDeps n e))
+                                 | (n, ADef _ _ e _) <- nds
+                                 ]
+                         in case tsort prunedGraph of
+                                Right ns -> ns
+                                Left _ ->
+                                    case tsort synGraph of
+                                        Right ns -> ns
+                                        Left sccs ->
+                                            internalError
+                                                ("ASignalNaming.nameAPackageDefs: cycle: " ++ ppReadable sccs)
         dummyTempId = setBadId (mk_homeless_id "_")
         (_, !exprByIdx) =
             L.foldl'
@@ -419,7 +599,7 @@ nameAPackageDefs flags apkg =
                         Nothing -> (stemAcc, seAcc)
                         Just (ADef i _ e _)
                             | isDefTempId env i ->
-                                let se = signalAExprWithStems env stemAcc e
+                                let se = signalAExprWithProvSelf env lookupProv stemAcc (Just i) e
                                     st = signalExprStem env se
                                     !stemAcc' = rnf st `seq` M.insert i st stemAcc
                                     !seAcc' = rnf se `seq` IM.insert n se seAcc
@@ -432,7 +612,11 @@ nameAPackageDefs flags apkg =
         mkDefItem n (ADef i _ e _)
             | isDefAnchorId env i = ItemAnchor i i
             | isDefTempId env i =
-                let se = IM.findWithDefault (signalAExpr env e) n exprByIdx
+                let se =
+                        IM.findWithDefault
+                            (signalAExprWithProvSelf env lookupProv M.empty (Just i) e)
+                            n
+                            exprByIdx
                 in ItemTemp i dummyTempId se
             | otherwise = ItemUserBinder i i Nothing
     in case assignModuleNames env defItems of

@@ -27,7 +27,7 @@ import ASyntax
 import ASyntaxUtil
 import ForeignFunctions(isAVId, fromAVId)
 -- import AOpt(aOptBoolExpr)
-import ASignalNaming(collectASPackageExistingIds, mkSignalNamingEnvFromASPackage, signalAExpr)
+import ASignalNaming(collectASPackageExistingIds, mkSignalNamingEnvFromASPackage, signalAExprWithProv)
 import SignalNaming(AnchorCollision(..), SignalNameTable, SignalNamingEnv,
                     allocSignalTempName, initSignalNameTable, reserveExistingSignalName)
 import Debug.Trace(traceM)
@@ -97,7 +97,15 @@ genIdFromAExpr :: AExpr -> QQState AId
 genIdFromAExpr expr = do
         state <- get
         let env = qs_namingEnv state
-            (chosen, nt') = allocSignalTempName env (signalAExpr env expr) (qs_nameTable state)
+            lookupProv e
+                | not (hasSourceProvenance state) = []
+                | otherwise =
+                    let extra = rewrittenProvenance state
+                    in dedupFactsBy sourceTypeKey $
+                           sourceProvenance state e ++
+                           maybe [] snd (M.lookup (sourceTypeKey e) extra)
+            se = signalAExprWithProv env lookupProv MS.empty expr
+            (chosen, nt') = allocSignalTempName env se (qs_nameTable state)
         put state{ qs_nameTable = nt' }
         return $ mkId
             noPosition -- XXX aexpr should have an instance of HasPosition

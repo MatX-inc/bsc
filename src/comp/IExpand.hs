@@ -89,7 +89,7 @@ import Data.IORef(IORef, newIORef, modifyIORef', readIORef)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
-import SourceProvenance(mapProvenance, dedupFacts)
+import SourceProvenance(ProvFact(..), mapProvenance, dedupFacts)
 import TypeLinks(TLog, tlNewLog, tlFileOn, exprPtr, RawExpr(..),
                  tlCell, tlCellNoType, tlCopy, tlCoerce,
                  tlStoredValue, tlFixValue, tlArgsReset, tlStored, tlRedex,
@@ -394,38 +394,289 @@ iExpandTL tl_file errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _
       dummyTempId :: Id
       dummyTempId = setBadId $ mkId noPosition fsUnderscore
 
-      effectiveHeapName :: Maybe Id -> SN.SignalExpr -> Maybe Id
-      effectiveHeapName (Just name) se
-          | isLibraryId name && SN.isDirectNamedSignalExpr se = Nothing
-          | otherwise = Just name
-      effectiveHeapName Nothing _ = Nothing
+      isPrimSelectExpr :: HExpr -> Bool
+      isPrimSelectExpr (IAps (ICon _ (ICPrim { primOp = PrimSelect })) _ _) = True
+      isPrimSelectExpr _ = False
 
-      provDef :: HeapPointer -> (HExpr, Maybe (Maybe Id, SN.SignalExpr))
-      provDef p =
+      upgradedByProvenance :: HExpr -> SN.SignalExpr -> Bool
+      upgradedByProvenance rawE se
+          | SN.hasStructuredProvenance se = True
+          | isPrimSelectExpr rawE
+          , SN.SignalPrim _ PrimConcat _ <- se = True
+          | otherwise = False
+
+      effectiveHeapName :: HExpr -> Maybe Id -> SN.SignalExpr -> Maybe Id
+      effectiveHeapName rawE (Just name) se
+          | isLibraryId name && SN.isDirectNamedSignalExpr se = Nothing
+          | isInferredId name && upgradedByProvenance rawE se =
+              Just (setIdBaseString name (SN.signalExprStem namingEnv se))
+          | otherwise = Just name
+      effectiveHeapName _ Nothing _ = Nothing
+
+      hasUserBinder :: Int -> Bool
+      hasUserBinder c =
+          case IM.lookup c iheap of
+            Just (HNF { hc_name = rawName })
+              | Just name <- userHeapName rawName ->
+                  not (isLibraryId name || isInferredId name)
+            _ -> False
+
+      canonRawCells :: [(Int, RawExpr)]
+      canonRawCells =
+          [ (c, RawExpr e)
+          | c <- cse_ptrs
+          , Just (HNF { hc_pexpr = P _ e }) <- [IM.lookup c iheap] ]
+
+      rootRawExprs :: [RawExpr]
+      rootRawExprs =
+          [ RawExpr (irule_pred r) | IRules _ rs <- [rules], r <- rs ] ++
+          [ RawExpr (irule_body r) | IRules _ rs <- [rules], r <- rs ] ++
+          [ RawExpr e | ief <- ifc, Just (e, _) <- [ief_value ief] ] ++
+          [ RawExpr e | (_, sv) <- insts, e <- isv_iargs sv ]
+
+  (rawCellProvMap, rawProvTargets) <-
+      harvestTypeLinksProvenance
+          tl_log (changedOrId norm) (tlBitsInstance symt)
+          ptran hasUserBinder canonRawCells rootRawExprs
+
+  let
+      csePtrSet :: IS.IntSet
+      csePtrSet = IS.fromList cse_ptrs
+
+      revPtrMap :: IM.IntMap [HeapPointer]
+      revPtrMap = IM.fromListWith (++) [ (ptran q, [q]) | q <- ptrs0 ]
+
+      dedupPtrs :: [Int] -> [Int]
+      dedupPtrs = goD IS.empty
+        where
+          goD _ [] = []
+          goD !seen (x : xs)
+              | IS.member x seen = goD seen xs
+              | otherwise = x : goD (IS.insert x seen) xs
+
+      exprCanonPtrs :: forall a. IExpr a -> [Int]
+      exprCanonPtrs e0 = reverse (snd (goExpr e0 (IS.empty, [])))
+        where
+          insPtr q acc@(s, xs) =
+              let cq = ptran q
+              in if not (IS.member cq csePtrSet) || IS.member cq s
+                 then acc
+                 else (IS.insert cq s, cq : xs)
+          goExpr :: IExpr a -> (IS.IntSet, [Int]) -> (IS.IntSet, [Int])
+          goExpr (IAps f _ es) acc = L.foldl' (flip goExpr) acc (f : es)
+          goExpr (ILam _ _ b) acc = goExpr b acc
+          goExpr (ILAM _ _ b) acc = goExpr b acc
+          goExpr (ICon _ (ICStateVar { iVar = IStateVar { isv_iargs = es } })) acc =
+              L.foldl' (flip goExpr) acc es
+          goExpr (ICon _ (ICLazyArray _ arr _)) acc =
+              L.foldl' (\a (ArrayCell q _) -> insPtr q a) acc (Array.elems arr)
+          goExpr (ICon _ (ICUndet { imVal = Just u })) acc = goExpr u acc
+          goExpr (IRefT _ q _ _) acc = insPtr q acc
+          goExpr _ acc = acc
+
+      rawTargetCanonPtrs :: RawTarget -> [Int]
+      rawTargetCanonPtrs (RTCell c) =
+          let cc = ptran c
+          in [ cc | IS.member cc csePtrSet ]
+      rawTargetCanonPtrs (RTExpr _ (RawExpr re)) = exprCanonPtrs re
+
+      rawFactCanonPtrs :: ProvFact RawTarget -> [Int]
+      rawFactCanonPtrs (PFactAccess b _) = rawTargetCanonPtrs b
+      rawFactCanonPtrs (PFactConcat ps) = concatMap rawTargetCanonPtrs ps
+      rawFactCanonPtrs _ = []
+
+      synPtrDeps :: HeapPointer -> [HeapPointer]
+      synPtrDeps p = filter (/= p) (exprCanonPtrs (fst (heapOf p)))
+
+      provPtrDeps :: HeapPointer -> [HeapPointer]
+      provPtrDeps p =
+          filter (/= p) $
+          concatMap rawFactCanonPtrs (IM.findWithDefault [] p rawCellProvMap)
+
+      synPtrGraph :: [(HeapPointer, [HeapPointer])]
+      synPtrGraph = [ (p, synPtrDeps p) | p <- cse_ptrs ]
+
+      combPtrGraph :: [(HeapPointer, [HeapPointer])]
+      combPtrGraph =
+          [ (p, dedupPtrs (synPtrDeps p ++ provPtrDeps p))
+          | p <- cse_ptrs
+          ]
+
+      topoPtrs :: [HeapPointer]
+      topoPtrs =
+          if IM.null rawCellProvMap
+          then case tSortInt synPtrGraph of
+                   Right ps -> ps
+                   Left iss -> internalError ("iExpand.topoPtrs: circular: " ++ ppReadable iss)
+          else case tSortInt combPtrGraph of
+                   Right ps -> ps
+                   Left cycSccs ->
+                       let cycSet = IS.fromList (concat cycSccs)
+                           prunedGraph =
+                               [ if IS.member p cycSet
+                                 then (p, synPtrDeps p)
+                                 else (p, dedupPtrs (synPtrDeps p ++ provPtrDeps p))
+                               | p <- cse_ptrs
+                               ]
+                       in case tSortInt prunedGraph of
+                              Right ps -> ps
+                              Left _ ->
+                                  case tSortInt synPtrGraph of
+                                      Right ps -> ps
+                                      Left iss ->
+                                          internalError ("iExpand.topoPtrs: circular: " ++ ppReadable iss)
+
+      -- Index inline RTExpr provenance targets by their syntactic heap-pointer
+      -- dependencies so each RTExpr resolves once as soon as its dependencies
+      -- enter provCanon.
+      indexedInlineTargets :: [(Int, (RawTarget, [ProvFact RawTarget], [Int]))]
+      indexedInlineTargets =
+          zip [0 :: Int ..]
+              [ (tgt, rfs, dedupPtrs (rawTargetCanonPtrs tgt))
+              | (tgt@(RTExpr _ _), rfs) <- rawProvTargets
+              , not (null rfs)
+              ]
+
+      inlineProv0 :: M.Map HExpr [ProvFact RawTarget]
+      inlineProv0 =
+          M.fromListWith
+              (flip (++))
+              [ (te, rfs)
+              | (_, (tgt, rfs, [])) <- indexedInlineTargets
+              , Just te <- [resolveRawTarget Nothing (const Nothing) tgt]
+              ]
+
+      remCounts0 :: IM.IntMap Int
+      remCounts0 =
+          IM.fromList
+              [ (idx, length ds)
+              | (idx, (_, _, ds)) <- indexedInlineTargets
+              , not (null ds)
+              ]
+
+      inlineTargetMeta :: IM.IntMap (RawTarget, [ProvFact RawTarget])
+      inlineTargetMeta =
+          IM.fromList
+              [ (idx, (tgt, rfs))
+              | (idx, (tgt, rfs, ds)) <- indexedInlineTargets
+              , not (null ds)
+              ]
+
+      waitByPtr :: IM.IntMap [Int]
+      waitByPtr =
+          IM.fromListWith
+              (++)
+              [ (d, [idx])
+              | (idx, (_, _, ds)) <- indexedInlineTargets
+              , d <- ds
+              ]
+
+      advanceInlineTargets ::
+          HeapPointer ->
+          IM.IntMap HExpr ->
+          (IM.IntMap Int, M.Map HExpr [ProvFact RawTarget]) ->
+          (IM.IntMap Int, M.Map HExpr [ProvFact RawTarget])
+      advanceInlineTargets p provCanon (!rc0, !ip0) =
+          L.foldl' stepWait (rc0, ip0) (IM.findWithDefault [] p waitByPtr)
+        where
+          lookupReady q = IM.lookup (ptran q) provCanon
+          stepWait (!rc, !ip) idx =
+              case IM.lookup idx rc of
+                  Nothing -> (rc, ip)
+                  Just k
+                      | k > 1 -> (IM.insert idx (k - 1) rc, ip)
+                      | otherwise ->
+                          let !rc' = IM.delete idx rc
+                              !ip' =
+                                  case IM.lookup idx inlineTargetMeta of
+                                      Just (tgt, rfs)
+                                          | Just te <- resolveRawTarget Nothing lookupReady tgt ->
+                                              M.insertWith (flip (++)) te rfs ip
+                                      _ -> ip
+                          in (rc', ip')
+
+      stepProvPtr ::
+          ( IM.IntMap HExpr
+          , IM.IntMap HExpr
+          , IM.IntMap (Maybe Id, SN.SignalExpr)
+          , M.Map Id String
+          , IM.IntMap Int
+          , M.Map HExpr [ProvFact RawTarget]
+          ) ->
+          HeapPointer ->
+          ( IM.IntMap HExpr
+          , IM.IntMap HExpr
+          , IM.IntMap (Maybe Id, SN.SignalExpr)
+          , M.Map Id String
+          , IM.IntMap Int
+          , M.Map HExpr [ProvFact RawTarget]
+          )
+      stepProvPtr (!provM, !provCanon, !provMeta, !stemAcc, !remCounts, !inlineProv) p =
           let (e, expr_name) = heapOf p
               t = iGetTypeNorm norm e
-              e_prov = hToDef prov_m e
-          in if simpleExpr e || isActionType t || isPairType t
-             then (e_prov, Nothing)
-             else let se_p = ISN.signalIExpr namingEnv e_prov
-                      eff_name = effectiveHeapName expr_name se_p
-                      prov_i =
-                          case eff_name of
-                              Just name | isAnchorId name || SN.isDefAnchorId namingEnv name ->
-                                  setKeepId name
-                              Just name ->
-                                  setKeepId $
-                                  setIdBaseString name (SN.provisionalBinderBase name)
-                              Nothing ->
-                                  setBadId $
-                                  mkId noPosition (mkFString (SN.signalExprStem namingEnv se_p))
-                  in (ICon prov_i (ICValue t e_prov), Just (eff_name, se_p))
+              e_prov = hToDef provM e
+              lookupProvPtr q = IM.lookup (ptran q) provCanon
+              rawCellFs = IM.findWithDefault [] p rawCellProvMap
+              provLookupFn mSid subExpr =
+                  let cellFs =
+                          if isJust mSid && not (null rawCellFs)
+                          then mapMaybe (resolveProvFact (Just p) lookupProvPtr) rawCellFs
+                          else []
+                      subFs =
+                          case M.lookup subExpr inlineProv of
+                              Nothing -> []
+                              Just rfs -> mapMaybe (resolveProvFact (Just p) lookupProvPtr) rfs
+                  in if null subFs
+                     then cellFs
+                     else if null cellFs
+                          then subFs
+                          else dedupFacts (cellFs ++ subFs)
+              (resExpr, !provMeta', !stemAcc') =
+                  if simpleExpr e || isActionType t || isPairType t
+                  then (e_prov, provMeta, stemAcc)
+                  else
+                      let se_p =
+                              ISN.signalIExprWithProv
+                                  namingEnv
+                                  provLookupFn
+                                  stemAcc
+                                  (Just dummyTempId)
+                                  (Just (ISN.signalIType t))
+                                  e_prov
+                          eff_name = effectiveHeapName e_prov expr_name se_p
+                          (prov_i, !nextStemAcc) =
+                              case eff_name of
+                                  Just name | isAnchorId name || SN.isDefAnchorId namingEnv name ->
+                                      (setKeepId name, stemAcc)
+                                  Just name ->
+                                      let pBase = SN.provisionalBinderBase name
+                                          !pi0 = setKeepId (setIdBaseString name pBase)
+                                          !sa = foldr seq () pBase `seq` M.insert pi0 pBase stemAcc
+                                      in (pi0, sa)
+                                  Nothing ->
+                                      let st = SN.signalExprStem namingEnv se_p
+                                          !ti = setBadId (mkId noPosition (mkFString st))
+                                          !sa = foldr seq () st `seq` M.insert ti st stemAcc
+                                      in (ti, sa)
+                          !pm = IM.insert p (eff_name, se_p) provMeta
+                      in (ICon prov_i (ICValue t e_prov), pm, nextStemAcc)
+              !provCanon' = IM.insert p resExpr provCanon
+              !provM' =
+                  L.foldl'
+                      (\ !acc q -> IM.insert q resExpr acc)
+                      provM
+                      (IM.findWithDefault [p] p revPtrMap)
+              (!remCounts', !inlineProv') =
+                  advanceInlineTargets p provCanon' (remCounts, inlineProv)
+          in (provM', provCanon', provMeta', stemAcc', remCounts', inlineProv')
 
-      prov_info = [ (p, provDef p) | p <- cse_ptrs ]
-      prov_expr_map = IM.fromList [ (p, e) | (p, (e, _)) <- prov_info ]
-      prov_name_map = IM.fromList [ (p, mName) | (p, (_, Just (mName, _))) <- prov_info ]
-      provGet p = fromJustOrErr "iExpand.provGet" (IM.lookup p prov_expr_map)
-      prov_m = IM.fromList [ (p, provGet (ptran p)) | p <- ptrs0 ]
+      (_, _, !provMetaMap, _, _, _) =
+          L.foldl'
+              stepProvPtr
+              (IM.empty, IM.empty, IM.empty, M.empty, remCounts0, inlineProv0)
+              topoPtrs
+
+      prov_name_map = IM.map fst provMetaMap
 
       nameItems =
           [ case mName of
@@ -435,7 +686,8 @@ iExpandTL tl_file errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _
                     SN.ItemUserBinder p name (Just se_p)
                 Nothing ->
                     SN.ItemTemp p dummyTempId se_p
-          | (p, (_, Just (mName, se_p))) <- prov_info
+          | p <- cse_ptrs
+          , Just (mName, se_p) <- [IM.lookup p provMetaMap]
           ]
       assignedNameMap =
           case SN.assignModuleNames namingEnv nameItems of
@@ -530,21 +782,6 @@ iExpandTL tl_file errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _
             else Nothing
 
       -- the expanded module
-      hasUserBinder c =
-          case IM.lookup c iheap of
-            Just (HNF { hc_name = rawName })
-              | Just name <- userHeapName rawName ->
-                  not (isLibraryId name || isInferredId name)
-            _ -> False
-      canonRawCells =
-          [ (c, RawExpr e)
-          | c <- cse_ptrs
-          , Just (HNF { hc_pexpr = P _ e }) <- [IM.lookup c iheap] ]
-      rootRawExprs =
-          [ RawExpr (irule_pred r) | IRules _ rs <- [rules], r <- rs ] ++
-          [ RawExpr (irule_body r) | IRules _ rs <- [rules], r <- rs ] ++
-          [ RawExpr e | ief <- ifc, Just (e, _) <- [ief_value ief] ] ++
-          [ RawExpr e | (_, sv) <- insts, e <- isv_iargs sv ]
       lookupPtr p = IM.lookup (ptran p) ptr_expr_map
       mergeProv kvs =
           let mp = M.fromListWith (flip (++)) kvs
@@ -558,12 +795,7 @@ iExpandTL tl_file errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _
                   | otherwise = goSeen seen rest
           in goSeen S.empty kvs
 
-  (_, rawProvTargets) <-
-      harvestTypeLinksProvenance
-          tl_log (changedOrId norm) (tlBitsInstance symt)
-          ptran hasUserBinder canonRawCells rootRawExprs
-
-  let resolvedProv = mergeProv
+      resolvedProv = mergeProv
           [ (targetExpr, fs')
           | (tgt, rawFacts) <- rawProvTargets
           , let mSelf = case tgt of
