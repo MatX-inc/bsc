@@ -28,7 +28,7 @@ set path_save $env(PATH)
 set env(PATH) "$here:$path_save"
 
 # a typed hole gets approximate (type search) matches
-compile_pass_warning HoleBloogle.bs T0159 1 {-bloogle-db fake.db}
+compile_pass_warning HoleBloogle.bs T0169 1 {-bloogle-db fake.db}
 compare_file HoleBloogle.bs.bsc-out
 
 # an unbound variable gets exact name matches only
