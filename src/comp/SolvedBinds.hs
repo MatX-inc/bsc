@@ -139,7 +139,8 @@ infixl 6 <++ -- directional append new <++ old
 (<++) :: SolvedBinds -> SolvedBinds -> SolvedBinds
 new <++ old
     -- Check invariant here
-    | any (dependsOn oldAllIds) (nonRecursiveBinds new) =
+    | any (\ b -> dependsOn (recursiveIds old) b ||
+                   dependsOn (nonRecursiveIds old) b) (nonRecursiveBinds new) =
         internalError $ "SolvedBinds invariant violated: new depends on old!\n" ++
                         "new: " ++ ppReadable new ++ "\n" ++
                         "old: " ++ ppReadable old
@@ -147,14 +148,19 @@ new <++ old
     | otherwise = internalError $ "nonRecursive depending on recursive in result: " ++
                                   ppReadable (new, old, result)
     where dependsOn s ((_,_,_), fv) = not $ S.disjoint fv s
-          oldAllIds = recursiveIds old `S.union` nonRecursiveIds old
           promoteTransitively [] nonRecs = ([], nonRecs)
           promoteTransitively promoted nonRecs = (promoted ++ transitivePromoted, finalNonRecs)
             where promotedIds = S.fromList [ i | ((i, _, _), _) <- promoted ]
                   (newlyPromoted, stillNonRecs) = partition (dependsOn promotedIds) nonRecs
                   (transitivePromoted, finalNonRecs) = promoteTransitively newlyPromoted stillNonRecs
-          (newlyRec, stillNonRec) = uncurry promoteTransitively $
-                                    partition (dependsOn $ recursiveIds new) (nonRecursiveBinds old)
+          -- (bindings are merged in one at a time, each into all those
+          -- so far: work proportional to the old side must be confined
+          -- to the merges that can have any)
+          (newlyRec, stillNonRec)
+              | S.null (recursiveIds new) = ([], nonRecursiveBinds old)
+              | otherwise =
+                    uncurry promoteTransitively $
+                    partition (dependsOn $ recursiveIds new) (nonRecursiveBinds old)
           -- Updates for cached sets
           newRecIds = S.fromList [i | ((i, _, _), _) <- recursiveBinds new ++ newlyRec]
           nowNotNonRecIds = S.fromList [ i | ((i, _ , _), _)  <- newlyRec ]
@@ -168,7 +174,13 @@ new <++ old
                       bindTypes = bindTypes new `M.union` bindTypes old,
                       directIncoherences = directIncoherences new `M.union` directIncoherences old
                    }
-          noBadDeps = all (not . dependsOn (recursiveIds result)) (nonRecursiveBinds result)
+          -- The old side's non-recursive bindings did not depend on its
+          -- recursive ones (checked when it was made), so they need
+          -- checking against the newly recursive ones only.
+          noBadDeps =
+              all (not . dependsOn (recursiveIds result)) (nonRecursiveBinds new) &&
+              (S.null newRecIds ||
+               all (not . dependsOn newRecIds) stillNonRec)
 
 -- Compute the transitive closure of incoherence across all bindings: any
 -- binding whose free variables reference an incoherent Id is itself incoherent.
