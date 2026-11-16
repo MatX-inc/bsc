@@ -80,7 +80,7 @@ $(error BSC_BUILD=$(BSC_BUILD): no $(CABAL_PROJECT) (INSTALL.md))
 endif
 endif
 
-CABAL_FLAGS = $(if $(CABAL_PROJECT),--project-file=$(CABAL_PROJECT)) --with-compiler=$(GHC) $(if $(strip $(GHCRTSFLAGS)),--ghc-options='$(GHCRTSFLAGS)')
+CABAL_FLAGS = $(if $(DO_INTERNAL_CHECKS),--flags=+internal-checks) $(if $(CABAL_PROJECT),--project-file=$(CABAL_PROJECT)) --with-compiler=$(GHC) $(if $(strip $(GHCRTSFLAGS)),--ghc-options='$(GHCRTSFLAGS)')
 
 # -----
 # GHC package info
