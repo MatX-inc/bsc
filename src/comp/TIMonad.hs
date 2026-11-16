@@ -42,6 +42,7 @@ import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..))
 import Flags(Flags, maxTIStackDepth)
 import Subst
 import Pred
+import SolvedBinds(SolvedBinds, emptySBs, (<++), extractClosures)
 import Scheme
 import Assump
 import SymTab
@@ -266,6 +267,14 @@ tiRecoveringFromError' do_something create_fake_output = do
             -}
             s <- getSubst
             updSubst (trimSubst dummy)
+            -- The solved-dictionary pool lives in TI state, so the
+            -- trimmed substitution must be forced into it exactly as
+            -- it is forced into the returned value: a pool binding
+            -- deposited inside "do_something" may mention a type
+            -- variable resolved inside it, whose mapping is destroyed
+            -- by the trim.  (Vars still free at this point have no
+            -- mapping to lose and resolve later as usual.)
+            apSubSolvedPool s
             return (apSub s answer)
           ))
      (\es ->
