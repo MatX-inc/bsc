@@ -38,8 +38,16 @@ instance Unify Type where
 mguWork :: Bool -> [TyVar] -> Type -> Type -> Maybe (Subst, [(Type, Type)])
 -- an unreducable ATF application: identical types unify cleanly (reflexivity);
 -- different types generate a deferred equality constraint.
+-- A type synonym is expanded when (and only when) that exposes an ATF
+-- application, so that a synonym-hidden ATF unifies exactly like the
+-- direct ATF application, instead of a variable being structurally
+-- bound to the unexpanded synonym (which pins a fundep-determined
+-- variable and makes derived-instance schemes spuriously mismatch).
 mguWork strict bound_tyvars t1 t2
-    | isATFAp t1 || isATFAp t2 = atfUnify bound_tyvars t1 t2
+    | isJust m1 || isJust m2 =
+        atfUnify bound_tyvars (fromMaybe t1 m1) (fromMaybe t2 m2)
+  where m1 = asATFAp t1
+        m2 = asATFAp t2
 mguWork strict bound_tyvars t1 t2
     | kind t1 == KNum =
   case kind t2 of
