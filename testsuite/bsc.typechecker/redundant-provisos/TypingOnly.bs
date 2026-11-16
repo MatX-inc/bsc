@@ -1,0 +1,18 @@
+package TypingOnly where
+
+class Kind k t | k -> t where
+  type Tag k = t
+
+struct Box k =
+    tag :: Tag k
+  deriving (Bits)
+
+data A = A
+
+instance Kind A (Bit 4) where {}
+
+-- Bits (Box k) n reduces to Kind k t and Bits t n.  Typing the field needs
+-- Kind k t, which leaves no trace of its (empty) dictionary, so the proviso
+-- cannot be deleted whole and is not reported.
+retag :: (Bits (Box k) n) => Box k -> Box k
+retag b = Box { tag = b.tag }

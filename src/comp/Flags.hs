@@ -168,6 +168,7 @@ data Flags = Flags {
         warnIncompletePatterns :: Bool,
         warnMethodUrgency :: Bool,
         warnOverlappingPatterns :: Bool,
+        warnRedundantProvisos :: Bool,
         warnUndetPred :: Bool,
         -- derive the Verilog "Ports:" comment from the APackage analysis
         -- (getIOPropsA) instead of the netlist measurement; off by default

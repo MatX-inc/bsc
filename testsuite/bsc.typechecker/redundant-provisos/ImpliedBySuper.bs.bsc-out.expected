@@ -1,0 +1,6 @@
+checking package dependencies
+compiling ImpliedBySuper.bs
+Warning: "ImpliedBySuper.bs", line 11, column 13: (T0167)
+  The proviso `Named a' on `describe' is redundant: `Labelled a' supplies all
+  that the definition uses of it.
+All packages are up to date.

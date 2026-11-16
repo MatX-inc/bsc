@@ -1,0 +1,18 @@
+package UsedViaSuper where
+
+class Named a where
+  nameOf :: a -> String
+
+class (Named a) => Labelled a where
+  labelOf :: a -> String
+
+-- Only the superclass method is used, through Labelled a.
+nameOnly :: (Labelled a) => a -> String
+nameOnly x = nameOf x
+
+-- The dictionary is passed on to another definition.
+check :: (Eq a) => a -> a -> Bool
+check x y = x == y
+
+relay :: (Eq a) => a -> Bool
+relay x = check x x

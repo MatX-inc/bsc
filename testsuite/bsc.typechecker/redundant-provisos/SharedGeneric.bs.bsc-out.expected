@@ -1,0 +1,6 @@
+checking package dependencies
+compiling SharedGeneric.bs
+Warning: "SharedGeneric.bs", line 24, column 10: (T0167)
+  The proviso `Conv Up (f n) (f n)' on `relay' is redundant: the definition
+  does not use it.
+All packages are up to date.

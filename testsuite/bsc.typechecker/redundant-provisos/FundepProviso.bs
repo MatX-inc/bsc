@@ -1,0 +1,17 @@
+package FundepProviso where
+
+class Convert a b | a -> b where
+  convert :: a -> b
+
+-- The functional dependency determines b, so the proviso stays even
+-- though its dictionary is never used.
+pick :: (Convert a b) => a -> b -> b
+pick _ y = y
+
+-- SizeOf a needs the Bits proviso, whose dictionary is never used.
+zeroOf :: (Bits a 8) => a -> Bit (SizeOf a)
+zeroOf _ = 0
+
+-- Likewise in the body.
+widthOf :: (Bits a n) => a -> Integer
+widthOf _ = valueOf (SizeOf a)

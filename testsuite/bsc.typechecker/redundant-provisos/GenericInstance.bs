@@ -1,0 +1,56 @@
+package GenericInstance where
+
+import Vector
+
+-- A class with a generic default instance: solving it for a large type
+-- walks the type's whole generic representation.
+class Render a where
+  render :: a -> String
+
+class Render' r where
+  render' :: r -> String
+
+instance (Generic a r, Render' r) => Render a where
+  render x = render' (from x)
+
+instance Render (Bit n) where
+  render _ = "bits"
+
+instance (Render' r) => Render' (Meta m r) where
+  render' (Meta x) = render' x
+
+instance (Render' r1, Render' r2) => Render' (r1, r2) where
+  render' (x, y) = render' x +++ "," +++ render' y
+
+instance Render' () where
+  render' _ = ""
+
+instance (Render' r1, Render' r2) => Render' (Either r1 r2) where
+  render' (Left x) = render' x
+  render' (Right y) = render' y
+
+instance (Render' r) => Render' (Vector n r) where
+  render' v = foldr (\ x s -> render' x +++ s) "" v
+
+instance (Render a) => Render' (Conc a) where
+  render' (Conc x) = render x
+
+instance Render' (ConcPrim a) where
+  render' _ = "prim"
+
+struct Packet t =
+    tag   :: Bit 4
+    body  :: t
+    spare :: Vector 4 t
+  deriving (Bits)
+
+-- The module never renders (nor packs), but every instantiation would have to
+-- solve the Render proviso for its argument type.
+mkRelay :: (IsModule m c, Bits t st, Render (Vector n (Packet t))) =>
+           Reg (Vector n (Packet t)) -> m (Reg (Vector n (Packet t)))
+mkRelay r = return r
+
+mkUser :: Module (Reg (Vector 8 (Packet (Bit 16))))
+mkUser = do
+  r <- mkReg (unpack 0)
+  mkRelay r

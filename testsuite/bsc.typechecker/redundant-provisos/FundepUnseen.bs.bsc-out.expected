@@ -1,0 +1,15 @@
+checking package dependencies
+compiling FundepUnseen.bs
+Warning: "FundepUnseen.bs", line 11, column 9: (T0167)
+  The proviso `Convert a b' on `same' is redundant: the definition does not
+  use it.
+Warning: "FundepUnseen.bs", line 15, column 10: (T0167)
+  The proviso `Convert a b' on `count' is redundant: the definition does not
+  use it.
+Warning: "FundepUnseen.bs", line 15, column 23: (T0167)
+  The proviso `Named b' on `count' is redundant: the definition does not use
+  it.
+Warning: "FundepUnseen.bs", line 19, column 14: (T0167)
+  The proviso `Bits a sa' on `constByte' is redundant: the definition does not
+  use it.
+All packages are up to date.

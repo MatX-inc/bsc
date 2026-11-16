@@ -140,6 +140,7 @@ Flags {
 	warnIncompletePatterns = True,
 	warnMethodUrgency = True,
 	warnOverlappingPatterns = True,
+	warnRedundantProvisos = False,
 	warnUndetPred = False,
 	semanticPortsComment = False
 }

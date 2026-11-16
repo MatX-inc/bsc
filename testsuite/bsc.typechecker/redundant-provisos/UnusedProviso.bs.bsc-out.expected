@@ -1,0 +1,9 @@
+checking package dependencies
+compiling UnusedProviso.bs
+Warning: "UnusedProviso.bs", line 7, column 17: (T0167)
+  The proviso `Shape a' on `isSame' is redundant: the definition does not use
+  it.
+Warning: "UnusedProviso.bs", line 11, column 38: (T0167)
+  The proviso `Eq a' on `mkHolder' is redundant: the definition does not use
+  it.
+All packages are up to date.

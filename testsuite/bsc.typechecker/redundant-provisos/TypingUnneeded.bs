@@ -1,0 +1,12 @@
+package TypingUnneeded where
+
+class Kind k t | k -> t where
+  type Tag k = t
+
+struct Wrapped k =
+    payload :: Bit 8
+
+-- DefaultValue (Tag k) reduces to Kind k t and DefaultValue t.  Nothing
+-- types through Tag k, so neither is needed and the whole proviso goes.
+rewrap :: (DefaultValue (Tag k)) => Wrapped k -> Wrapped k
+rewrap w = Wrapped { payload = w.payload }

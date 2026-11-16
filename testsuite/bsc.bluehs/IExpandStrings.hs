@@ -79,7 +79,7 @@ compileStrings errh flags source = do
   symt0 <- mkSymTab errh mop
   mder <- derive errh flags symt0 mop
   symt1 <- mkSymTab errh mder
-  (mctx, _) <- cCtxReduceIO errh flags symt1 mder
+  (mctx, _, _) <- cCtxReduceIO errh flags symt1 False mder
   symt <- mkSymTab errh mctx
   (tmod, tcErrors, _) <- cTypeCheck errh flags symt (cConvInst errh symt mctx)
   when tcErrors $ bsError errh []

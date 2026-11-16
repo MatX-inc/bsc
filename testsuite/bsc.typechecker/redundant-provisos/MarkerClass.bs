@@ -1,0 +1,10 @@
+package MarkerClass where
+
+-- A class with no methods or superclasses only restricts the types that
+-- callers may use, so its proviso is not reported.
+class Allowed a where {}
+
+instance Allowed (Bit 8) where {}
+
+keep :: (Allowed a) => a -> a
+keep x = x
