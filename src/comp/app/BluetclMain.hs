@@ -11,12 +11,19 @@ import Foreign.C.Types (CInt(..))
 import Foreign.Marshal.Array (newArray0)
 import Foreign.Ptr (Ptr, nullPtr)
 import System.Environment (getArgs, getProgName)
+import System.IO (hFlush, stderr, stdout)
 import System.IO.Error (ioeGetErrorString)
 import System.Posix.Signals
 import TopUtils (getBluespecDir)
 
 foreign import ccall "run_bluetcl"
   c_run_bluetcl :: CInt -> Ptr CString -> IO ()
+
+-- Tcl_Main exits via C exit(), bypassing normal RTS handle finalization.
+foreign export ccall "bluetcl_flush_stdio" flushStdio :: IO ()
+
+flushStdio :: IO ()
+flushStdio = hFlush stdout >> hFlush stderr
 
 main :: IO ()
 main = do
