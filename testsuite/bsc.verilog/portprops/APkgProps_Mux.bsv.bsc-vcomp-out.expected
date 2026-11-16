@@ -34,4 +34,5 @@ EN_setB                        I     1
 -----
 
 Verilog file created: sysAPkgProps_Mux.v
+Elaborated module file created: sysAPkgProps_Mux.ba
 All packages are up to date.
