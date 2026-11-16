@@ -822,6 +822,7 @@ data ErrMsg =
         | ENotExpr
         | ELocalRec [String]
         | ENotAnInterface
+        | WInterfaceSyntaxUsedForStruct String
         | ENotModule String
         | EPolyField
         | ENotKNum String
