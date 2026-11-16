@@ -36,7 +36,7 @@ import qualified Data.ByteString.Lazy as BL
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261114-3"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261114-4"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -596,12 +596,12 @@ instance Bin Flags where
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
                 a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137 a_138 a_139
-                a_140 a_141 a_142 a_143) =
+                a_140 a_141 a_142 a_143 a_144) =
        do
           wr_chunk0; wr_chunk1; wr_chunk2; wr_chunk3; wr_chunk4;
           wr_chunk5; wr_chunk6; wr_chunk7; wr_chunk8; wr_chunk9
       where
-        -- The 144-field serialization is split into NOINLINE chunks so
+        -- The 145-field serialization is split into NOINLINE chunks so
         -- that GHC optimizes bounded pieces: compiling it as a single
         -- monadic chain needs more than 15GB of heap.
         {-# NOINLINE wr_chunk0 #-}
@@ -662,7 +662,7 @@ instance Bin Flags where
         wr_chunk9 =
           do
              toBin a_135; toBin a_136; toBin a_137; toBin a_138; toBin a_139;
-             toBin a_140; toBin a_141; toBin a_142; toBin a_143
+             toBin a_140; toBin a_141; toBin a_142; toBin a_143; toBin a_144
     readBytes =
        do
           (a_000, a_001, a_002, a_003, a_004, a_005, a_006, a_007,
@@ -683,7 +683,7 @@ instance Bin Flags where
            a_113, a_114, a_115, a_116, a_117, a_118, a_119) <- rd_chunk7
           (a_120, a_121, a_122, a_123, a_124, a_125, a_126, a_127,
            a_128, a_129, a_130, a_131, a_132, a_133, a_134) <- rd_chunk8
-          (a_135, a_136, a_137, a_138, a_139, a_140, a_141, a_142, a_143) <- rd_chunk9
+          (a_135, a_136, a_137, a_138, a_139, a_140, a_141, a_142, a_143, a_144) <- rd_chunk9
           return (Flags
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
@@ -699,7 +699,7 @@ instance Bin Flags where
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
                 a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137 a_138 a_139
-                a_140 a_141 a_142 a_143)
+                a_140 a_141 a_142 a_143 a_144)
       where
         {-# NOINLINE rd_chunk0 #-}
         rd_chunk0 =
@@ -777,8 +777,8 @@ instance Bin Flags where
         rd_chunk9 =
           do
              a_135 <- fromBin; a_136 <- fromBin; a_137 <- fromBin; a_138 <- fromBin; a_139 <- fromBin;
-             a_140 <- fromBin; a_141 <- fromBin; a_142 <- fromBin; a_143 <- fromBin
-             return (a_135, a_136, a_137, a_138, a_139, a_140, a_141, a_142, a_143)
+             a_140 <- fromBin; a_141 <- fromBin; a_142 <- fromBin; a_143 <- fromBin; a_144 <- fromBin
+             return (a_135, a_136, a_137, a_138, a_139, a_140, a_141, a_142, a_143, a_144)
 
 -- ----------
 

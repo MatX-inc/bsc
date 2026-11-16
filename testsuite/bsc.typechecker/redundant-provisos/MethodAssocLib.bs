@@ -1,0 +1,4 @@
+package MethodAssocLib where
+
+class Shape a where
+  shapeBits :: a -> Bit (SizeOf a)

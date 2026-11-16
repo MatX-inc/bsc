@@ -1,0 +1,6 @@
+checking package dependencies
+compiling TypeFunProviso.bs
+Warning: "TypeFunProviso.bs", line 9, column 12: (T0167)
+  The proviso `Shape (Bit (SizeOf a))' on `sizeTag' is redundant: the
+  definition does not use it.
+All packages are up to date.

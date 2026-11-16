@@ -1,0 +1,17 @@
+package SizeLink where
+
+-- A written proviso whose fundep determines a type variable that the type
+-- or another written proviso also names relates that variable to the rest
+-- of the signature.  Its dictionary is unused, but it is not reported:
+-- deleting the Bits proviso of fitsTwice leaves tSz ambiguous (T0079), and
+-- deleting both of sameWidth drops the size relation.
+
+fitsTwice :: (Bits t tSz, Add tSz _pad (TMul 2 (SizeOf t))) => t -> Bool
+fitsTwice _ = True
+
+sameWidth :: (Bits a n, Bits b n) => a -> b -> Bool
+sameWidth _ _ = True
+
+-- A size that nothing else names: reported.
+sameValue :: (Bits t tSz, Eq t) => t -> t -> Bool
+sameValue x y = x == y
