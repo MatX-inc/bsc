@@ -855,33 +855,40 @@ aPathsPreSched errh flags apkg = do
   --  * There is no path from a module's static parameters, clock, or reset
   --    (but there are paths for instantiation arguments which become ports)
 
-  let findOutputPathNodes inst_id vname methods =
-          [ (clk, PNStateMethodRes inst_id meth_id res_num) |
-                (meth_id, _, _, numbered_res, clk) <- methods,
-                (res_name, res_num) <- numbered_res,
-                res_name == vname
-          ]
-      findInputPathNodes inst_id vname methods argpairs =
-          [ (Nothing, PNStateArgument inst_id arg_id arg_num) |
-                (arg_id, arg_num, _) <- argpairs
-          ] ++
-          [ (clk, PNStateMethodEnable inst_id meth_id) |
-                (meth_id, _, Just enable, _, clk) <- methods,
-                enable == vname
-          ] ++
-          [ (clk, PNStateMethodArg inst_id meth_id arg_num port_num) |
-                (meth_id, args, _, _, clk) <- methods,
-                (arg, arg_num, port_num) <- args,
-                arg == vname
-          ]
+  -- An instance's input and output path nodes for a port name, in method
+  -- (and port) order; the instance's arguments are inputs for every name.
+  -- The nodes are indexed by name once per instance rather than found by
+  -- scanning all its ports for each path pair.
+  let instPathNodes inst_id methods argpairs =
+          let byName ps = M.map reverse (M.fromListWith (++) [ (n, [x]) | (n, x) <- ps ])
+              find m vname = M.findWithDefault [] vname m
+              outs = byName
+                       [ (res_name, (clk, PNStateMethodRes inst_id meth_id res_num)) |
+                           (meth_id, _, _, numbered_res, clk) <- methods,
+                           (res_name, res_num) <- numbered_res ]
+              arg_nodes =
+                  [ (Nothing, PNStateArgument inst_id arg_id arg_num) |
+                      (arg_id, arg_num, _) <- argpairs ]
+              enables = byName
+                          [ (enable, (clk, PNStateMethodEnable inst_id meth_id)) |
+                              (meth_id, _, Just enable, _, clk) <- methods ]
+              ins = byName
+                      [ (arg, (clk, PNStateMethodArg inst_id meth_id arg_num port_num)) |
+                          (meth_id, args, _, _, clk) <- methods,
+                          (arg, arg_num, port_num) <- args ]
+              findInputPathNodes vname = arg_nodes ++ find enables vname ++ find ins vname
+              findOutputPathNodes vname = find outs vname
+          in  (findInputPathNodes, findOutputPathNodes)
 
   -- Connect module inputs and outputs based on the path annotations
   let state_internal_edges =
           [ (pn1, pn2) |
                 (inst_id, pathpairs, argpairs, methods) <- state_instances,
+                let (findInputPathNodes, findOutputPathNodes) =
+                        instPathNodes inst_id methods argpairs,
                 (vname1, vname2) <- pathpairs,
-                (clk1,pn1) <- findInputPathNodes inst_id vname1 methods argpairs,
-                (clk2,pn2) <- findOutputPathNodes inst_id vname2 methods,
+                (clk1,pn1) <- findInputPathNodes vname1,
+                (clk2,pn2) <- findOutputPathNodes vname2,
                 (clk1 == clk2) || (isNothing clk1) || (isNothing clk2)
           ]
 
