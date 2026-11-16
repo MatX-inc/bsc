@@ -1,46 +1,5 @@
 checking package dependencies
 compiling NoInline.bsv
-code generation for sysNoInline starts
-=== ATS (NoInline sysNoInline):
-APackage sysNoInline
--- APackage parameters
-[]
--- APackage arguments
-clock { osc = CLK }
-reset { RST_N }
--- APackage wire info
-clock info  clock default_clock(CLK, {-unused-});
-reset info  reset default_reset(RST_N) clocked_by(default_clock);
-arg info  [clockarg default_clock;, resetarg default_reset;]
--- APackage clock domains
-[(0, [{ osc:  CLK gate:  1'd1 }])]
--- APackage resets
-[(0, { wire:  RST_N })]
--- AP state elements
--- AP local definitions
-fnNoInline_PLUS_8___d2 :: Bit 8;
-fnNoInline_PLUS_8___d2  = fnNoInline___d1 + 8'd8;
--- IdProp fnNoInline_PLUS_8___d2[IdP_from_rhs]
-fnNoInline___d1 :: Bit 8;
-fnNoInline___d1  = NoInline.fnNoInline 8'd0;
--- IdProp fnNoInline___d1[IdP_from_rhs]
--- AP rules
-rule RL_r "r":
- when 1'd1
-  ==> { Prelude.$display fnNoInline_PLUS_8___d2; }
-[]
-clock domain = Just (0), resets = []
--- AP scheduling pragmas
-[]
--- AP interface
--- AP instance comments
--- AP remaining proof obligations
-[]
-
------
-
-Verilog file created: sysNoInline.v
-Elaborated module file created: sysNoInline.ba
 code generation for module_fnNoInline starts
 === ATS (NoInline module_fnNoInline):
 APackage module_fnNoInline -- function
@@ -87,4 +46,45 @@ method (RDY_fnNoInline, [])RDY_fnNoInline clocked_by (no_clock) reset_by (no_res
 
 Verilog file created: module_fnNoInline.v
 Elaborated module file created: module_fnNoInline.ba
+code generation for sysNoInline starts
+=== ATS (NoInline sysNoInline):
+APackage sysNoInline
+-- APackage parameters
+[]
+-- APackage arguments
+clock { osc = CLK }
+reset { RST_N }
+-- APackage wire info
+clock info  clock default_clock(CLK, {-unused-});
+reset info  reset default_reset(RST_N) clocked_by(default_clock);
+arg info  [clockarg default_clock;, resetarg default_reset;]
+-- APackage clock domains
+[(0, [{ osc:  CLK gate:  1'd1 }])]
+-- APackage resets
+[(0, { wire:  RST_N })]
+-- AP state elements
+-- AP local definitions
+fnNoInline_PLUS_8___d2 :: Bit 8;
+fnNoInline_PLUS_8___d2  = fnNoInline___d1 + 8'd8;
+-- IdProp fnNoInline_PLUS_8___d2[IdP_from_rhs]
+fnNoInline___d1 :: Bit 8;
+fnNoInline___d1  = NoInline.fnNoInline 8'd0;
+-- IdProp fnNoInline___d1[IdP_from_rhs]
+-- AP rules
+rule RL_r "r":
+ when 1'd1
+  ==> { Prelude.$display fnNoInline_PLUS_8___d2; }
+[]
+clock domain = Just (0), resets = []
+-- AP scheduling pragmas
+[]
+-- AP interface
+-- AP instance comments
+-- AP remaining proof obligations
+[]
+
+-----
+
+Verilog file created: sysNoInline.v
+Elaborated module file created: sysNoInline.ba
 All packages are up to date.

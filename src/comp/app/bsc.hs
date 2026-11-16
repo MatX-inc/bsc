@@ -116,9 +116,8 @@ import IConvLet(mayHaveComplicatedLetrecCycle)
 import CType(cTypeConsStats)
 import GroundCType(groundCTypeStats)
 import BinData(binTypeStats)
-import LiftDicts(liftDictsPkg, liftDictsWrapper,
-                 LiftDictsContext, prepareLiftDictsContext,
-                 reserveLiftDictsNames)
+import LiftDicts(liftDictsPkg, liftDictsPkgWithContext, liftDictsWrapper,
+                 LiftDictsContext)
 import ISimpDicts(iSimpDicts)
 import FixupDefs(fixupDefs, updDef, mkDictBuckets, DictEvMap, DictRedirects,
                  mkDictEvMapAndRedirects, extendDictRedirects)
@@ -832,19 +831,19 @@ compilePackage
     -- Lift dictionaries to top level (constructed directly as IDefs
     -- over interned types; iConvPackage splices them into the package)
     start flags DFliftdicts
-    let (mod_lifted, lifted_defs) =
-            if liftDicts flags then liftDictsPkg errh flags symt mod'
-            else (mod', [])
+    let (mod_lifted, lifted_defs, pkg_dict_context) =
+            if liftDicts flags
+            then let (p, ds, ctx) = liftDictsPkgWithContext errh flags symt mod'
+                 in  (p, ds, Just ctx)
+            else (mod', [], Nothing)
     t <- dump errh flags t DFliftdicts dumpnames mod_lifted
     stats flags DFliftdicts mod_lifted
 
-    -- Retain only local instance types and reserved names for wrapper lifting,
-    -- allowing the typechecked source bodies to be released after IConv.
+    -- Retain only local instance types, reserved names, and hashed dictionary
+    -- metadata for wrapper lifting, allowing the typechecked source bodies to
+    -- be released after IConv.
     let !wrapper_dict_context =
-            if liftDicts flags && not (null gens)
-            then Just $! prepareLiftDictsContext
-                            [i | IDef i _ _ _ <- lifted_defs] mod_lifted
-            else Nothing
+            if not (null gens) then pkg_dict_context else Nothing
 
     --------------------------------------------
     -- Convert to internal abstract syntax
@@ -1022,37 +1021,28 @@ compilePackage
             -- but multiple-error-reporting chose to keep going;
             -- since it will already appear as a user error, no need for
             -- an internal error
-            -- Use the accumulated package so names emitted by the main pass
-            -- and earlier wrappers remain reserved.  The host context
-            -- supplies local instance types that are absent from SymTab.
-            (idef, wrap_lifted_defs, ok2)
+            -- Use the accumulated package and dictionary context so wrapper
+            -- lifting reuses matching hashed dictionaries and reserves all
+            -- previously minted names.
+            (idef, wrap_lifted_defs, !dict_context', ok2)
                 <- compileCDefToIDef errh flags dumpnames' symt
                                     dict_context im def
 
             t <- getNow
             start flags DFwrapper_fixup
-            -- Keep the auxiliary definitions in the package before fixup
-            -- ties their references and those of the replacement wrapper.
-            let im_lifted = if null wrap_lifted_defs then im
-                            else im { ipkg_defs = ipkg_defs im ++ wrap_lifted_defs }
             -- Replace the pre-synthesis definition for a module with its
-            -- post-synthesis definition, and update the package's cyclic
-            -- references
+            -- post-synthesis definition, tie references on newly emitted
+            -- definitions, and update callers that transitively reference
+            -- this module without disturbing unrelated sibling definitions.
             -- XXX Note that alldefs is not updated here.  This works
             -- XXX because the defs we use from it will not have changed.
             let (dict_evmap', dict_redirects') =
                     extendDictRedirects dictBuckets dict_evmap
                                         wrap_lifted_defs dict_redirects
-                im' = updDef dict_redirects' idef im_lifted binmods
+                im' = updDef dict_redirects' idef wrap_lifted_defs im binmods
             t <- dump errh flags t DFwrapper_fixup dumpnames' im'
 
             t <- dump errh flags tStartWrapper DFwrappercomp dumpnames' idef
-            -- Reserve names even when fixup removed their definitions.  Force
-            -- the projection so the context does not retain dictionary bodies.
-            let !dict_context' = case dict_context of
-                    Nothing -> Nothing
-                    Just context -> Just $! reserveLiftDictsNames
-                        [i | IDef i _ _ _ <- wrap_lifted_defs] context
             -- recurse for each module in [WrapInfo]
             gen dict_context' dict_evmap' dict_redirects' (im', success && ok && ok2) xs
 
@@ -3091,7 +3081,7 @@ missingUserFiles flags cSrcFiles = filterM cantFind cSrcFiles
 
 compileCDefToIDef :: ErrorHandle -> Flags -> DumpNames -> SymTab ->
                      Maybe LiftDictsContext -> IPackage a -> CDefn ->
-                     IO (IDef a, [IDef a], Bool)
+                     IO (IDef a, [IDef a], Maybe LiftDictsContext, Bool)
 compileCDefToIDef errh flags dumpnames symt host_context ipkg def =
  do
     let pkgid = ipkg_name ipkg
@@ -3114,11 +3104,13 @@ compileCDefToIDef errh flags dumpnames symt host_context ipkg def =
     -- Match the package pipeline: share dictionary evidence before IConv
     -- expands it at each use in the wrapper.
     start flags DFwrapper_liftdicts
-    let (cpkg_lift, lifted_defs) =
+    let (cpkg_lift, lifted_defs, !host_context') =
             case host_context of
                 Just context ->
-                    liftDictsWrapper errh flags symt taken_ids context cpkg_simp
-                Nothing -> (cpkg_simp, [])
+                    let (p, ds, !ctx') =
+                            liftDictsWrapper errh flags symt taken_ids context cpkg_simp
+                    in  (p, ds, Just ctx')
+                Nothing -> (cpkg_simp, [], Nothing)
         def' = case cpkg_lift of
                  (CPackage _ _ _ _ _ [d] _) -> d
                  _ -> internalError "compileCDefToIDef: unexpected number of defs"
@@ -3132,7 +3124,7 @@ compileCDefToIDef errh flags dumpnames symt host_context ipkg def =
         idef = iConvDef errh flags symt ipkg_lifted def'
     t <- dump errh flags t DFwrapper_internal dumpnames idef
 
-    return (idef, lifted_defs, not tcErrors)
+    return (idef, lifted_defs, host_context', not tcErrors)
 
 -- ===============
 

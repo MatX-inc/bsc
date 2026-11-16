@@ -100,9 +100,11 @@ mkDictEvMapAndRedirects :: DictBuckets -> IPackage a -> [(IPackage a, String)]
                         -> (DictEvMap, DictRedirects)
 mkDictEvMapAndRedirects buckets (IPackage _ _ _ ds) ipkgs =
     let ads = concat (ds : [ ds' | (IPackage _ _ _ ds', _) <- ipkgs ])
-        evmap = M.fromList [ (i, (t, getDictEv props))
-                           | IDef i t _ props <- ads, isLiftedDict i ]
-    in  (evmap, mkRedirects buckets evmap)
+        entries = [ (i, (t, getDictEv props))
+                  | IDef i t _ props <- ads, isLiftedDict i ]
+        evmap = M.fromList entries
+        dicts = [ (i, t) | (i, (t, Just _)) <- entries ]
+    in  (evmap, mkRedirectsFor buckets evmap dicts)
 
 mkDictRedirects :: DictBuckets -> IPackage a -> [(IPackage a, String)]
                 -> DictRedirects
@@ -140,10 +142,6 @@ extendDictRedirects buckets evmap new_defs redirects =
 -- on the (Id, Id) pair across the whole computation, and a visited
 -- set guards defensively against a cycle in corrupted input by
 -- refusing (never trusting) a revisited pair.
-mkRedirects :: DictBuckets -> EvMap -> DictRedirects
-mkRedirects buckets evmap =
-    mkRedirectsFor buckets evmap [ (i, t) | (i, (t, Just _)) <- M.toList evmap ]
-
 mkRedirectsFor :: DictBuckets -> EvMap -> [(Id, IType)] -> DictRedirects
 mkRedirectsFor buckets evmap dicts =
     M.fromList (concat (evalState (mapM tryRedirect dicts) M.empty))
@@ -263,31 +261,95 @@ fixupDefs redirects (IPackage mi _ ps ds) ipkgs =
 
 -- ===============
 
--- Replace the definition for a top-level variable with a new definition.
--- (This is used to replace the pre-synthesis definition for a module with
--- the post-synthesis definition.)
--- The first argument must be "mkDictRedirects" computed from the same
--- imported packages that are passed as the fourth argument.
-updDef :: DictRedirects -> IDef a -> IPackage a -> [(IPackage a, String)] -> IPackage a
-updDef redirects d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
+-- Replace the definition for a top-level variable with a new definition
+-- (used to replace the pre-synthesis definition for a module with its
+-- post-synthesis wrapper definition) along with any dictionaries freshly
+-- lifted while compiling that wrapper.
+--
+-- Only the newly compiled wrapper definition and newly lifted dictionaries
+-- undergo initial fixUp (with updateIExprPosition).  Existing definitions in
+-- ipkg have already been simplified by iSimplify: definitions that do not
+-- transitively reference the replaced module are preserved untouched (so
+-- synthesizing one sibling module never mutates positions inside shared
+-- helpers or sibling modules), while callers that transitively reference the
+-- replaced module have their ICDef pointers surgically re-tied.
+updDef :: DictRedirects -> IDef a -> [IDef a] -> IPackage a -> [(IPackage a, String)] -> IPackage a
+updDef redirects d@(IDef mod_i _ _ _) new_lifted_defs ipkg@(IPackage { ipkg_defs = ds }) ips =
     let
-        -- replace the def in the list
-        ds' = [ if i == i' then d else d' | d'@(IDef i' _ _ _) <- ds ]
-        ipkg' = ipkg { ipkg_defs = ds' }
+        directRefs (ILam _ _ body) = directRefs body
+        directRefs (ILAM _ _ body) = directRefs body
+        directRefs (IAps f _ es) = S.unions (directRefs f : map directRefs es)
+        directRefs (ICon ref_i (ICDef _ _)) = S.singleton ref_i
+        directRefs _ = S.empty
 
-        -- The new definition is in ISyntax but it does not yet have
-        -- top-level defs inlined into the variable references, so we
-        -- need to call "fixup" on the def.
-        --
-        -- Further, any top-level def that referred to this module
-        -- need to have the inlined old def replaced with the new def.
-        --
-        -- We use "fixupDefs" to perform both changes.
-        -- XXX However, "fixupDefs" is overkill, for just one def.
-        -- XXX Note that we throw away alldefs, when we could return it.
-        (ipkg'', _) = fixupDefs redirects ipkg' ips
+        callersOf =
+            M.fromListWith S.union
+                [ (r, S.singleton j)
+                | IDef j _ ej _ <- ds
+                , j /= mod_i
+                , r <- S.toList (directRefs ej) ]
+
+        findAffected visited [] = visited
+        findAffected visited (cur : queue) =
+            let cs = S.toList (M.findWithDefault S.empty cur callersOf)
+                fresh = [ c | c <- cs, not (c `S.member` visited) ]
+            in  findAffected (foldr S.insert visited fresh) (fresh ++ queue)
+
+        -- Local definitions (excluding mod_i itself) that transitively reference mod_i
+        affectedSet = findAffected S.empty [mod_i]
+
+        -- Imported definitions fixed up lazily on demand if referenced by d or new_lifted_defs
+        imp_ds = concat [ ds_imp | (IPackage _ _ _ ds_imp, _) <- ips ]
+        imp_ds' = map (redirectDictProps redirects)
+                      (iDefsMap (fixUp redirects mAll) imp_ds)
+        mImp = M.fromList [ (imp_i, imp_e) | IDef imp_i _ imp_e _ <- imp_ds' ]
+
+        -- Fresh definitions (the new wrapper + newly lifted dictionaries)
+        fresh_ds' = map (redirectDictProps redirects)
+                        (iDefsMap (fixUp redirects mAll) (d : new_lifted_defs))
+        (d'@(IDef _ _ mod_e' _), new_lifted_defs') =
+            case fresh_ds' of
+              (hd : tl) -> (hd, tl)
+              [] -> internalError "FixupDefs.updDef: empty fresh_ds'"
+
+        retieLocal (ILam bi bt body) = ILam bi bt (retieLocal body)
+        retieLocal (ILAM bi bk body) = ILAM bi bk (retieLocal body)
+        retieLocal (IAps f ts es) = IAps (retieLocal f) ts (map retieLocal es)
+        retieLocal e@(ICon ref_i (ICDef t _))
+          | ref_i == mod_i =
+              ICon ref_i (ICDef t (updateIExprPosition (getIdPosition ref_i) mod_e'))
+          | ref_i `S.member` affectedSet, Just target_e <- M.lookup ref_i mAffected =
+              ICon ref_i (ICDef t target_e)
+          | otherwise = e
+        retieLocal e = e
+
+        ds_existing' =
+            [ if i' == mod_i then d'
+              else if i' `S.member` affectedSet
+                   then IDef i' t' (retieLocal e') props'
+                   else d0
+            | d0@(IDef i' t' e' props') <- ds ]
+
+        mAffected =
+            M.fromList [ (i', e')
+                       | IDef i' _ e' _ <- ds_existing'
+                       , i' `S.member` affectedSet ]
+
+        mLocalAndFresh =
+            M.fromList ( [ (i', e') | IDef i' _ e' _ <- ds_existing' ] ++
+                         [ (li, le) | IDef li _ le _ <- new_lifted_defs' ] )
+        mAll = M.union mLocalAndFresh mImp
+
+        dropDict li lt =
+            case M.lookup li redirects of
+              Just _ -> tracep trace_drop_dicts
+                            ("dropDict: " ++ ppReadable (li, lt))
+                            True
+              Nothing -> False
+        new_lifted_defs'' =
+            [ ld | ld@(IDef li lt _ _) <- new_lifted_defs', not (dropDict li lt) ]
     in
-        ipkg''
+        ipkg { ipkg_defs = ds_existing' ++ new_lifted_defs'' }
 
 
 -- ===============

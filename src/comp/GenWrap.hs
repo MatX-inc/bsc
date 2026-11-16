@@ -245,11 +245,11 @@ type ModDefInfo = (CDef, CQType,  -- the new "<mod>_" def and it's type
 genWrap :: ErrorHandle -> Flags -> [String] -> Bool -> CPackage -> SymTab ->
            IO (CPackage, [WrapInfo])
 genWrap errh flgs genNames generating cpack symt = do
-    runGWMonad (genWrapE generating ppmap cpack) origstate
+    runGWMonad (genWrapE generating ppmap pplist cpack) origstate
  where
     origstate = GenState errh symt flgs
     pragmas = (extractPragmas cpack)
-    ppmap = makePPropMap genNames pragmas
+    (ppmap, pplist) = makePPropMap genNames pragmas
     --
     extractPragmas :: CPackage -> [Pragma]
     extractPragmas (CPackage _ _ _ _ _ ds _) = [ p | CPragma p <- ds ]
@@ -258,8 +258,10 @@ genWrap errh flgs genNames generating cpack symt = do
 
 -- Given a list of names to generate from the command line (with -g flag)
 -- and the pragmas from the CPackage, generate a mapping from def names
--- to their associated pprops (removing any duplicate pprops)
-makePPropMap :: [String] -> [Pragma] -> M.Map Id [PProp]
+-- to their associated pprops (removing any duplicate pprops), along with
+-- the (Id, [PProp]) list in first-seen pragma order so wrapper emission
+-- does not depend on Ord Id map iteration.
+makePPropMap :: [String] -> [Pragma] -> (M.Map Id [PProp], [(Id, [PProp])])
 makePPropMap genNames cpragmas =
     let
         -- We avoid adding cmd-line pragmas that duplicate source pragmas,
@@ -269,7 +271,9 @@ makePPropMap genNames cpragmas =
         cmd_line_pragmas = makeCmdLineGenPragmas genNames
         all_pragmas = (cmd_line_pragmas \\ cpragmas) ++ cpragmas
         pairs = [ (i, pps) | (Pproperties i pps) <- all_pragmas ]
-    in  M.fromListWith (++) pairs
+        ppmap = M.fromListWith (++) pairs
+        pplist = [ (i, pps) | i <- nub (map fst pairs), Just pps <- [M.lookup i ppmap] ]
+    in  (ppmap, pplist)
 
 makeCmdLineGenPragmas :: [String] -> [Pragma]
 makeCmdLineGenPragmas genNames =
@@ -299,15 +303,15 @@ isGenDef pmap i =
 --   extends the existing one by adding the ready and enable signals
 --   Only modules which have the verilog/synthesis pragma are "wrapped"
 
-genWrapE :: Bool -> M.Map Id [PProp] -> CPackage ->
+genWrapE :: Bool -> M.Map Id [PProp] -> [(Id, [PProp])] -> CPackage ->
             GWMonad (CPackage, [WrapInfo])
-genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds includes)  =
+genWrapE generating ppmap pplist cpack@(CPackage packageId exps imps impsigs fixs ds includes)  =
     do
        -- information on all modules which are being generated
        -- (this checks the pragmas on all defs which have pragmas, though,
        -- and errors if any do not meet sanity checks)
        -- moduledefs :: [(CDef, CQType, [(Id, CType, ArgInfo)], [PProp])]
-       moduledefs <- concatMapM (getDef generating ds) (M.toList ppmap)
+       moduledefs <- concatMapM (getDef generating ds) pplist
        --traceM( "genWrapE:  moduledefs: " ++ ppReadable moduledefs )
 
        -- build the Interface record
