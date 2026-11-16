@@ -1,0 +1,46 @@
+package GuardPlaceCube where
+
+-- Guard formulas over pattern-bound variables, beyond a single atom: one
+-- cube constraining two places at once (nested and at clause roots), a
+-- disjunction contributing one folded vector per cube, the De Morgan
+-- expansion of a negated conjunction, and a cube mixing a folded place
+-- with a free variable.  Every match is exhaustive and must not warn.
+
+-- One cube fixes two different payload places.
+conjunctionOfPlaces :: Maybe Bool -> Maybe Bool -> Bit 3
+conjunctionOfPlaces (Valid a) (Valid b) when a && b = 0
+conjunctionOfPlaces (Valid _) (Valid False) = 1
+conjunctionOfPlaces (Valid False) (Valid _) = 2
+conjunctionOfPlaces Invalid _ = 3
+conjunctionOfPlaces _ Invalid = 4
+
+-- One cube fixes two clause-root places.
+rootPlaces :: Bool -> Bool -> Bit 2
+rootPlaces x y when x && y = 0
+rootPlaces _ False = 1
+rootPlaces False _ = 2
+
+-- A disjunction folds as one vector per cube.
+disjunctionOfPlaces :: Maybe Bool -> Maybe Bool -> Bit 2
+disjunctionOfPlaces (Valid a) (Valid b) when a || b = 0
+disjunctionOfPlaces (Valid False) (Valid False) = 1
+disjunctionOfPlaces Invalid _ = 2
+disjunctionOfPlaces _ Invalid = 3
+
+-- A negated conjunction (De Morgan) complements the conjunction row; the
+-- binders are alpha-renamed between the rows.
+negatedConjunction :: Maybe Bool -> Maybe Bool -> Bit 2
+negatedConjunction (Valid a) (Valid b) when a && b = 0
+negatedConjunction (Valid c) (Valid d) when not (c && d) = 1
+negatedConjunction Invalid _ = 2
+negatedConjunction _ Invalid = 3
+
+-- One cube mixes a folded pattern place (the case payload) with a free
+-- variable (the enclosing clause's argument).
+mixedPlaceAndFree :: Maybe Bool -> Bool -> Bit 2
+mixedPlaceAndFree m sel =
+  case m of
+    Valid b when b && sel -> 0
+    Valid b2 when b2 && not sel -> 1
+    Valid False -> 2
+    Invalid -> 3

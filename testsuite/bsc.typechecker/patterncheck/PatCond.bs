@@ -1,0 +1,56 @@
+package PatCond where
+
+data Color = Red | Green (Bit 8) | Blue Bool
+  deriving (Eq, Bits)
+
+-- a guarded clause falls through; the remaining clauses cover: no warning
+guardedFallthrough :: Maybe (Bit 8) -> Bit 8
+guardedFallthrough (Just x) when x > 5 = x
+guardedFallthrough (Just x) = x + 1
+guardedFallthrough Nothing = 0
+
+-- a guarded clause does not shadow a later identical clause: no warning
+guardedNoShadow :: Bool -> Bool -> Bool
+guardedNoShadow b sel when sel = b
+guardedNoShadow b _ = not b
+
+-- a subsumed clause is dead even though it has a guard
+guardedDead :: Maybe Bool -> Bool
+guardedDead _ = True
+guardedDead (Just x) when x = x
+
+-- guarded case arms do not count towards completeness
+caseGuarded :: Color -> Bit 8
+caseGuarded c = case c of
+                  Red -> 0
+                  Green g when g > 0 -> g
+                  Blue _ -> 1
+
+-- a pattern guard (pattern bind in a qualifier) is also just a guard
+casePatGuard :: Maybe (Maybe (Bit 8)) -> Bit 8
+casePatGuard m = case m of
+                   Just x when Just y <- x -> y
+                   Nothing -> 0
+
+-- interface methods with implicit conditions ("when"): the conditions
+-- are not match guards; the complete match must not warn and the
+-- incomplete match must still warn
+interface Ifc =
+  getIt :: Color -> Bit 8
+  peek  :: Color -> Bit 8
+
+mkPatCond :: Module Ifc
+mkPatCond =
+  module
+    en :: Reg Bool
+    en <- mkReg False
+    interface
+      getIt c = case c of
+                  Red -> 0
+                  Green g -> g
+                  Blue _ -> 1
+        when en
+      peek c = case c of
+                 Red -> 0
+                 Green g -> g
+        when en
