@@ -99,13 +99,13 @@ compile_verilog_pass MutuallyRecursiveInstances.bsv
 compare_file [make_bsc_vcomp_output_name MutuallyRecursiveInstances.bsv]
 
 # Test that an accidental infinite loop is detected with unfolding-steps
-# warnings and an eventual stack overflow
-compile_verilog_fail MutuallyRecursiveInstances_Loop.bsv
-# Comparing the output is not portable (differences in GHC and environment
-# can change how many unfolding-steps warnings appear before the stack
-# overflow) so just look for the overflow message in the output
-find_n_strings \
+# warnings and an eventual error at the maximum number of steps.  The
+# lowered step limit is reached well before the stack or heap would be
+# exhausted, so the output does not depend on GHC or the environment.
+compile_verilog_fail_error MutuallyRecursiveInstances_Loop.bsv G0024 1 {} \
+    {-steps-warn-interval 10000 -steps-max-intervals 10 +RTS -M1g -K6m -RTS}
+find_n_warning \
     [make_bsc_vcomp_output_name MutuallyRecursiveInstances_Loop.bsv] \
-    {Stack space overflow} 1
+    G0024 9
 
 # ----------

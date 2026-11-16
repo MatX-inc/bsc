@@ -38,8 +38,10 @@ doPrimOp pos op ts es =
 
 -- ---------------
 
+-- Force the value: unevaluated, it refers to the operands' values, so an
+-- accumulator folded once per loop iteration would refer to all earlier ones.
 use :: (a -> b) -> (Maybe (Either ErrMsg a)) -> (Maybe (Either ErrMsg b))
-use fn (Just (Right x)) = Just (Right (fn x))
+use fn (Just (Right x)) = x `seq` Just (Right (fn x))
 use _  (Just (Left x))  = Just (Left x)
 use _  Nothing          = Nothing
 

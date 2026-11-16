@@ -3324,7 +3324,10 @@ evalStaticOp' doUH doBK doUndet e resultType handler = do
               -- make sure the handler only uses "pe"
               let ee = UHExpr (internalError ("evalStaticOp: doUH == False"))
               return (ee, pe)
-  res <-
+  -- With doBK the handler call in the last arm must stay a tail call: the
+  -- handler usually evaluates the rest of the computation (such as the next
+  -- iteration of a loop), so a frame here would cost stack per static op.
+  (if doBK then id else (>>= keepName)) $
    case e' of
     ICon i (ICUndet { iuKind = k }) | doUndet -> do
       let kind_integer = undefKindToInteger k
@@ -3379,9 +3382,10 @@ evalStaticOp' doUH doBK doUndet e resultType handler = do
          -- uses "ee", we pass "p" in for the handler to use with "e'"
          handler ee (p, e')
 
-  if doBK
-    then return res
-    else -- it's a bookkeeping no-op, so preserve the heap name if any
+  where
+    -- it's a bookkeeping no-op, so preserve the heap name if any
+    keepName :: PExpr -> G PExpr
+    keepName res =
       case e of
         IRefT _ _ _ r -> do
             old_cell <- getHeap r
@@ -3952,6 +3956,15 @@ conAp' i (ICPrim _ PrimJoinActions) f [E a1, E a2] = do
     (ICon _ (ICPrim _ PrimNoActions), _) -> return $ P (pConj p1 p2) a2'
     (_, ICon _ (ICPrim _ PrimNoActions)) -> return $ P (pConj p1 p2) a1'
     _ -> return $ P (pConj p1 p2) (IAps f [] [a1', a2'])
+
+-- True only for an empty action with no implicit condition.  The answer
+-- carries no condition: a caller that gets False still has the action,
+-- and its condition, to join.
+conAp' _ (ICPrim _ PrimIsNoActions) _ [E a] = do
+  P p a' <- eval1 a
+  case a' of
+    ICon _ (ICPrim _ PrimNoActions) | p == pTrue -> return (pExpr iTrue)
+    _ -> return (pExpr iFalse)
 
 -- Undefined
 conAp' i (ICPrim _ PrimRawUndefined) _ (T t : E pos_e : E kind_e : as) = do
@@ -4738,6 +4751,9 @@ conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
         -- XXX if all of the arms are IntLit, at least for single argument ops
         -- XXX (in the absence of this, we do a special case for PrimBNot, see below)
         if all isIntLit as' && not (null as') then
+            -- the literal's position comes from an operand, and left lazy
+            -- it would keep the operands (and their own positions) alive
+            bestPosition `seq`
             case doPrimOp bestPosition op
                      [ t | T t@(ITNum _) <- as' ]
                      [ e | E e@(ICon _ (ICInt {})) <- as' ] of
