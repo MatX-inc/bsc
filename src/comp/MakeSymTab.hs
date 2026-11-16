@@ -135,7 +135,6 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
         (simp, impClsErrs) = foldl (addImpSyms errh insts) (spre, []) impsigs
 
         -- all types available to this packaged (predefined and imported)
-        preIds = S.fromList (map fst (getAllTypes simp))
 
         -- ---------------
         -- Errors
@@ -144,12 +143,16 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
         tdefs = filter isTDef ds
         -- the qualified and unqualified names of the types defined here,
         -- plus types already defined
-        dids = S.unions (map (getVD mi) tdefs) `S.union` preIds
+        -- (the latter are looked up in the table: a set of them all
+        -- would be built for every symbol table, to find a few names)
+        dids = S.unions (map (getVD mi) tdefs)
+        isDefinedType i = i `S.member` dids || isJust (findType simp i)
 
         -- multiple definitions for the same Id
         dis = filter ((> 1) . length) . group . sort . concatMap getVDefIds $ ds
         -- undefined type references
-        uids = S.toList (S.unions (map getFTCDn ds) `S.difference` dids)
+        uids = filter (not . isDefinedType)
+                      (S.toList (S.unions (map getFTCDn ds)))
 
         -- check for recursive type synonyms
         type_syn_map = [ (iKName i, S.toList $ getFTyCons t)
@@ -1084,7 +1087,8 @@ data ClsInsts = ClsInsts { ciAll :: QInsts, ciByClass :: M.Map Id QInsts }
 mkClsInsts :: QInsts -> ClsInsts
 mkClsInsts qts =
     ClsInsts qts
-        (M.fromListWith (\ new old -> old ++ new)
+        (M.map reverse $
+         M.fromListWith (\ new old -> new ++ old)
              [ (c, [qi]) | qi@(QInst _ (_ :=> t)) <- qts, Just c <- [leftCon t] ])
 
 doInst :: Maybe Id -> SymTab -> Class -> QInst -> Inst
