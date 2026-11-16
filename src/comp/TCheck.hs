@@ -2467,7 +2467,8 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
 
     -- locally bound tyvars and instances
     vs_bound_here <- getTopBoundTVs
-    eqs0 <- getTopExplPreds
+    eqs0_seg <- getTopExplSeg
+    let eqs0 = gsList eqs0_seg
 
     -- drop local tyvars (but not instances)
     popBoundTVs
@@ -2481,6 +2482,7 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
     addBoundTVs vs_bound_here
 
     let eqs = apSub s0 eqs0
+        eqsG = givensOnList eqs0_seg eqs
 
     ---- Begin: Section which Lennart marked with XXXX
 
@@ -2490,7 +2492,7 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
     -- sbs2 = new bindings (new dictionaries defined from given dictionaries)
     -- (streaming: numeric residuals settle once for this definition,
     -- below, rather than at the end of every satisfy pass)
-    (ps', sbs2)     <- satisfyStream eqs (apSub s0 ps)
+    (ps', sbs2)     <- satisfyStreamG eqsG (apSub s0 ps)
 
     satTraceM ("tiExpl " ++ ppReadable i ++ " ps'(satisfy): " ++ ppReadable ps')
 
@@ -2531,7 +2533,7 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
     -- for the tyvars "dvs".
     -- ps' = the remaining unsolved constraints
     -- sbs3 = new bindings for the solved constraints
-    (ps', sbs3)     <- satisfyFVStream dvs eqs (apSub s rs1)
+    (ps', sbs3)     <- satisfyFVStreamG dvs eqsG (apSub s rs1)
 
     satTraceM ("tiExpl " ++ ppReadable i ++ " ps'(satisfyFV) " ++ ppReadable ps')
 
@@ -2700,7 +2702,7 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
     -- solves and binds them like any other deferred context.
     uds_unsat <- if null uds
                  then return []
-                 else fst <$> satisfy eqs uds
+                 else fst <$> satisfyG eqsG uds
 
     pool_sbs <- popSolvedPool pool_frame
 
@@ -2940,10 +2942,10 @@ tiImpls recursive as ibs = do
     -- to reduce predicates more aggressively, so that we generate better
     -- provisos when we re-type-check with tiExpl
 
-    eqsFV <- getExplPreds
+    eqsFV <- getExplGivens
     -- streaming: the aggressive reduction below is this group's
     -- settlement owner
-    (ps', sbs1) <- satisfyFVStream bvs eqsFV ps
+    (ps', sbs1) <- satisfyFVStreamG bvs eqsFV ps
 
     when (not . null $ ps) $ do
       if (not . null $ ps') then
