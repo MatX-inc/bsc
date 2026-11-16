@@ -1,0 +1,5 @@
+# Round trips through the format 2 encoding (-check-bin-roundtrip): the
+# signatures and the typechecked package of a full compile survive an
+# encode, decode and re-encode
+compile_pass RoundTrip.bs "-check-bin-roundtrip"
+compile_pass RoundTripBSV.bsv "-check-bin-roundtrip"
