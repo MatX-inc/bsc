@@ -2,7 +2,6 @@
 module Position where
 
 import Data.List(partition)
-import Data.Maybe(fromMaybe)
 import qualified Data.Generics as Generic
 
 import Eval(NFData(..))
@@ -79,12 +78,30 @@ instance HasPosition Position where
 -- often built lazily from a walk over an expression (getIExprPosition),
 -- and looking further would walk the rest of the expression.
 firstPos :: [Position] -> Position
-firstPos ps = go ps Nothing
-  where go [] fallback = fromMaybe noPosition fallback
-        go (p:rest) fallback
-            | p == noPosition    = go rest fallback
-            | isUsefulPosition p = p
-            | otherwise          = go rest (Just (fromMaybe p fallback))
+firstPos [] = noPosition
+firstPos (p:ps) = firstPosWith id p ps
+
+-- firstPosWith f p xs == firstPos (p : map f xs), building no lists
+-- and stopping at the first useful non-empty position.
+{-# INLINE firstPosWith #-}
+firstPosWith :: (a -> Position) -> Position -> [a] -> Position
+firstPosWith f p0 xs0 = start p0 xs0
+  where
+    start !p xs | isNoPosition p     = none xs
+                | isUsefulPosition p = p
+                | otherwise          = notUseful p xs
+    none []     = noPosition
+    none (x:xs) = start (f x) xs
+    notUseful q []     = q
+    notUseful q (x:xs) = case f x of
+                           !p | not (isNoPosition p) && isUsefulPosition p -> p
+                              | otherwise -> notUseful q xs
+
+-- p == noPosition, out of line so liberate-case does not duplicate
+-- an inlining caller's recursive group.
+{-# NOINLINE isNoPosition #-}
+isNoPosition :: Position -> Bool
+isNoPosition p = p == noPosition
 
 -- #############################################################################
 -- #
