@@ -5,7 +5,6 @@ package ResourceOneRuleMultiportAction() where
 -- same arguments (which can be parallel composed, in one rule) should
 -- not be CSE'd.  Nor should they be composed sequentially (thus leaving
 -- only the "last" call).  There should be uses of two ports in one rule.
--- This is not observed due to bug #42.
 
 sysResourceOneRuleMultiportAction :: Module Empty
 sysResourceOneRuleMultiportAction =
