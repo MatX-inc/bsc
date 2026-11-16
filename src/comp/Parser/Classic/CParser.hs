@@ -5,6 +5,7 @@
 module Parser.Classic.CParser(pPackage, pDefnsAndEOF, errSyntax, CParser, pType, qcon, eof) where
 
 import Data.List(nub)
+import Data.Maybe(isJust)
 
 import Parse
 import IntLit
@@ -417,10 +418,10 @@ pTyDefn b = l L_foreign ..+ pVarId +.+ dc ..+ pQType +.+ opt (eq ..+ pString) +.
                 (\ (ik,(vs,(vis,(fs,der)))) -> Cstruct vis SStruct ik vs fs der)
         ||! l L_interface ..+ pTyConIdK +.+ many pTyVarId +.+ pIfcPrags +.+ eql b  +.+ blockOf noTrig pQStructField +.+ pDer >>-
                 (\ (ik,(vs,(ps,(vis,(fs,der))))) -> Cstruct vis (SInterface ps) ik vs fs der)
-        ||! l L_class ..+ pOptCoherence +.+ pPreds +.+ pTyConIdK +.+ many pTyVarId +.+ pFunDeps +.+ l L_where ..+ blockOf noTrig pClassBodyItem        >>- \ (incoh,(ps,(ik,(vs,(fds,items))))) ->
+        ||! l L_class ..+ pClassAnnots +.+ pPreds +.+ pTyConIdK +.+ many pTyVarId +.+ pFunDeps +.+ l L_where ..+ blockOf noTrig pClassBodyItem        >>- \ (annots,(ps,(ik,(vs,(fds,items))))) ->
                 let ats = [x | Left  x <- items]
                     fs  = [x | Right x <- items]
-                in  Cclass incoh ps ik vs fds ats fs
+                in  Cclass annots ps ik vs fds ats fs
 
 pClassBodyItem :: CParser (Either CAssocDepFun CField)
 pClassBodyItem =
@@ -430,8 +431,19 @@ pClassBodyItem =
                Left (CAssocDepFun name args rhs))
   ||! (pQStructField >>- Right)
 
-pOptCoherence :: CParser (Maybe Bool)
-pOptCoherence = option pCoherence
+-- Annotations after "class", in either order: "coherent" or "incoherent",
+-- and "no_orphan" (a soft keyword, unambiguous because class names
+-- are uppercase)
+pClassAnnots :: CParser CClassAnnots
+pClassAnnots =
+        pCoherence +.+ option pNoOrphan
+            >>- (\ (incoh, no_orphan) -> CClassAnnots (Just incoh) (isJust no_orphan))
+    ||! pNoOrphan ..+ option pCoherence
+            >>- (\ incoh -> CClassAnnots incoh True)
+    ||! succeed noCClassAnnots
+
+pNoOrphan :: CParser ()
+pNoOrphan = literal (mkFString "no_orphan")
 
 pCoherence :: CParser Bool
 pCoherence = l L_incoherent ..+ succeed True

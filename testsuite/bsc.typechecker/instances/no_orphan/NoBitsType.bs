@@ -1,0 +1,4 @@
+package NoBitsType where
+
+-- A type with no Bits instance
+data NoBitsType = NoBitsType (UInt 8)

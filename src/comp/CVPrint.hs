@@ -260,9 +260,9 @@ instance PVPrint CDefn where
 
     pvPrint d p (CValueSign def) = pvPrint d p def
 
-    pvPrint d p (Cclass Nothing ps ik is fd ats ss) =
+    pvPrint d p (Cclass annots ps ik is fd ats ss) =
        ((pBlockNT d 0 False
-        [t"typeclass" <+> pp d ik <+> pvParameterTypeVars d is,
+        [t (unwords ("typeclass" : cClassAnnotWords annots)) <+> pp d ik <+> pvParameterTypeVars d is,
          pvpFDs d fd,
          if ps==[]
            then empty

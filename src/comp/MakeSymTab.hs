@@ -895,13 +895,13 @@ mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
     let importedTypeInfos = concatMap (getTI errh maybePackageName src_pkg r iks) defs
         (cls, errss) =
             unzip $
-              [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds ats ifs Nothing qts
-                    | Cclass  incoh ps ik vs fds ats ifs <- defs ] ++
+              [ getCls errh maybePackageName src_pkg iks r annots ps ik vs fds ats ifs Nothing qts
+                    | Cclass  annots ps ik vs fds ats ifs <- defs ] ++
               -- The class's fields are hidden, but CIclass threads the
               -- defining package's sort member list so tyConOf carries
               -- the same TIstruct SClass payload as the defining compile.
-              [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds ats [] (Just ms) qts
-                    | CIclass incoh ps ik vs fds ats ms _ <- defs ]
+              [ getCls errh maybePackageName src_pkg iks r annots ps ik vs fds ats [] (Just ms) qts
+                    | CIclass annots ps ik vs fds ats ms _ <- defs ]
         r = addClasses mkQuals (addTypes mkQuals s importedTypeInfos) cls
     in  (r, concat errss)
 
@@ -1103,13 +1103,13 @@ overlapErrors pairCmp tagged trie = nub errs
 
 getCls :: ErrorHandle -> Maybe Id -> Maybe Id -> M.Map Id Kind -> SymTab ->
           -- class components
-          Maybe Bool -> [CPred] -> IdK -> [Id] -> CFunDeps -> [CAssocDepFun] ->
+          CClassAnnots -> [CPred] -> IdK -> [Id] -> CFunDeps -> [CAssocDepFun] ->
           CFields ->
           -- sort member list override: for CIclass (fields hidden), the
           -- defining package's list threaded through the signature
           Maybe [Id] ->
           QInsts -> (Class, [EMsg])
-getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
+getCls errh mi src_pkg iks r annots ps ik vs fds ats ifs msort qts =
     let k = getK iks ik
         i = iKName ik
         ks = getNK (genericLength vs) k
@@ -1163,7 +1163,8 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
             funDeps = bss,
             funDeps2 = bss2,
             inputPositions = pureInputPositions bss (length tvs),
-            allowIncoherent = incoh,
+            allowIncoherent = cca_incoherent annots,
+            noOrphan = cca_no_orphan annots,
             isComm = False,
             pkg_src = src_pkg,
             assocTypes = atf_infos

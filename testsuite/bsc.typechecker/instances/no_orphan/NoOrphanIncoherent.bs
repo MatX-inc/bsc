@@ -1,0 +1,31 @@
+package NoOrphanIncoherent where
+
+import Real
+
+-- "incoherent" keeps its meaning next to "no_orphan", in either order:
+-- the eqLiteral functions are accepted only because the classes are
+-- incoherent
+
+class incoherent no_orphan EqIntegerFirst a where
+  eqIntegerFirst :: a -> Integer -> Bool
+
+instance (Literal a, Eq a) => (EqIntegerFirst a) where
+  eqIntegerFirst a i = a == (fromInteger i)
+
+instance EqIntegerFirst Real where
+  eqIntegerFirst r i = trunc r == i
+
+eqLiteralFirst :: (Literal a, Eq a) => a -> Integer -> Bool
+eqLiteralFirst = eqIntegerFirst
+
+class no_orphan incoherent EqIntegerSecond a where
+  eqIntegerSecond :: a -> Integer -> Bool
+
+instance (Literal a, Eq a) => (EqIntegerSecond a) where
+  eqIntegerSecond a i = a == (fromInteger i)
+
+instance EqIntegerSecond Real where
+  eqIntegerSecond r i = trunc r == i
+
+eqLiteralSecond :: (Literal a, Eq a) => a -> Integer -> Bool
+eqLiteralSecond = eqIntegerSecond

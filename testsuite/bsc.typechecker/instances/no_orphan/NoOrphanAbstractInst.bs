@@ -1,0 +1,6 @@
+package NoOrphanAbstractInst where
+
+import NoOrphanAbstract
+
+-- An orphan instance of a no_orphan class that was imported abstractly
+instance NoOrphanAbstract Bool where {}

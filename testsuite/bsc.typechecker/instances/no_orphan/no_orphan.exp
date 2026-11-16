@@ -1,0 +1,54 @@
+# Tests for the "no_orphan" class annotation, which makes an orphan
+# instance of the class an error (T0127) instead of a warning.
+# The annotation may come before or after "coherent"/"incoherent".
+
+# ----------
+# Classic
+
+# "no_orphan" alone and in either order with a coherence annotation;
+# an instance in the class's own package is not an orphan
+compile_pass_no_warning NoOrphanClasses.bs
+
+# An orphan instance of each class is an error ...
+compile_fail_error NoOrphanInsts.bs T0127 5
+find_regexp_fail [make_bsc_output_name NoOrphanInsts.bs] {can be demoted}
+# ... which cannot be demoted (S0094 reports the refused demotion)
+compile_fail_error NoOrphanInsts.bs T0127 5 {-demote-errors T0127}
+find_n_warning [make_bsc_output_name NoOrphanInsts.bs] S0094 1
+
+# An instance in the package that defines its type is not an orphan
+compile_pass_no_warning NoOrphanTypeInst.bs
+
+# A class exported abstractly (without its methods) keeps the annotation
+compile_fail_error NoOrphanAbstractInst.bs T0127
+
+# The coherence annotation keeps its meaning in either order
+compile_fail_error NoOrphanCoherent.bs T0030 2 {-incoherent-instance-matches}
+compile_pass NoOrphanIncoherent.bs
+
+# Each annotation may be given at most once
+compile_fail_error NoOrphanTwice.bs P0005
+
+# ----------
+# BSV
+
+compile_pass_no_warning NoOrphanClassesBSV.bsv
+
+compile_fail_error NoOrphanInstsBSV.bsv T0127 5
+find_regexp_fail [make_bsc_output_name NoOrphanInstsBSV.bsv] {can be demoted}
+compile_fail_error NoOrphanInstsBSV.bsv T0127 5 {-demote-errors T0127}
+find_n_warning [make_bsc_output_name NoOrphanInstsBSV.bsv] S0094 1
+
+compile_fail_error NoOrphanCoherentBSV.bsv T0030 2 {-incoherent-instance-matches}
+compile_pass NoOrphanIncoherentBSV.bsv
+
+compile_fail_error NoOrphanTwiceBSV.bsv P0005
+
+# ----------
+# The Prelude declares Bits no_orphan.  For now, an orphan Bits instance
+# is an error that can be demoted (unlike other no_orphan classes).
+
+compile_pass_no_warning NoBitsType.bs
+compile_fail_error BitsOrphan.bs T0127
+compare_file BitsOrphan.bs.bsc-out
+compile_pass_warning BitsOrphan.bs T0127 1 {-demote-errors T0127}

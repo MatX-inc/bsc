@@ -126,9 +126,7 @@ combined declaration/assignment
 >   | ISInterface Position IdK [IfcPragma] [Id] CFields
 > --  interface #(params) name; methods; endinterface
 > --        return [Cstruct True SInterface name params methods []]
->   | ISTypeclass Position (Maybe Bool) IdK [CPred] [([Id],[Id])] [Id] [CAssocDepFun] CFields
->     -- the Maybe Bool is the coherence annotation:
->     -- Just True = incoherent, Just False = coherent, Nothing = follow the flag
+>   | ISTypeclass Position CClassAnnots IdK [CPred] [([Id],[Id])] [Id] [CAssocDepFun] CFields
 > --        return [Cclass False context name params dependencies assocTypes functions]
 >   | ISTypeclassInstance Position CQType [CDefl]
 >   | ISImport Position [Id] -- imported packages

@@ -1,0 +1,20 @@
+package NoOrphanInsts where
+
+import NoOrphanClasses
+
+-- Each of these is an orphan instance of a no_orphan class (T0127)
+
+instance NoOrphan (UInt n) where
+  noOrphan x = x == 0
+
+instance CoherentNoOrphan (UInt n) where
+  coherentNoOrphan x = x == 0
+
+instance NoOrphanCoherent (UInt n) where
+  noOrphanCoherent x = x == 0
+
+instance IncoherentNoOrphan (UInt n) where
+  incoherentNoOrphan x = x == 0
+
+instance NoOrphanIncoherent (UInt n) where
+  noOrphanIncoherent x = x == 0

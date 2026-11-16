@@ -26,7 +26,7 @@ doTrace = elem "-trace-genbin" progArgs
 -- .bo file tag -- change this whenever the .bo format changes
 -- See also GenABin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260715-6"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20261116-1"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -434,6 +434,10 @@ instance Bin CAssocDepFun where
     writeBytes (CAssocDepFun name ps rhs) = do toBin name; toBin ps; toBin rhs
     readBytes = do name <- fromBin; ps <- fromBin; rhs <- fromBin
                    return (CAssocDepFun name ps rhs)
+
+instance Bin CClassAnnots where
+    writeBytes (CClassAnnots incoh no_orphan) = do toBin incoh; toBin no_orphan
+    readBytes = CClassAnnots <$> fromBin <*> fromBin
 
 instance Bin CDefl where
     writeBytes (CLValueSign d qs) = do putI 0; toBin d; toBin qs

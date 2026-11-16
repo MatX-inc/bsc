@@ -26,6 +26,9 @@ module CSyntax(
         CDefn(..),
         CDefl(..),
         CAssocDepFun(..),
+        CClassAnnots(..),
+        noCClassAnnots,
+        cClassAnnotWords,
         CFunDeps,
         CPred(..),
         CTypeclass(..),
@@ -189,6 +192,28 @@ instance PPrint CAssocDepFun where
         text "type" <+> ppConId d name <+> sep (map (ppVarId d) ps) <+>
         text "=" <+> ppVarId d rhs
 
+-- Annotations written between the "class" keyword and the class name,
+-- in any order: "coherent" or "incoherent", and "no_orphan".
+data CClassAnnots = CClassAnnots
+    { -- Just True = incoherent, Just False = coherent,
+      -- Nothing = follow the -incoherent-instance-matches flag
+      cca_incoherent :: Maybe Bool
+      -- an orphan instance of the class is an error (T0127), not a warning
+    , cca_no_orphan  :: Bool
+    } deriving (Eq, Ord, Show)
+
+noCClassAnnots :: CClassAnnots
+noCClassAnnots = CClassAnnots { cca_incoherent = Nothing, cca_no_orphan = False }
+
+-- The annotation keywords, in the order they are printed
+cClassAnnotWords :: CClassAnnots -> [String]
+cClassAnnotWords (CClassAnnots incoh no_orphan) =
+    [ w | Just b <- [incoh], let w = if b then "incoherent" else "coherent" ] ++
+    [ "no_orphan" | no_orphan ]
+
+instance NFData CClassAnnots where
+    rnf (CClassAnnots incoh no_orphan) = rnf2 incoh no_orphan
+
 -- Top level definition
 data CDefn
         = Ctype IdK [Id] CType
@@ -202,8 +227,8 @@ data CDefn
                   [CDeriving]
                   -- Bool indicates the constrs are visible
                   -- first [Id] are the names of this definition's argument type variables
-        -- incoherent_matches superclasses name_with_kind variables fundeps assoc_dep_funs default_methods
-        | Cclass (Maybe Bool) [CPred] IdK [Id] CFunDeps [CAssocDepFun] CFields
+        -- annotations superclasses name_with_kind variables fundeps assoc_dep_funs default_methods
+        | Cclass CClassAnnots [CPred] IdK [Id] CFunDeps [CAssocDepFun] CFields
         | Cinstance CQType [CDefl]
         | CValue Id [CClause]
         | CValueSign CDef
@@ -227,7 +252,7 @@ data CDefn
         -- Without it, importers could only rebuild the sort from the
         -- superclass preds, leaving a payload divergent from the
         -- defining compile's (papered over by SymTab.pickBetter).
-        | CIclass (Maybe Bool) [CPred] IdK [Id] CFunDeps [CAssocDepFun] [Id] [Position] -- positions of use that caused export
+        | CIclass CClassAnnots [CPred] IdK [Id] CFunDeps [CAssocDepFun] [Id] [Position] -- positions of use that caused export
         | CIValueSign Id CQType
         deriving (Eq, Ord, Show)
 
@@ -1166,13 +1191,9 @@ instance PPrint CDefn where
     pPrint d p (Cstruct vis ss i as fs ds) =
         (t("struct ") <> sep (ppConIdK d i : map (nest 2 . ppVarId d) as) <+> t(if vis then "= {" else "== {")) $+$
         pBlock d 4 False (map (ppField d) fs) <> ppDer d ds
-    pPrint d p (Cclass incoh ps ik is fd ats ss) =
-        (t_cls <+> ppPreds d ps (sep (ppConIdK d ik : map (ppVarId d) is)) <> ppFDs d fd <+> t "where {") $+$
+    pPrint d p (Cclass annots ps ik is fd ats ss) =
+        (ppClassKw annots <+> ppPreds d ps (sep (ppConIdK d ik : map (ppVarId d) is)) <> ppFDs d fd <+> t "where {") $+$
         pBlock d 4 False (map (pPrint d 0) ats ++ map (ppField d) ss)
-      where t_cls = case incoh of
-                     Just False -> t"class coherent"
-                     Just True  -> t"class incoherent"
-                     Nothing    -> t"class"
     pPrint d p (Cinstance qt ds) =
         (t"instance" <+> pPrint d 0 qt <+> t "where {") $+$
         pBlock d 4 False (map (pPrint d 0) ds)
@@ -1199,13 +1220,13 @@ instance PPrint CDefn where
         t"instance" <+> ppConId d i <+> pPrint d 0 qt
     pPrint d p (CItype i as positions) =
         sep (t"type" <+> ppConIdK d i : map (nest 2 . ppVarId d) as)
-    pPrint d p (CIclass incoh ps ik is fd ats _ positions) =
-        t_cls <+> ppPreds d ps (sep (ppConIdK d ik : map (nest 2 . ppVarId d) is)) <> ppFDs d fd
-      where t_cls = case incoh of
-                     Just False -> t"class coherent"
-                     Just True  -> t"class incoherent"
-                     Nothing    -> t"class"
+    pPrint d p (CIclass annots ps ik is fd ats _ positions) =
+        ppClassKw annots <+> ppPreds d ps (sep (ppConIdK d ik : map (nest 2 . ppVarId d) is)) <> ppFDs d fd
     pPrint d p (CIValueSign i ty) = ppVarId d i <+> t "::" <+> pp d ty
+
+-- "class" followed by any annotations
+ppClassKw :: CClassAnnots -> Doc
+ppClassKw annots = t (unwords ("class" : cClassAnnotWords annots))
 
 instance PPrint CField where
     pPrint d p f = ppField d f

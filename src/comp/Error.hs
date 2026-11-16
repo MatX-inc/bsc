@@ -804,7 +804,10 @@ data ErrMsg =
         | EClassFundepsExtra String [String]
         | EClassFundepsEmpty String
         | WIncoherentMatch String String
-        | WOrphanInst String
+        -- the instance, and, if the class is declared no_orphan (which
+        -- makes the message an error), the class and whether the error
+        -- can be demoted
+        | WOrphanInst String (Maybe (String, Bool))
         | WTransitiveIncoherentMatch String String String
         | EModInstWrongArgs [Position]
         | EAmbiguous [(String, Position, [(String, [Position])])]
@@ -2902,12 +2905,22 @@ getErrorText (WIncoherentMatch pred inst) =
     (Type 126, empty,
      s2par ("Proviso " ++ pred ++ " satisfied by incoherently matching the instance " ++ inst))
 
-getErrorText (WOrphanInst inst) =
+getErrorText (WOrphanInst inst m_no_orphan_cls) =
     (Type 127, empty,
      s2par ("Exporting orphan typeclass instance " ++ inst ++ ". " ++
             "The instance's typeclass as well as all of the instance's source type parameters " ++
             " are defined in other packages. This can lead to confusing and inconsistent " ++
-            " instance resolution if the orphan instance is not imported everywhere it could be used."))
+            " instance resolution if the orphan instance is not imported everywhere it could be used.") $$
+     case m_no_orphan_cls of
+       Nothing -> empty
+       Just (cls, demotable) ->
+         s2par ("The typeclass " ++ cls ++ " is declared no_orphan, " ++
+                "so its instances must be defined in the package that defines " ++
+                "the typeclass or one of the instance's source types.") $$
+         (if demotable
+          then s2par ("For now, this error can be demoted to a warning " ++
+                      "with -demote-errors T0127.")
+          else empty))
 
 getErrorText (EBadInstanceOverlap inst1 inst2 position2) =
     (Type 128, empty,

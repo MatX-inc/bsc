@@ -3,24 +3,24 @@ import Data.List((\\), sortBy, unionBy, groupBy, partition)
 import Data.Maybe(mapMaybe)
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Control.Monad(when)
+import Control.Monad(when, guard)
 
 import PFPrint
 
 import Util
 
 import PreStrings(fsPrelude)
-import Error(internalError, EMsg, WMsg, ErrMsg(..),
-             ErrorHandle, bsError, bsWarning)
+import Error(internalError, EMsg, ErrMsg(..),
+             ErrorHandle, bsError, bsWarningsAndErrors)
 import Id
 import FStringCompat(FString, getFString)
 import PreStrings(fsEmpty)
-import PreIds(tmpTyVarIds, idPrelude, idPreludeBSV, mk_no)
+import PreIds(tmpTyVarIds, idPrelude, idPreludeBSV, mk_no, idBits)
 import Position(noPosition)
 import Pragma
 import CSyntax
 import CFreeVars
-import CType(leftTyCon, tyConArgs, isTConArrow, allTyCons)
+import CType(leftTyCon, tyConArgs, isTConArrow, allTyCons, typeclassId)
 import Pred(Class(..), predToCPred, expandSyn)
 import SymTab
 import Assump(Assump(..))
@@ -40,8 +40,11 @@ genUserSign errh symtab cpkg@(CPackage pkgName _ _ _ _ _ _) =
     -- XXX should we internal error on any errors or warnings?
     case (genSign errh False symtab cpkg) of
         Left msgs -> bsError errh msgs
-        Right (sign, warns, reexportedPkgs) -> do
-            when (not $ null warns) $ bsWarning errh warns
+        Right (sign, msgs, reexportedPkgs) -> do
+            let ws = [ m | (SignWarning, m) <- msgs ]
+                ds = [ m | (SignDemotableError, m) <- msgs ]
+                es = [ m | (SignError, m) <- msgs ]
+            when (not $ null msgs) $ bsWarningsAndErrors errh ws ds es
             -- Track packages used in two ways:
             -- 1. Items from imported packages that end up in exports (export foo, where foo is from Pkg)
             let usedPkgsFromItems = getPackagesUsedByExports pkgName sign
@@ -65,9 +68,9 @@ genEverythingSign errh symtab cpkg =
 --      Left  msgs -> messageExit serror msgs
 --      Right sign -> writeFileCatch fn (gshow sign)
 
--- Returns: Either errors (signature, warnings, packages used by non-empty re-exports)
+-- Returns: Either errors (signature, messages, packages used by non-empty re-exports)
 genSign :: ErrorHandle -> Bool -> SymTab -> CPackage ->
-           Either [EMsg] (CSignature, [WMsg], S.Set Id)
+           Either [EMsg] (CSignature, [(SignMsgLevel, EMsg)], S.Set Id)
 genSign errh exportAll symt
         pkg@(CPackage currentPkg exportList imps impsigs fixs ds0 includes) =
     let
@@ -132,13 +135,13 @@ genSign errh exportAll symt
 
         -- ss: the signature file entry for exported defs in this package and
         --     all exported defs from imported packages
-        (ss, warnss) = unzip $ concatMap (genDefSign symt look currentPkg) ds ++
+        (ss, msgss) = unzip $ concatMap (genDefSign symt look currentPkg) ds ++
                                  [ dw | CImpSign _ _ (CSignature ii _ _ ds) <- impsigs,
                                         d <- ds, dw <- genDefSign symt look ii d ]
 
-        -- list of warnings produced while generating signatures
-        -- currently only for orphan instances
-        warns = concat warnss
+        -- messages produced while generating signatures
+        -- (currently only for orphan instances)
+        msgs = concat msgss
 
         -- def: the names of the defs in ss (that have names),
         -- plus ATF type constructors from exported classes.
@@ -306,7 +309,7 @@ genSign errh exportAll symt
             [] -> if (not (null failedExports))
                   then internalError ("failed exports: " ++
                                       ppReadable failedExports)
-                  else Right (sign, warns, reexportedPkgs)
+                  else Right (sign, msgs, reexportedPkgs)
             errs -> Left errs
 
 -- ---------------
@@ -335,9 +338,24 @@ fromPrelude _ = True
 
 -- ---------------
 
+-- How a message from generating a signature is reported
+data SignMsgLevel = SignWarning | SignDemotableError | SignError
+    deriving (Eq)
+
+-- How an orphan instance of a class is reported.
+-- An orphan instance of a no_orphan class is an error.
+-- Orphan Bits instances exist in the wild, so for now that error
+-- can be demoted (-demote-errors T0127) while code migrates.
+orphanInstLevel :: Class -> SignMsgLevel
+orphanInstLevel cls
+    | not (noOrphan cls)                     = SignWarning
+    | qualEq (typeclassId (name cls)) idBits = SignDemotableError
+    | otherwise                              = SignError
+
 -- XXX export from symbol table
 -- check export list
-genDefSign :: SymTab -> (Id -> Maybe Bool) -> Id -> CDefn -> [(CDefn, [WMsg])]
+genDefSign :: SymTab -> (Id -> Maybe Bool) -> Id -> CDefn
+           -> [(CDefn, [(SignMsgLevel, EMsg)])]
 genDefSign s look currentPkg d@(Ctype ik vs t) =
   let i = iKName ik
       qi = qualId currentPkg i
@@ -409,7 +427,7 @@ genDefSign s look currentPkg d@(Cinstance qt@(CQType ps t) _) =
     -- trace (ppReadable (leftCon t, map leftCon (tyConArgs t))) $
     let tcs = leftTyCons (t : tyConArgs t) in
     if all (\c -> exported c || imported c) tcs then
-        [(CIinstance currentPkg (qualCQType s qt), [(getPosition d, WOrphanInst (pfpString (expandSyn t))) | orphan_inst ])]
+        [(CIinstance currentPkg (qualCQType s qt), [ (orphan_level, orphan_msg) | orphan_inst ])]
     else
         []
   where leftTyCons = mapMaybe leftTyCon
@@ -430,7 +448,8 @@ genDefSign s look currentPkg d@(Cinstance qt@(CQType ps t) _) =
         imported (TyStr _ _) = True
         fj1 = fromJustOrErr ("bad instance con: " ++ ppReadable qt)
         cls_tcon = fj1 $ leftTyCon t
-        cls_con_name = CTypeclass $ fj1 $ leftCon t
+        cls_id = fj1 $ leftCon t
+        cls_con_name = CTypeclass cls_id
         fj2 = fromJustOrErr ("missing instance class: " ++ ppReadable qt)
         cls = fj2 $ findSClass s cls_con_name
         inst_cls_args = map expandSyn (tyConArgs t)
@@ -438,6 +457,11 @@ genDefSign s look currentPkg d@(Cinstance qt@(CQType ps t) _) =
         inst_heads = zipWith boolCompress fd_sigs (repeat inst_cls_args)
         orphan_head = not . (any exported) . (concatMap allTyCons)
         orphan_inst = imported (cls_tcon) && any orphan_head inst_heads
+        orphan_level = orphanInstLevel cls
+        -- for a no_orphan class: its name, and whether the error is demotable
+        no_orphan_cls = (pfpString cls_id, orphan_level == SignDemotableError)
+                            <$ guard (noOrphan cls)
+        orphan_msg = (getPosition d, WOrphanInst (pfpString (expandSyn t)) no_orphan_cls)
 
 genDefSign s look currentPkg (CValueSign (CDef i qt _)) =
   let qi = qualId currentPkg i
@@ -701,7 +725,7 @@ expandPkgExports symt impsigs exps =
 classToIClass :: Id -> Kind -> Class -> [CAssocDepFun] -> [Id] -> [Position]
               -> CDefn
 classToIClass i k (Class { csig=tvs, super=ps, funDeps2=bss2,
-                           allowIncoherent = incoh}) ats ms poss =
+                           allowIncoherent = incoh, noOrphan = no_orphan}) ats ms poss =
     let getTVarId (TyVar i _ _) = i
         tvis = map getTVarId tvs
 
@@ -723,7 +747,7 @@ classToIClass i k (Class { csig=tvs, super=ps, funDeps2=bss2,
             in  foldr foldFn ([],[]) bis
         fds = map bsToFd bss2
     in
-        CIclass incoh ps' (IdKind i k) tvis fds ats ms poss
+        CIclass (CClassAnnots incoh no_orphan) ps' (IdKind i k) tvis fds ats ms poss
 
 -- ---------------
 -- Package usage tracking for unused import warnings

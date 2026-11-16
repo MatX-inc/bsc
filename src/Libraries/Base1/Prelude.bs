@@ -413,7 +413,14 @@ class (Monad m) => MonadFix m where
 --@ equal b).  The compiler relies on this: matching pack/unpack pairs
 --@ are cancelled during elaboration without evaluating the instance
 --@ methods, choosing the identity as the round trip's resolution.
-class coherent Bits a n | a -> n where
+--@
+--@ The class is declared \te{no\_orphan}: an instance must be defined
+--@ in the package that defines its type (an orphan instance is error
+--@ T0127).  Different packages could otherwise see different instances
+--@ for one type, and so generate different port layouts for it.  For
+--@ now, this error can be demoted with \te{-demote-errors T0127}; a
+--@ future release will make it a hard error.
+class coherent no_orphan Bits a n | a -> n where
     type SizeOf a = n
     pack   :: a -> Bit n
     unpack :: Bit n -> a

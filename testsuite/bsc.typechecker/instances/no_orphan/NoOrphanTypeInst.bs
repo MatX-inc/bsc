@@ -1,0 +1,10 @@
+package NoOrphanTypeInst where
+
+import NoOrphanClasses
+
+-- An instance in the package that defines its type is not an orphan
+
+data Local = Local
+
+instance NoOrphan Local where
+  noOrphan _ = True

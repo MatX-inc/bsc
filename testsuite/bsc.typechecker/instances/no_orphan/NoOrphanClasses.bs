@@ -1,0 +1,22 @@
+package NoOrphanClasses where
+
+-- "no_orphan" alone, and in either order with a coherence annotation
+
+class no_orphan NoOrphan a where
+  noOrphan :: a -> Bool
+
+class coherent no_orphan CoherentNoOrphan a where
+  coherentNoOrphan :: a -> Bool
+
+class no_orphan coherent NoOrphanCoherent a where
+  noOrphanCoherent :: a -> Bool
+
+class incoherent no_orphan IncoherentNoOrphan a where
+  incoherentNoOrphan :: a -> Bool
+
+class no_orphan incoherent NoOrphanIncoherent a where
+  noOrphanIncoherent :: a -> Bool
+
+-- An instance in the class's own package is not an orphan
+instance NoOrphan Bool where
+  noOrphan = id

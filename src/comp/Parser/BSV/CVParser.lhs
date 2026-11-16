@@ -1141,13 +1141,18 @@ TYPE CLASSES AND INSTANCES
 >        when (not (allowTypeclass flags))
 >                 (failWithErr (pos, EForbiddenTypeclass (pvpString (stmtContext flags))))
 >        assertEmptyAttributes EAttribsTypeclass atts
->        -- optional coherence annotation, a soft keyword like
+>        -- optional annotations, in either order: "coherent" or
+>        -- "incoherent", and "no_orphan".  They are soft keywords like
 >        -- "dependencies": unambiguous because typeclass names are
->        -- uppercase (Just True = incoherent, Just False = coherent,
->        -- omitted = follow the -incoherent-instance-matches flag)
->        coherence <- option Nothing
->                       (    (pTheString "incoherent" >> return (Just True))
->                        <|> (pTheString "coherent"   >> return (Just False)))
+>        -- uppercase.
+>        let pCoherence =     (pTheString "incoherent" >> return True)
+>                         <|> (pTheString "coherent"   >> return False)
+>            pNoOrphan = pTheString "no_orphan" >> return True
+>        annots <- option noCClassAnnots
+>                    (    (CClassAnnots <$> (Just <$> pCoherence)
+>                                       <*> option False pNoOrphan)
+>                     <|> (flip CClassAnnots <$> pNoOrphan
+>                                            <*> option Nothing (Just <$> pCoherence)))
 >        (name, params) <- pTypedefConParams <?> "typeclass name"
 >        context <- option [] pProvisos
 >        deps <- option [] pDependencies
@@ -1158,7 +1163,7 @@ TYPE CLASSES AND INSTANCES
 >            functions  = [f | Right f <- items]
 >        pEndClause SV_KW_endtypeclass (Just $ iKName name)
 >        -- XXX dependencies
->        return [ISTypeclass pos coherence name context deps params assocTypes functions]
+>        return [ISTypeclass pos annots name context deps params assocTypes functions]
 
 > pTypeclassModule :: SV_Parser CField
 > pTypeclassModule =
