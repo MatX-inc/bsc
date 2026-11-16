@@ -1,5 +1,21 @@
 
-test_c_veri_bsv CmplxTest 
-test_c_veri_bsv CmplxSatAdd
+test_c_veri_bsv CmplxTest
+
+# Verilator 5.048 drops the field mask when a low part-select wrapped in
+# $signed() is passed to $display %0d: the generated C++ passes the raw
+# underlying vector with a 10-bit width tag, so non-negative field values
+# print as the whole vector (e.g. img of <200, 0> prints as 204800 =
+# 200*1024+0; negative values are correct only because the sign-extension
+# OR clobbers the stray high bits).  Pure-Verilog repro with no BSC
+# content misprints the same way; iverilog and Bluesim match the golden.
+# XFAIL the output compare under verilator only (keyed on the running
+# simulator, like iverilog09_bug in ../getput/getput.exp, so behavior
+# under every other simulator is untouched).  Verilator bug - candidate
+# for an upstream report.
+set verilator_signed_sel_bug {}
+if { $verilog_compiler == "verilator" } {
+    set verilator_signed_sel_bug $verilog_compiler
+}
+test_c_veri_bsv CmplxSatAdd {} {} $verilator_signed_sel_bug
 
 

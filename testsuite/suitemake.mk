@@ -188,6 +188,7 @@ tool ?= bsc
 .PHONY: run-tests-setup
 run-tests-setup:
 	perl $(CONFDIR)/scripts/sort-by-time.pl $(tool) \
+		| perl $(CONFDIR)/scripts/filter-testdirs.pl \
 		| awk '{t=t " " $$0} END{print "ALL_TESTS :=" t}' \
 		> $(CONFDIR)/all_tests.mk
 	@grep -q '\.exp' $(CONFDIR)/all_tests.mk || \
@@ -196,6 +197,7 @@ run-tests-setup:
 		       "zero tests" >&2; \
 		  exit 1; }
 	perl $(CONFDIR)/scripts/sort-by-time.pl $(tool) \
+		| perl $(CONFDIR)/scripts/filter-testdirs.pl \
 		| perl $(CONFDIR)/scripts/double-directory.pl
 
 
