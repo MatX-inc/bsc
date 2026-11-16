@@ -4,6 +4,7 @@ Flags {
 	backend = Nothing,
 	bdir = Nothing,
 	biasMethodScheduling = False,
+	bloogleDb = Nothing,
 	bluespecDir = "BLUESPECDIR",
 	cDebug = False,
 	cFlags = [],
