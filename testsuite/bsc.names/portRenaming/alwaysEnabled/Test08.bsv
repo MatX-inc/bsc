@@ -25,9 +25,10 @@ module mkDesign_08 (IFC#(Type));
     return fifo1.first+c;
   endmethod
 
+  // dequeue (start enqueues), so the always_enabled methods do not conflict
   method ActionValue#(Type) check(d);
-    fifo1.enq(fifo1.first + 1);
-    fifo2.enq(fifo2.first + 2);
+    fifo1.deq;
+    fifo2.deq;
     return fifo2.first+d;
   endmethod
 endmodule

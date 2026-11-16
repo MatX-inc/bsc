@@ -1057,6 +1057,7 @@ data ErrMsg =
 
         | EEnableNotHigh String [String]
         | EEnableAlwaysLow String [String]
+        | EAlwaysEnabledConflict String String
 
         | ESplitInsideNoSplit String
 
