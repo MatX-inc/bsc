@@ -32,7 +32,7 @@ import IntLit
 import Position(noPosition, getPosition)
 import Error(internalError, ErrMsg(..), ErrorHandle, bsErrorUnsafe)
 import Flags(Flags, optBool)
-import FStringCompat(mkFString)
+import FStringCompat(FString, mkFString, enumFString)
 import Id
 import Prim
 import DefProp(DefProp, defPropsHasNoCSE)
@@ -1548,7 +1548,7 @@ newExprT t e = do
     Found (e', _) -> return e'
     Missing turns depth -> do
         let n = idNo ts
-            i = setBadId $ mkId noPosition (mkFString ((prefix ts) ++ itos n))
+            i = setBadId $ mkId noPosition (cseFString (prefix ts) n)
             e' = ICon i (ICValue t e)
             d = IDef i t e []  -- props get lost here, but restored in iTransRenameIdsInDef
             cmap' = insertTurns turns depth e (e', d) (cse_map ts)
@@ -1561,6 +1561,13 @@ newExprT t e = do
         cmap' `seq` put $ ts { idNo = n', cse_map = cmap', exp_map = emap' }
         -- traceM ("newExprT " ++ ppString e ++ " -> " ++ ppString (e',d))
         return e'
+
+-- prefix ++ itos n without building the String: enumFString interns __iN
+-- and __jN from their key, when the Id is forced, as mkFString did.
+cseFString :: String -> Integer -> FString
+cseFString ('_' : str) n
+  | n >= 0 && n <= toInteger (maxBound :: Int) = enumFString str (fromInteger n)
+cseFString p n = mkFString (p ++ itos n)
 
 addDefT :: Id -> IType -> IExpr a -> [DefProp] -> T () a
 addDefT i t e p = do
