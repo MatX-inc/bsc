@@ -406,6 +406,7 @@ primNames =
 
     , ("primJoinActions", PrimJoinActions)
     , ("primNoActions", PrimNoActions)
+    , ("primIsNoActions", PrimIsNoActions)
     , ("primExpIf", PrimExpIf)
     , ("primNoExpIf", PrimNoExpIf)
     , ("primSplitDeep", PrimSplitDeep)
