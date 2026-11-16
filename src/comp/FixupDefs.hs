@@ -98,8 +98,8 @@ type DictEvMap = EvMap
 
 mkDictEvMapAndRedirects :: DictBuckets -> IPackage a -> [(IPackage a, String)]
                         -> (DictEvMap, DictRedirects)
-mkDictEvMapAndRedirects buckets (IPackage _ _ _ ds _) ipkgs =
-    let ads = concat (ds : [ ds' | (IPackage _ _ _ ds' _, _) <- ipkgs ])
+mkDictEvMapAndRedirects buckets (IPackage _ _ _ ds) ipkgs =
+    let ads = concat (ds : [ ds' | (IPackage _ _ _ ds', _) <- ipkgs ])
         evmap = M.fromList [ (i, (t, getDictEv props))
                            | IDef i t _ props <- ads, isLiftedDict i ]
     in  (evmap, mkRedirects buckets evmap)
@@ -227,7 +227,7 @@ redirectDictProps redirects d@(IDef i t e props)
 -- package's own defs; see mkDictRedirects on why one map serves every
 -- call).
 fixupDefs :: DictRedirects -> IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
-fixupDefs redirects (IPackage mi _ ps ds own_atf_cache) ipkgs =
+fixupDefs redirects (IPackage mi _ ps ds) ipkgs =
     let
         (ms, _) = unzip ipkgs
 
@@ -235,10 +235,10 @@ fixupDefs redirects (IPackage mi _ ps ds own_atf_cache) ipkgs =
         -- XXX The nub is needed (at least) because we call "fixupDefs"
         -- XXX multiple times on a package and so we may be adding the ipkg
         -- XXX pragmas multiple times.
-        ps' = nub $ concat $ ps : [ ps | IPackage _ _ ps _ _ <- ms ]
+        ps' = nub $ concat $ ps : [ ps | IPackage _ _ ps _ <- ms ]
 
         -- Get all the defs from this package and the imported packages
-        ads = concat (ds : map (\ (IPackage _ _ _ ds _) -> ds) ms)
+        ads = concat (ds : map (\ (IPackage _ _ _ ds) -> ds) ms)
 
         -- Create a recursive data structure by populating the map "m"
         -- with defs created using the map itself
@@ -247,7 +247,7 @@ fixupDefs redirects (IPackage mi _ ps ds own_atf_cache) ipkgs =
                    (iDefsMap (fixUp redirects m) ads)
 
         -- The new package contents
-        ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _ _), s) <- ipkgs ]
+        ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _), s) <- ipkgs ]
         ds' = map (redirectDictProps redirects)
                   (iDefsMap (fixUp redirects m) ds)
         dropDict i t = case M.lookup i redirects of
@@ -256,16 +256,9 @@ fixupDefs redirects (IPackage mi _ ps ds own_atf_cache) ipkgs =
                                        True
                          Nothing -> False
         ds'' = [ d | d@(IDef i t _ _) <- ds', not (dropDict i t) ]
-        -- Note that the package keeps only its own ATF cache entries, so
-        -- that .bo files stay proportional to their own package.  The union
-        -- with the imported packages' caches (for use during elaboration)
-        -- is built in bsc.hs and is never stored in an IPackage.  Do not
-        -- merge caches here: "fixupDefs" is re-invoked once per synthesized
-        -- module (via "updDef"), so any merging added here is multiplied by
-        -- the number of modules.
     in
         --trace ("fixup " ++ ppReadable (map fst (M.toList m))) $
-        (IPackage mi ipkg_sigs ps' ds'' own_atf_cache, ads')
+        (IPackage mi ipkg_sigs ps' ds'', ads')
 
 
 -- ===============
