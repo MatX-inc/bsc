@@ -102,31 +102,46 @@ import FStringCompat
 --
 -- TCon_ and TAp_ carry a canonical-node id slot (the IType idiom).
 -- An id of -1 means the node is raw and claims nothing.  A
--- non-negative id means this object is the intern table's
--- representative for its structure, and that every child is
--- transitively canonical and therefore ground.  Only the intern
--- machinery below assigns ids; every other construction site must use
--- -1.  The slot makes the groundness test a field read.  Equal ids
--- mean equal values under Eq Type: an interior node with a given id
--- is a single object, and a leaf with a given id is a single value
--- that carries the caller's position (see ccAtCaller).
+-- non-negative id means this object is the intern table's unique,
+-- position-free representative for its structure, with no positions or
+-- Id properties anywhere inside it, and that every child is
+-- transitively canonical and therefore ground.  TConOcc and TApOcc pair
+-- a canonical node with an occurrence chain when at least one leaf
+-- carries a source position or Id property; any position-free subtree
+-- under an occurrence chain points directly to its canonical node.
 data Type = TVar TyVar          -- ^ type variable
           | TCon_ {-# UNPACK #-} !Int TyCon
-                                -- ^ type constructor (build via 'TCon')
+                                -- ^ raw (-1) or canonical (>= 0) type constructor
+          | TConOcc !Type !TyCon
+                                -- ^ positioned leaf paired with its canonical TCon_
           | TAp_ {-# UNPACK #-} !Int Type Type
-                                -- ^ type-level application (build via 'TAp')
+                                -- ^ raw (-1) or canonical (>= 0) type application
+          | TApOcc !Type !Type !Type
+                                -- ^ positioned chain paired with its canonical TAp_
           | TGen Position Int   -- ^ quantified type variable used in type schemes
           | TDefMonad Position  -- ^ not used after CVParserImperative
     deriving (Generic.Typeable)
 
+{-# INLINE tconView #-}
+tconView :: Type -> Maybe TyCon
+tconView (TCon_ _ c)   = Just c
+tconView (TConOcc _ c) = Just c
+tconView _             = Nothing
+
+{-# INLINE tapView #-}
+tapView :: Type -> Maybe (Type, Type)
+tapView (TAp_ _ f a)   = Just (f, a)
+tapView (TApOcc _ f a) = Just (f, a)
+tapView _              = Nothing
+
 -- Every TCon and TAp, inside this module and out, goes through the
 -- smart constructors, which hash-cons ground nodes at construction.
 pattern TCon :: TyCon -> Type
-pattern TCon c <- TCon_ _ c
+pattern TCon c <- (tconView -> Just c)
   where TCon c = mkTCon c
 
 pattern TAp :: Type -> Type -> Type
-pattern TAp f a <- TAp_ _ f a
+pattern TAp f a <- (tapView -> Just (f, a))
   where TAp f a = mkTAp f a
 
 {-# COMPLETE TVar, TCon, TAp, TGen, TDefMonad #-}
@@ -142,12 +157,25 @@ mkTItype n t = rnf n `seq` rnf t `seq` TItype_ n t
 
 {-# COMPLETE TItype, TIdata, TIstruct, TIabstract, TIatf #-}
 
--- | The canonical-node id of a type: -1 unless this object is the
--- unique canonical (hence ground) intern-table node for its structure.
+-- | The semantic canonical-node id of a type: -1 unless this node is a
+-- canonical (hence ground) interned type, with equal ids meaning equal
+-- values under Eq Type.
 typeCanonId :: Type -> Int
-typeCanonId (TAp_ i _ _) = i
-typeCanonId (TCon_ i _)  = i
-typeCanonId _            = -1
+typeCanonId (TAp_ i _ _)              = i
+typeCanonId (TApOcc (TAp_ i _ _) _ _) = i
+typeCanonId (TCon_ i _)               = i
+typeCanonId (TConOcc (TCon_ i _) _)   = i
+typeCanonId _                         = -1
+
+canonNode :: Type -> Type
+canonNode (TApOcc c _ _) = c
+canonNode (TConOcc c _)  = c
+canonNode t              = t
+
+isPosFreeCanon :: Type -> Bool
+isPosFreeCanon (TAp_ i _ _) = i >= 0
+isPosFreeCanon (TCon_ i _)  = i >= 0
+isPosFreeCanon _            = False
 
 -- | Canonical implies ground: no TVar/TGen/TDefMonad anywhere inside,
 -- so substitution is the identity and tv is empty.
@@ -442,8 +470,11 @@ ccOwnedId :: FString -> Id -> Id
 ccOwnedId q i = setIdQual (setIdPosition noPosition (setIdProps i [])) q
 
 ccTidyTyCon :: TyCon -> TyCon
-ccTidyTyCon (TyCon i mk sort) = TyCon i mk (ccTidySort (getIdQual i) sort)
-ccTidyTyCon tc                = tc
+ccTidyTyCon (TyCon i mk sort) =
+    let i0 = setIdPosition noPosition (setIdProps i [])
+    in  TyCon i0 mk (ccTidySort (getIdQual i0) sort)
+ccTidyTyCon (TyNum v _) = TyNum v noPosition
+ccTidyTyCon (TyStr v _) = TyStr v noPosition
 
 -- an ap-node key fuses the two child ids into one Int; ccFusable
 -- refuses to cons rather than overflow the fusion
@@ -454,9 +485,8 @@ ccFusable :: Int -> Bool
 ccFusable i = i < 0x80000000
 
 -- the intern state: canonical ap nodes by fused child ids, canonical
--- leaves by CCKey, and the next id.  Ids are arrival-order, so
--- nothing observable may depend on them beyond identity (see
--- ccAtCaller).
+-- leaves by CCKey, and the next id.  Every node stored here has
+-- noPosition and empty IdProps throughout.
 data CCState = CCState !(IM.IntMap Type) !(M.Map CCKey Type)
                        {-# UNPACK #-} !Int
 
@@ -492,24 +522,31 @@ mkTAp f a
           ai = typeCanonId a
       if fi < 0 || ai < 0 || not (ccFusable fi) || not (ccFusable ai)
         then do bump cnRefuseChild; return (TAp_ (-1) f a)
-      else if ccIsRedex f a
-        then do bump cnRefuseRedex; return (TAp_ (-1) f a)
-        else do
-          let key = ccFuse fi ai
-          CCState apm _ _ <- readIORef ccState
-          case IM.lookup key apm of
-            Just canon -> do bump cnConsApHit; return canon
-            Nothing -> do
-              (canon, isNew) <- atomicModifyIORef' ccState (insAp key)
-              bump (if isNew then cnConsApNew else cnConsApHit)
-              return canon
+      else do
+        let fc = canonNode f
+            ac = canonNode a
+        if ccIsRedex fc ac
+          then do bump cnRefuseRedex; return (TAp_ (-1) f a)
+          else do
+            let key = ccFuse fi ai
+            CCState apm _ _ <- readIORef ccState
+            case IM.lookup key apm of
+              Just canon -> do
+                bump cnConsApHit
+                return (mkApOcc canon f a)
+              Nothing -> do
+                (canon, isNew) <- atomicModifyIORef' ccState (insAp key fc ac)
+                bump (if isNew then cnConsApNew else cnConsApHit)
+                return (mkApOcc canon f a)
   where
-    -- f and a carry ids, so they are the canonical table nodes
-    insAp key st@(CCState apm lm n) =
+    insAp key fc ac st@(CCState apm lm n) =
         case IM.lookup key apm of
           Just c  -> (st, (c, False))
-          Nothing -> let c = TAp_ n f a
+          Nothing -> let c = TAp_ n fc ac
                      in  (CCState (IM.insert key c apm) lm (n+1), (c, True))
+    mkApOcc canon f' a'
+      | isPosFreeCanon f' && isPosFreeCanon a' = canon
+      | otherwise = TApOcc canon f' a'
 
 -- Exceptions that must reach the top rather than demote the leaf to a
 -- raw node.  Asynchronous ones are not ours to swallow, and
@@ -529,6 +566,23 @@ ccForceKey :: Maybe CCKey -> Maybe CCKey
 ccForceKey Nothing = Nothing
 ccForceKey (Just k) = (k `compare` k) `seq` Just k
 
+-- Eq Position ignores pos_is_stdlib, while BinData stores it.
+ccExactNoPos :: Position -> Bool
+ccExactNoPos p = isNoPosition p && not (isPreludePosition p)
+
+ccHasOccMeta :: TyCon -> Bool
+ccHasOccMeta (TyCon i _ _) =
+    not (ccExactNoPos (getIdPosition i)) || not (null (getIdProps i))
+ccHasOccMeta (TyNum _ p) = not (ccExactNoPos p)
+ccHasOccMeta (TyStr _ p) = not (ccExactNoPos p)
+
+ccForceLeaf :: TyCon -> Maybe (CCKey, Bool)
+ccForceLeaf tc =
+    case ccForceKey (ccConKey tc) of
+      Nothing -> Nothing
+      Just k  -> let !hasOcc = ccHasOccMeta tc
+                 in  Just (k, hasOcc)
+
 -- | The smart constructor behind the TCon pattern synonym.
 {-# NOINLINE mkTCon #-}
 mkTCon :: TyCon -> Type
@@ -544,50 +598,44 @@ mkTCon tc
       -- rethrowsPastCons).  internalError prints its banner before it
       -- throws, so if a stored kind or sort held one, that output
       -- leaks even though the exit is honoured.
-      mkey <- try (evaluate (ccForceKey (ccConKey tc)))
-      case (mkey :: Either SomeException (Maybe CCKey)) of
+      mkey <- try (evaluate (ccForceLeaf tc))
+      case (mkey :: Either SomeException (Maybe (CCKey, Bool))) of
         Left e
           | rethrowsPastCons e -> throwIO e
           | otherwise -> do bump cnRefuseKeyErr; return (TCon_ (-1) tc)
         Right Nothing -> do bump cnRefuseLeaf; return (TCon_ (-1) tc)
-        Right (Just key) -> do
+        Right (Just (key, hasOcc)) -> do
           CCState _ lm _ <- readIORef ccState
           case M.lookup key lm of
-            Just canon -> do bump cnConsConHit; return (ccAtCaller canon tc)
+            Just canon -> do
+              bump cnConsConHit
+              return (mkLeafOcc hasOcc canon tc)
             Nothing -> do
               (canon, isNew) <- atomicModifyIORef' ccState (insLeaf key)
               bump (if isNew then cnConsConNew else cnConsConHit)
-              return (ccAtCaller canon tc)
+              return (mkLeafOcc hasOcc canon tc)
   where
     insLeaf key st@(CCState apm lm n) =
         case M.lookup key lm of
           Just c  -> (st, (c, False))
-          -- the canonical node carries the normalized payload, so the
-          -- two spellings of one payload become the same value and
-          -- the payload-free key has nothing left to conflate
+          -- the canonical node carries the normalized payload with
+          -- noPosition and empty IdProps
           Nothing -> let c = TCon_ n (ccTidyTyCon tc)
                      in  (CCState apm (M.insert key c lm) (n+1), (c, True))
+    mkLeafOcc False canon _ = canon
+    mkLeafOcc True canon@(TCon_ _ c) orig = TConOcc canon (ccAtCaller c orig)
+    mkLeafOcc True canon _ = canon
 
--- Share by id, but hand back the caller's position.  A canonical leaf
--- is one value, not one occurrence: the key covers the value, kind and
--- sort tag because Eq TyCon does, and Eq ignores positions.
--- Diagnostics do not.  So if a leaf kept the position of whichever
--- occurrence arrived first, it would report a kind error or an unused
--- import against the wrong line, or against the wrong file.
---
--- The id and the normalized sort survive, so cmp's shortcut, the
--- groundness induction and the payload canonicalization above are all
--- unaffected.  Only one claim weakens: equal ids now mean equal
--- values rather than a single heap object, and equal values is all
--- that any consumer of an id relies on.
-ccAtCaller :: Type -> TyCon -> Type
-ccAtCaller (TCon_ n c) tc = TCon_ n (ccSetTyConPos c (getPosition tc))
-ccAtCaller t _ = t
-
-ccSetTyConPos :: TyCon -> Position -> TyCon
-ccSetTyConPos (TyCon i k s) p = TyCon (setIdPosition p i) k s
-ccSetTyConPos (TyNum v _)   p = TyNum v p
-ccSetTyConPos (TyStr v _)   p = TyStr v p
+-- Share the canonical leaf directly when the caller carries no position
+-- or Id properties; otherwise pair the canonical leaf with an occurrence
+-- TyCon holding the caller's position and Id properties while sharing the
+-- tidied kind and sort payload.
+ccAtCaller :: TyCon -> TyCon -> TyCon
+ccAtCaller (TyCon base mk s) (TyCon orig _ _) =
+    TyCon (setIdProps (setIdPosition (getIdPosition orig) base) (getIdProps orig)) mk s
+ccAtCaller (TyNum v _) (TyNum _ p) = TyNum v p
+ccAtCaller (TyStr v _) (TyStr _ p) = TyStr v p
+ccAtCaller c _ = c
 
 ccConKey :: TyCon -> Maybe CCKey
 ccConKey (TyNum n _) = Just (CCNum n)
@@ -798,9 +846,16 @@ ctRnfOnce i force = unsafeDupablePerformIO $ do
               atomicModifyIORef' ctRnfSeen (\ ss -> (IS.insert i ss, ()))
               return ()
 
+rnfOccTyCon :: TyCon -> ()
+rnfOccTyCon (TyCon i _ _) = rnf i
+rnfOccTyCon (TyNum _ p)   = rnf p
+rnfOccTyCon (TyStr _ p)   = rnf p
+
 instance NFData Type where
     rnf (TCon_ i c) | i >= 0 = ctRnfOnce i (rnf c)
+    rnf (TConOcc canon tc) = rnf canon `seq` rnfOccTyCon tc
     rnf (TAp_ i t1 t2) | i >= 0 = ctRnfOnce i (rnf2 t1 t2)
+    rnf (TApOcc canon t1 t2) = rnf canon `seq` rnf2 t1 t2
     rnf (TVar v) = rnf v
     rnf (TCon c) = rnf c
     rnf (TAp t1 t2) = rnf2 t1 t2
@@ -808,6 +863,8 @@ instance NFData Type where
     rnf (TDefMonad _) = ()
 
 instance HasPosition Type where
+    getPosition (TCon_ i _) | i >= 0 = noPosition
+    getPosition (TAp_ i _ _) | i >= 0 = noPosition
     getPosition (TVar var) = getPosition var
     getPosition (TCon con) = getPosition con
     getPosition (TAp f a) = getPosition f `bestPosition` getPosition a
