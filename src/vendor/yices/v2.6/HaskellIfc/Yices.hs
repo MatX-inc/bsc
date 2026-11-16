@@ -122,7 +122,9 @@ module Yices (
 
     -- * Contexts
     mkContext,
+    mkSiblingContext,
     ctxStatus,
+    ctxStatusAssuming,
     ctxReset,
     ctxPush,
     ctxPop,
@@ -674,6 +676,19 @@ mkContext :: IO Context
 mkContext = do
   -- make sure that Yices is initialized
   doInit
+  newContext
+
+-- Another context for the terms of the current one (mkContext resets Yices,
+-- which deletes all terms and contexts).
+mkSiblingContext :: IO Context
+mkSiblingContext = do
+  isInit <- readIORef globalInit
+  when (not isInit) $
+    internalError "Yices.mkSiblingContext: Yices is not initialized"
+  newContext
+
+newContext :: IO Context
+newContext = do
   cfg <- yices_new_config
   -- XXX set cfg to BV only?
   ctx <- yices_new_context cfg
@@ -690,15 +705,29 @@ ctxStatus :: Context -> IO Status
 ctxStatus c = do
   res <- withForeignPtr (yContext c) $ \cptr ->
          yices_check_context cptr nullPtr
-  return $ case res of
-              0 -> Idle
-              1 -> Searching
-              2 -> Unknown
-              3 -> Satisfiable
-              4 -> Unsatisfiable
-              5 -> Interrupted
-              6 -> Error
-              _ -> internalError "Yices.ctxStatus: unexpected status"
+  return (toStatus res)
+
+-- Check the context's assertions together with the given formulas, which
+-- are not asserted (they stay internalized in the context).
+ctxStatusAssuming :: Context -> [Expr] -> IO Status
+ctxStatusAssuming c es = do
+  res <- withArray (map unExpr es) $ \aptr ->
+         withForeignPtr (yContext c) $ \cptr ->
+         yices_check_context_with_assumptions cptr nullPtr
+             (fromIntegral (length es)) aptr
+  return (toStatus res)
+
+toStatus :: YStatus -> Status
+toStatus res =
+  case res of
+    0 -> Idle
+    1 -> Searching
+    2 -> Unknown
+    3 -> Satisfiable
+    4 -> Unsatisfiable
+    5 -> Interrupted
+    6 -> Error
+    _ -> internalError "Yices.ctxStatus: unexpected status"
 
 ctxReset :: Context -> IO ()
 ctxReset c = do
