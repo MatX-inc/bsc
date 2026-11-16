@@ -435,7 +435,7 @@ eSubstWith ectx tctx allIds e
 {-# INLINE eSubst #-}
 eSubst :: Id -> IExpr a -> IExpr a -> IExpr a
 eSubst i x e =
-    case eSubstPlain i x fvx e of
+    case eSubstPlain i x fvx allIds e of
       SubNew e' -> e'
       SubSame -> e
       SubNeedsGeneral
@@ -514,31 +514,44 @@ conHoldsExprs (ICInout { }) = True
 conHoldsExprs (ICLazyArray { uninit = Just _ }) = True
 conHoldsExprs _ = False
 
--- Substitution of one variable in the common case: no binder on the
--- way has to be renamed, and no constant holds expressions.  It gives
--- exactly what eSubstWith gives then, for a fraction of the work per
--- node (the simplifier substitutes once per let binding, each time
--- over the whole body), and gives up otherwise.
+-- Substitution of a variable by an expression where no constant holds
+-- expressions (the usual case).  With no type substitution alongside,
+-- none of the type machinery of eSubstWith is needed; this gives
+-- exactly what eSubstWith gives, binder renaming included, for a
+-- fraction of the work per node (the simplifier substitutes once per
+-- let binding, each time over the whole body), and gives up otherwise.
 data SubResult a = SubSame | SubNew (IExpr a) | SubNeedsGeneral
 
-eSubstPlain :: Id -> IExpr a -> S.Set Id -> IExpr a -> SubResult a
-eSubstPlain i x fvx = go
+eSubstPlain :: Id -> IExpr a -> S.Set Id -> S.Set Id -> IExpr a -> SubResult a
+eSubstPlain i0 x0 fvx0 allIds0 = go (M.singleton i0 x0) fvx0 allIds0
   where
-    go (IVar v) | v == i = SubNew x
-                | otherwise = SubSame
-    go (ILam b t e)
-        | b == i = SubSame
-        | b `S.member` fvx = SubNeedsGeneral
-        | otherwise = case go e of
+    -- the substitution, the free variables of its expressions (as
+    -- eSubstWith keeps them: never shrunk), all identifiers in use
+    go m _ _ (IVar v) = maybe SubSame SubNew (M.lookup v m)
+    go m fvs allIds ee@(ILam b t e)
+        | b `M.member` m =
+            -- shadowed: drop it, and look at the binder again
+            let m' = M.delete b m
+            in  if M.null m' then SubSame else go m' fvs allIds ee
+        | b `S.member` fvs =
+            -- the binder would capture: rename it
+            let !b' = cloneId (S.toList allIds) b
+            in  case go (M.insert b (IVar b') m) (S.insert b' fvs)
+                        (S.insert b' allIds) e of
+                  SubNeedsGeneral -> SubNeedsGeneral
+                  SubSame -> SubNew (ILam b' t e)
+                  SubNew e' -> SubNew (ILam b' t e')
+        | otherwise = case go m fvs allIds e of
                         SubNew e' -> SubNew (ILam b t e')
                         r -> r
-    go (ILAM b k e) = case go e of
-                        SubNew e' -> SubNew (ILAM b k e')
-                        r -> r
-    go (IAps f ts es) =
-        case go f of
+    go m fvs allIds (ILAM b k e) =
+        case go m fvs allIds e of
+          SubNew e' -> SubNew (ILAM b k e')
+          r -> r
+    go m fvs allIds (IAps f ts es) =
+        case go m fvs allIds f of
           SubNeedsGeneral -> SubNeedsGeneral
-          rf -> case goList es of
+          rf -> case goList m fvs allIds es of
                   Nothing -> SubNeedsGeneral
                   Just Nothing -> case rf of
                                     SubNew f' -> SubNew (IAps f' ts es)
@@ -546,16 +559,16 @@ eSubstPlain i x fvx = go
                   Just (Just es') -> case rf of
                                        SubNew f' -> SubNew (IAps f' ts es')
                                        _ -> SubNew (IAps f ts es')
-    go (ICon _ ii) | conHoldsExprs ii = SubNeedsGeneral
-                   | otherwise = SubSame
-    go (IRefT _ _ _ _) = SubSame
+    go _ _ _ (ICon _ ii) | conHoldsExprs ii = SubNeedsGeneral
+                         | otherwise = SubSame
+    go _ _ _ (IRefT _ _ _ _) = SubSame
 
     -- Nothing: give up; Just Nothing: unchanged
-    goList [] = Just Nothing
-    goList (a : as) =
-        case go a of
+    goList _ _ _ [] = Just Nothing
+    goList m fvs allIds (a : as) =
+        case go m fvs allIds a of
           SubNeedsGeneral -> Nothing
-          ra -> case goList as of
+          ra -> case goList m fvs allIds as of
                   Nothing -> Nothing
                   Just Nothing -> case ra of
                                     SubNew a' -> Just (Just (a' : as))
