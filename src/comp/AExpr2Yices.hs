@@ -8,6 +8,8 @@ module AExpr2Yices(
        convertRulePair,
        decideRulePairs,
        YTerm,
+       traceWitness,
+       traceExprCounts,
 
        checkBiImplication,
        isConstExpr,
@@ -59,6 +61,7 @@ initYState str flags doHardFail ds avis rs = do
   --
   ctx <- Y.mkContext
   return (YState { context = ctx,
+                   stateName = str,
                    exprContext = Nothing,
                    --flags = flags,
                    hardFail = doHardFail,
@@ -69,6 +72,9 @@ initYState str flags doHardFail ds avis rs = do
                                             | avi <- avis],
                    proofMap = M.empty,
                    satMap = M.empty,
+                   exprModels = [],
+                   exprChecks = 0,
+                   exprModelSats = 0,
 
                    anyId = 0,
                    unknownId = 0,
@@ -126,10 +132,11 @@ checkDisjointExprM single e1 e2 = withTraceTest $ do
           Just c | Just r <- M.lookup c sat_memo -> return r
           _ -> do
             res0 <- if single
-                    then do ectx <- getExprContext
-                            liftIO $ Y.ctxStatusAssuming ectx [ye1, ye2]
+                    then checkAssuming [ye1, ye2]
                     else return Y.Unknown
-            res <- if isDecided res0 then return res0 else checkPushPop ye1 ye2
+            res <- if isDecided res0 then return res0 else do
+                     when single $ countExprCheck
+                     checkPushPop ye1 ye2
             case mcond of
               Just c | isDecided res ->
                 modify (\s -> s { satMap = M.insert c res (satMap s) })
@@ -152,6 +159,54 @@ checkDisjointExprM single e1 e2 = withTraceTest $ do
   return $ case (cvtStatus sat_res) of
               Just b -> Just (not b)
               Nothing -> Nothing
+
+-- Satisfiability of expression-query conjuncts: Satisfiable if a kept model
+-- makes every conjunct true, else checked as assumptions in exprContext.
+checkAssuming :: [Y.Expr] -> YM Y.Status
+checkAssuming es = do
+  ms <- gets exprModels
+  found <- liftIO $ findModel es ms
+  case found of
+    Just ms' -> do
+      modify (\s -> s { exprModels = ms',
+                        exprModelSats = exprModelSats s + 1 })
+      return Y.Satisfiable
+    Nothing -> do
+      ectx <- getExprContext
+      countExprCheck
+      r <- liftIO $ Y.ctxStatusAssuming ectx es
+      when (r == Y.Satisfiable) $ do
+        mm <- liftIO $ Y.getModelMaybe ectx
+        case mm of
+          Just m -> do
+            let (keep, old) = splitAt (exprModelCount - 1) ms
+            liftIO $ mapM_ Y.freeModel old
+            modify (\s -> s { exprModels = m : keep })
+          Nothing -> return ()
+      return r
+
+findModel :: [Y.Expr] -> [Y.Model] -> IO (Maybe [Y.Model])
+findModel ts = go []
+  where go _ [] = return Nothing
+        go seen (m:ms) = do
+          r <- Y.formulasTrueInModel m ts
+          if r == Just True
+            then return (Just (m : reverse seen ++ ms))
+            else go (m:seen) ms
+
+exprModelCount :: Int
+exprModelCount = 8
+
+countExprCheck :: YM ()
+countExprCheck = modify (\s -> s { exprChecks = exprChecks s + 1 })
+
+traceExprCounts :: String -> YState -> YState -> IO ()
+traceExprCounts site s0 s1 =
+  when traceWitness $
+    traceM (site ++ " " ++ stateName s1 ++ ": expression checks " ++
+            show (exprChecks s1 - exprChecks s0) ++
+            ", decided by a kept model " ++
+            show (exprModelSats s1 - exprModelSats s0))
 
 -- The satisfiability of two converted conditions, in the main context.
 checkPushPop :: Y.Expr -> Y.Expr -> YM Y.Status
@@ -458,6 +513,7 @@ data YState =
                -- must hold no assertions outside push/pop, or exprContext
                -- answers differ (see getExprContext)
                context       :: Y.Context,
+               stateName     :: String,
                -- for expression queries (checkDisjointExprM), made on first
                -- use, and the number of checks since it was last emptied
                exprContext   :: Maybe (Y.Context, Int),
@@ -470,6 +526,9 @@ data YState =
                proofMap      :: M.Map (AExpr, AExpr) ProofEntry,
                -- satisfiability of single conditions (checkDisjointExprM)
                satMap        :: M.Map AExpr Y.Status,
+               exprModels    :: [Y.Model],
+               exprChecks    :: !Int,
+               exprModelSats :: !Int,
 
                anyId         :: Integer,
                unknownId     :: Integer,
