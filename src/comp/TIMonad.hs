@@ -13,6 +13,9 @@ module TIMonad(
         EPred(..), Infer2, CheckT, TaskCheckT,
         getBoundTVs, getTopBoundTVs, addBoundTVs, popBoundTVs,
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
+        GSeg(..), GTree(..), Givens, mkGivens, givensSegs, givensList, givensOnList,
+        givensAppend,
+        classKey, getExplGivens, getTopExplSeg,
         getSolvedPool, addSolvedPool, pushSolvedPool, popSolvedPool,
         getPoolDepositsOK, withoutSolvedPool,
         getNumProven, getNumRefuted, addNumDecided,
@@ -53,6 +56,10 @@ import Control.Monad(when)
 import Control.Monad.Except(ExceptT, runExceptT, throwError, catchError)
 import Control.Monad.State(State, StateT, runState, runStateT,
                            lift, gets, get, put, modify)
+import Data.Array(Array, listArray, assocs)
+import FStringCompat(fstringId)
+import qualified Data.IntMap.Strict as IM
+import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Maybe(fromMaybe)
@@ -99,7 +106,9 @@ data TStateRecover = TStateRecover {
   tsCurSubst :: !Subst, -- current substitution
   -- stack of bound tyvars (list of lists for stuff bound at each level)
   tsBoundTyVarStack :: [[TyVar]],
-  tsExplPreds :: [[EPred]],
+  -- the explicit preds bound at each level, newest first, each level's
+  -- with its class index (GSeg)
+  tsExplPreds :: [GSeg],
   tsSatStack :: TSSuperSatStack,
   -- numeric predicates already decided by the proviso SAT solver in
   -- this definition, so repeated queries are answered from here
@@ -116,7 +125,7 @@ data TStateRecover = TStateRecover {
 
 type TSSatElement = EPred
 
-mkTSSatElement :: (Maybe [TyVar]) -> [EPred] -> VPred -> TSSatElement
+mkTSSatElement :: (Maybe [TyVar]) -> Givens -> VPred -> TSSatElement
 -- this solves a VPred in a circular way by simply assigning the
 -- variable to the pred.  We still will need to solve the pred "p".
 -- It is useful when there is recursion, where the solved "p" will
@@ -353,18 +362,29 @@ popBoundTVs = modify dropVars
   where dropVars s = s { tsBoundTyVarStack = tail (tsBoundTyVarStack s) }
 
 getExplPreds :: TI [EPred]
-getExplPreds = gets tsExplPreds >>= (return . concat)
+getExplPreds = gets tsExplPreds >>= (return . concatMap gsList)
 
 getTopExplPreds :: TI [EPred]
-getTopExplPreds = gets tsExplPreds >>= (return . headOrErr "getTopExplPreds")
+getTopExplPreds = gets tsExplPreds >>= (return . gsList . headOrErr "getTopExplPreds")
+
+-- getExplPreds with the levels' class indexes
+getExplGivens :: TI Givens
+getExplGivens = gets tsExplPreds >>= (return . mkGivensSegs)
+
+-- the newest level (getTopExplPreds is its gsList)
+getTopExplSeg :: TI GSeg
+getTopExplSeg = gets tsExplPreds >>= (return . headOrErr "getTopExplSeg")
 
 addExplPreds :: [EPred] -> TI ()
 addExplPreds ps = modify addPreds
-  where addPreds s = s { tsExplPreds = ps : (tsExplPreds s) }
+  where addPreds s = s { tsExplPreds = mkGSeg ps : (tsExplPreds s) }
 
 popExplPreds :: TI ()
 popExplPreds = modify dropPreds
-  where dropPreds s = s { tsExplPreds = tail (tsExplPreds s) }
+  where dropPreds s =
+          case tsExplPreds s of
+            (_:rest) -> s { tsExplPreds = rest }
+            [] -> internalError "TIMonad.popExplPreds: empty"
 
 getNumProven :: TI (S.Set Pred)
 getNumProven = gets tsNumProven
@@ -563,6 +583,56 @@ instance Types EPred where
 
 instance PPrint EPred where
     pPrint d p (EPred e q) = pparen (p>0) (pparen True (pPrint d 0 e) <> text":" <> pPrint d 10 q)
+
+-- Givens with an index by class
+data GTree = GTree { gtKey :: !Int, gtReach :: !IS.IntSet, gtSubs :: [GTree] }
+
+classKey :: Class -> Int
+classKey c = fstringId (getIdBase (typeclassId (name c)))
+
+classTree :: Class -> GTree
+classTree c = GTree k (IS.insert k (IS.unions (map gtReach subs))) subs
+  where k = classKey c
+        subs = [ classTree c' | (_, IsIn c' _) <- super c ]
+
+data GSeg = GSeg {
+    gsList  :: [EPred],
+    gsTrees :: Array Int GTree,
+    gsIdx   :: IM.IntMap [Int]
+  }
+
+mkGSeg :: [EPred] -> GSeg
+mkGSeg ps = GSeg ps trees idx
+  where trees = listArray (0, length ps - 1) [ classTree c | EPred _ (IsIn c _) <- ps ]
+        idx = IM.map reverse $
+              IM.fromListWith (++) [ (k, [i]) | (i, t) <- assocs trees,
+                                                k <- IS.toList (gtReach t) ]
+
+newtype Givens = Givens [GSeg]
+
+mkGivens :: [EPred] -> Givens
+mkGivens [] = Givens []
+mkGivens ps = Givens [mkGSeg ps]
+
+mkGivensSegs :: [GSeg] -> Givens
+mkGivensSegs segs = Givens [ seg | seg <- segs, not (null (gsList seg)) ]
+
+givensSegs :: Givens -> [GSeg]
+givensSegs (Givens segs) = segs
+
+givensList :: Givens -> [EPred]
+givensList (Givens [seg]) = gsList seg
+givensList (Givens segs) = concatMap gsList segs
+
+givensAppend :: Givens -> Givens -> Givens
+givensAppend (Givens segs1) (Givens segs2) = Givens (segs1 ++ segs2)
+
+givensOnList :: GSeg -> [EPred] -> Givens
+givensOnList seg ps = mkGivensSegs [seg { gsList = ps }]
+
+instance Types Givens where
+    apSub s (Givens segs) = Givens [ seg { gsList = apSub s (gsList seg) } | seg <- segs ]
+    tv gv = tv (givensList gv)
 
 type Infer2 e t r = [Assump] -> e -> TI ([VPred], t, r)
 
