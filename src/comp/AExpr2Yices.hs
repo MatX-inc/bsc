@@ -4,6 +4,7 @@ module AExpr2Yices(
        addADefToYState,
 
        checkDisjointExpr,
+       checkDisjointExprWithCtx,
        checkDisjointRulePair,
        convertRulePair,
        decideRulePairs,
@@ -71,6 +72,7 @@ initYState str flags doHardFail ds avis rs = do
                    stateMap = M.fromList [(avi_vname avi, avi_vmi avi)
                                             | avi <- avis],
                    proofMap = M.empty,
+                   ctxProofMap = M.empty,
                    satMap = M.empty,
                    exprModels = [],
                    exprChecks = 0,
@@ -213,6 +215,43 @@ checkPushPop :: Y.Expr -> Y.Expr -> YM Y.Status
 checkPushPop ye1 ye2 = do
   ctx <- gets context
   liftIO $ checkAssertions ctx [ye1, ye2]
+
+-- Disjointness of (ctx1 AND e1) vs (ctx2 AND e2) without building composite
+-- AExpr trees: check the four conjuncts via checkAssuming (reusing exprContext
+-- and kept models) with fallback to push/pop, memoized by 4-tuple.
+checkDisjointExprWithCtx :: YState -> AExpr -> AExpr -> AExpr -> AExpr ->
+                            IO (Maybe Bool, YState)
+checkDisjointExprWithCtx s ctx1 ctx2 e1 e2 =
+    runStateT (checkDisjointExprWithCtxM ctx1 ctx2 e1 e2) s
+
+checkDisjointExprWithCtxM :: AExpr -> AExpr -> AExpr -> AExpr ->
+                             YM (Maybe Bool)
+checkDisjointExprWithCtxM ctx1 ctx2 e1 e2 = withTraceTest $ do
+  when traceTest $
+      traceM("comparing exprs with ctx: " ++ ppString ((ctx1, e1), (ctx2, e2)))
+
+  let doProof = do
+        (yctx1, _) <- convAExpr2YExpr_Force True ctx1
+        (yctx2, _) <- convAExpr2YExpr_Force True ctx2
+        (ye1, _) <- convAExpr2YExpr_Force True e1
+        (ye2, _) <- convAExpr2YExpr_Force True e2
+        let es = [yctx1, yctx2, ye1, ye2]
+        res0 <- checkAssuming es
+        sat_res <- if isDecided res0 then return res0 else do
+                     countExprCheck
+                     ctx <- gets context
+                     liftIO $ checkAssertions ctx es
+        addToCtxProofMap ctx1 ctx2 e1 e2 sat_res
+        return sat_res
+
+  memRes <- lookupCtxProofMap ctx1 ctx2 e1 e2
+  sat_res <- case memRes of
+    Just r  -> return r
+    Nothing -> doProof
+
+  return $ case (cvtStatus sat_res) of
+              Just b -> Just (not b)
+              Nothing -> Nothing
 
 checkDisjointRulePair :: YState -> (ARuleId, ARuleId) -> IO (Maybe Bool, YState)
 checkDisjointRulePair s rp = runStateT (checkDisjointRulePairM rp) s
@@ -524,6 +563,7 @@ data YState =
                ruleMap       :: M.Map ARuleId RuleTriple,
                stateMap      :: M.Map AId VModInfo,
                proofMap      :: M.Map (AExpr, AExpr) ProofEntry,
+               ctxProofMap   :: M.Map (AExpr, AExpr, AExpr, AExpr) Y.Status,
                -- satisfiability of single conditions (checkDisjointExprM)
                satMap        :: M.Map AExpr Y.Status,
                exprModels    :: [Y.Model],
@@ -594,6 +634,18 @@ lookupProofMap :: AExpr -> AExpr -> YM (Maybe ProofEntry)
 lookupProofMap e1 e2 = do
   rmap <- gets proofMap
   return $ M.lookup (e1,e2) rmap
+
+addToCtxProofMap :: AExpr -> AExpr -> AExpr -> AExpr -> Y.Status -> YM ()
+addToCtxProofMap ctx1 ctx2 e1 e2 res = do
+  rmap <- gets ctxProofMap
+  let rmap1 = M.insert (ctx1, ctx2, e1, e2) res rmap
+      rmapX = M.insert (ctx2, ctx1, e2, e1) res rmap1
+  modify (\s -> s {ctxProofMap = rmapX})
+
+lookupCtxProofMap :: AExpr -> AExpr -> AExpr -> AExpr -> YM (Maybe Y.Status)
+lookupCtxProofMap ctx1 ctx2 e1 e2 = do
+  rmap <- gets ctxProofMap
+  return $ M.lookup (ctx1, ctx2, e1, e2) rmap
 
 
 -- -------------------------
