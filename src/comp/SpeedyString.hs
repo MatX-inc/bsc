@@ -108,45 +108,53 @@ err = internalError "SpeedyString: inconsistent representation"
 --    fromString (NotSoSpeedyString.toString not_so_speedy)
 
 -- Generated spellings: the typechecker's fresh names (_tctyvarN, _tcdictN,
--- _tctempN, N in canonical decimal) are kept as a key, tag + 4 * N, and
--- spelled out only when asked.  Every intern of such a spelling, from enumId
--- or from any String, goes through the key, so ids are exactly those of
--- interning the String.
+-- _tctempN) and ITransform's CSE names (__iN, __jN), N in canonical
+-- decimal, are kept as a key, tag + 8 * N, and spelled out only when asked.
+-- Every intern of such a spelling, from enumId or from any String or bytes,
+-- goes through the key, so ids are exactly those of interning the String.
 
 genLimit :: Int
 genLimit = 10 ^ (15 :: Int)
 
 packGen :: Int -> Int -> Int
-packGen tag n = tag + n `shiftL` 2
+packGen tag n = tag + n `shiftL` 3
 
 enumTag :: String -> Maybe Int
 enumTag "tctyvar" = Just 1
 enumTag "tcdict"  = Just 2
 enumTag "tctemp"  = Just 3
+enumTag "_i"      = Just 4
+enumTag "_j"      = Just 5
 enumTag _         = Nothing
 
 genPrefix :: Int -> String
 genPrefix 1 = "_tctyvar"
 genPrefix 2 = "_tcdict"
 genPrefix 3 = "_tctemp"
+genPrefix 4 = "__i"
+genPrefix 5 = "__j"
 genPrefix _ = err
 
 genSpelling :: Int -> String
-genSpelling k = genPrefix (k .&. 3) Prelude.++ show (k `shiftR` 2)
+genSpelling k = genPrefix (k .&. 7) Prelude.++ show (k `shiftR` 3)
 
 genKey :: String -> Maybe Int
 genKey ('_':'t':'c':r) =
     case r of
-      't':'y':'v':'a':'r':ds -> num 1 ds
-      'd':'i':'c':'t':ds     -> num 2 ds
-      't':'e':'m':'p':ds     -> num 3 ds
+      't':'y':'v':'a':'r':ds -> genNum 1 ds
+      'd':'i':'c':'t':ds     -> genNum 2 ds
+      't':'e':'m':'p':ds     -> genNum 3 ds
       _                      -> Nothing
-  where num tag "0" = Just (packGen tag 0)
-        num tag ds@(d:_)
-          | d /= '0' && length ds <= 15 && all isDigit ds =
-              Just (packGen tag (foldl (\a c -> a * 10 + (ord c - ord '0')) 0 ds))
-        num _ _ = Nothing
+genKey ('_':'_':'i':ds) = genNum 4 ds
+genKey ('_':'_':'j':ds) = genNum 5 ds
 genKey _ = Nothing
+
+genNum :: Int -> String -> Maybe Int
+genNum tag "0" = Just (packGen tag 0)
+genNum tag ds@(d:_)
+  | d /= '0' && length ds <= 15 && all isDigit ds =
+      Just (packGen tag (foldl (\a c -> a * 10 + (ord c - ord '0')) 0 ds))
+genNum _ _ = Nothing
 
 -- internal representation
 --
@@ -367,10 +375,10 @@ bytesOf t i = do k <- unsafeRead (tKey t) i
 genBytes :: Int -> SBS.ShortByteString
 genBytes k = fst (SBS.unfoldrN (lp + nd) step 0)
   where
-    tag = k .&. 3
-    pre = if tag == 0 then err else unsafeAt genPrefixes (tag - 1)
+    tag = k .&. 7
+    pre = if tag == 0 || tag > 5 then err else unsafeAt genPrefixes (tag - 1)
     lp = SBS.length pre
-    n = k `shiftR` 2
+    n = k `shiftR` 3
     nd = let go d p = if n < p then d else go (d + 1) (p * 10) in go 1 (10 :: Int)
     step :: Int -> Maybe (Word8, Int)
     step i | i < lp = Just (SBS.unsafeIndex pre i, i + 1)
@@ -379,7 +387,7 @@ genBytes k = fst (SBS.unfoldrN (lp + nd) step 0)
     pow10 j = unsafeAt powers10 j
 
 genPrefixes :: Array Int SBS.ShortByteString
-genPrefixes = listArray (0, 2) (map (packSpelling . genPrefix) [1, 2, 3])
+genPrefixes = listArray (0, 4) (map (packSpelling . genPrefix) [1 .. 5])
 
 -- 10 ^ 0 .. 10 ^ 15: a generated name's number has at most 15 digits
 powers10 :: Array Int Int
@@ -397,8 +405,11 @@ hashBytes p = go 0 0
 -- other code point packs to an ASCII byte.
 genKeyBytes :: SBS.ShortByteString -> Maybe Int
 genKeyBytes p
-    | n < 8 || byteAt p 0 /= ord '_' || byteAt p 1 /= ord 't' ||
-      byteAt p 2 /= ord 'c' = Nothing
+    | n < 4 || byteAt p 0 /= ord '_' = Nothing
+    | byteAt p 1 == ord '_' = if byteAt p 2 == ord 'i' then num 4 3
+                              else if byteAt p 2 == ord 'j' then num 5 3
+                              else Nothing
+    | n < 8 || byteAt p 1 /= ord 't' || byteAt p 2 /= ord 'c' = Nothing
     | prefix "tyvar" = num 1 8
     | prefix "dict"  = num 2 7
     | prefix "temp"  = num 3 7
