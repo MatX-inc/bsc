@@ -89,7 +89,7 @@ import Pragma
 import VModInfo(VPathInfo)
 import Deriving(derive)
 import SymTab
-import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
+import MakeSymTab(mkSymTab, mkSymTabWithWarnings, mkSymTabBase, mkSymTabExtend, cConvInst,
                   getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck)
 import PatMatchCheck(patternMatchWarnings)
@@ -450,7 +450,15 @@ compilePackage
     -- symbols.
     --
     start flags DFsyminitial
-    symt00 <- mkSymTabWithWarnings errh mop
+    (symt00, symBase) <-
+        if rebuildSymTab flags
+        then do s <- mkSymTabWithWarnings errh mop
+                return (s, Nothing)
+        else do (s, b) <- mkSymTabBase errh mop
+                return (s, Just b)
+    let mkSymTabNext p = case symBase of
+                           Just b  -> mkSymTabExtend errh b p
+                           Nothing -> mkSymTab errh p
     t <- dump errh flags t DFsyminitial dumpnames symt00
 
     -- whether we are doing code generation for modules
@@ -469,7 +477,7 @@ compilePackage
     -- Rebuild the symbol table because GenWrap added new types
     -- and typeclass instances for those types
     start flags DFsympostgenwrap
-    symt1 <- mkSymTab errh mwrp
+    symt1 <- mkSymTabNext mwrp
     t <- dump errh flags t DFsympostgenwrap dumpnames symt1
 
     -- Re-add function definitions for `noinline'
@@ -482,7 +490,7 @@ compilePackage
 
     -- Rebuild the symbol table because Deriving added new instances
     start flags DFsympostderiving
-    symt11 <- mkSymTab errh mder
+    symt11 <- mkSymTabNext mder
     t <- dump errh flags t DFsympostderiving dumpnames symt11
 
     -- Extract packages used in type constructors from the parsed package
@@ -498,7 +506,7 @@ compilePackage
     -- Rebuild the symbol table because CtxReduce has possibly changed
     -- the types of top-level definitions
     start flags DFsympostctxreduce
-    symt <- mkSymTab errh mctx
+    symt <- mkSymTabNext mctx
     t <- dump errh flags t DFsympostctxreduce dumpnames symt
 
     -- Turn instance declarations into ordinary definitions
