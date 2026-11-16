@@ -50,8 +50,9 @@ import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, store
                     objSuffix, useSuffix,
                     genFileName, createEncodedFullFilePath,
                     getFullFilePath, getRelativeFilePath)
-import FileIOUtil(writeFileCatch, readFileMaybe, removeFileCatch,
+import FileIOUtil(writeFileCatch, writeFileBuilderCatch, readFileMaybe, removeFileCatch,
                   readFilePath)
+import qualified Data.ByteString.Builder as BB
 import TopUtils
 import SystemCheck(doSystemCheck)
 import BuildSystem
@@ -1553,14 +1554,15 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        blurb <- mkGenFileHeader flags
        let mkEncodedName s = genFileName mkNameWithoutSuffix (cdir flags) prefix s
            -- write CCSyntax to file and return the relative file name
-           writeFileC :: String -> String -> IO String
+           writeFileC :: String -> BB.Builder -> IO String
            writeFileC name file = do
              t_start <- getNow
              start flags DFwriteC
              encoded_name <- mkEncodedName name
              let full_name = getFullFilePath encoded_name
                  rel_name = getRelativeFilePath encoded_name
-             writeFileCatch errh full_name ((commentC blurb) ++ file)
+             writeFileBuilderCatch errh full_name
+                 (BB.stringUtf8 (commentC blurb) `mappend` file)
              _<- dumpStr errh flags t_start DFwriteC dumpnames name
              return rel_name
 
@@ -1604,7 +1606,7 @@ genModuleC errh flags dumpnames time0 toplevel abis =
              else [("imported_BDPI_functions.h",
                     deprecation_notice ++ ppReadable (mkImportDeclarations ff_map))]
 
-       imp_names <- mapM (uncurry writeFileC) import_header
+       imp_names <- mapM (\(n, s) -> writeFileC n (BB.stringUtf8 s)) import_header
 
        let core_names = imp_names ++ block_names
 
@@ -1620,7 +1622,7 @@ genModuleC errh flags dumpnames time0 toplevel abis =
                      else return []
        time <- dump errh flags time DFgenSystemC dumpnames sysc_files
 
-       sysc_names <- mapM (uncurry writeFileC) sysc_files
+       sysc_names <- mapM (\(n, s) -> writeFileC n (BB.stringUtf8 s)) sysc_files
 
        let names = core_names ++ sysc_names
 
