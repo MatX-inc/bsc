@@ -446,19 +446,17 @@ aVerilog errh flags pps aspack ffmap =
         -- XXX might be good to allow the user to specify a default
 
         args :: [VArg]
-        args =        [ VAParameter (vId i) r v isStr
+        args =        [ VAParameter (vId i) pt v
                      | (i, t) <- ps,
-                       let (r, v, isStr) = case t of
-                                      ATBit sz -> (Just (VEConst (sz-1),
-                                                         VEConst 0),
-                                             VEWConst (mkVId "0") sz 2 0, False)
-                                      -- under -system-verilog-output, emit a SV
-                                      -- `string` parameter so $display treats it
-                                      -- as a string, not a packed bit-vector
-                                      ATString _ -> (Nothing, VEString "",
-                                                     systemVerilogOutput flags)
-                                      ATReal -> (Nothing, VEReal 0.0, False)
-                                      _ -> (Nothing, VEConst 0, False) ] ++
+                       let (pt, v) = case t of
+                                      ATBit sz -> (VPTBits (Just (VEConst (sz-1),
+                                                                 VEConst 0)),
+                                             VEWConst (mkVId "0") sz 2 0)
+                                      -- a String parameter is declared through
+                                      -- `BSV_PARAMETER_STRING (see Verilog.hs)
+                                      ATString _ -> (VPTString, VEString "")
+                                      ATReal -> (VPTBits Nothing, VEReal 0.0)
+                                      _ -> (VPTBits Nothing, VEConst 0) ] ++
                 [ VAInput (vId i) (vSize t)
                      | (i, t) <- is ] ++
                 filterSharedInout
