@@ -56,6 +56,7 @@ import TopUtils
 import SystemCheck(doSystemCheck)
 import BuildSystem
 import IOUtil(getEnvDef, progArgs)
+import SpeedyString(snapshotInternState, renderInternTable)
 
 -- compiler libs
 --import FStringCompat
@@ -210,7 +211,29 @@ main = do
       _ -> return ()
     args <- getArgs
     -- bsc can raise exception,  catch them here  print the message and exit out.
-    bsCatch (hmain args) `CE.finally` ctypeStatsDump
+    bsCatch (hmain args) `CE.finally` (ctypeStatsDump >> dumpInternTable)
+
+-- Hidden flag -trace-intern-table: write the table to $BSC_INTERN_DUMP or
+-- <package>.intern.json after every output is written, interning nothing.
+dumpInternTable :: IO ()
+dumpInternTable = when ("-trace-intern-table" `elem` progArgs) $ do
+    env_file <- getEnvDef "BSC_INTERN_DUMP" ""
+    dflt_file <- readIORef internDumpFile
+    case (if null env_file then dflt_file else Just env_file) of
+      Nothing -> return ()
+      Just file -> do
+        snapshot <- snapshotInternState
+        case renderInternTable snapshot of
+          Right bytes -> BL.writeFile file bytes
+          Left problem -> do
+            hPutStr stderr ("-trace-intern-table: " ++ problem ++ "\n")
+            stale <- doesFileExist file
+            when stale (removeFile file)
+            CE.throwIO (ExitFailure 1)
+
+{-# NOINLINE internDumpFile #-}
+internDumpFile :: IORef (Maybe FilePath)
+internDumpFile = unsafePerformIO (newIORef Nothing)
 
 -- -trace-ctype-stats: the construction, interning and conversion-memo
 -- counters, on every exit path so that a failing compile still reports
