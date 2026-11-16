@@ -25,6 +25,9 @@ help:
 	@echo '    make  install-doc  Build and install just the documentation'
 	@echo '    make  install-bluehs'
 	@echo '                       Install the tools and the bluehs script runtime'
+	@echo '    make  install-extra'
+	@echo '                       install-src plus the extra tools that parts of'
+	@echo '                       the testsuite need (showrules, fstscopes, ...)'
 	@echo
 	@echo '    make  check-smoke  Run a quick smoke test'
 	@echo '    make  check-suite  Run the test suite (this will take time!)'
@@ -60,6 +63,18 @@ install-src:
 .PHONY: install-solvers
 install-solvers:
 	$(MAKE)  -C src  PREFIX=$(PREFIX)  install-solvers
+
+# showrules, fstscopes, fstcheck, vcdcheck, dumpba -- the tools some
+# testsuite directories need.  Without them bsc.showrules and
+# bsc.bluetcl/fst_correlation report "unsupported" and silently skip 61
+# tests, so a green run quietly covers less than the last one.
+# Depends on install-src because these link against the same build;
+# src/Makefile forwards only install/clean/full_clean and the target
+# lives in comp, so go direct, with -j1 as comp's targets share one
+# workspace.
+.PHONY: install-extra
+install-extra: install-src
+	$(MAKE)  -C src/comp  -j1  PREFIX=$(PREFIX)  install-extra
 
 .PHONY: install-doc
 install-doc:
