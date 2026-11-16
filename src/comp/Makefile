@@ -138,6 +138,14 @@ $(EXES): version
 # -----
 # Install targets
 
+# Every executable compiles into the same -odir, so two of them running at
+# once race on the objects of the modules they share: one renames its
+# temporary over the path the other is still writing, which surfaces as
+# `renameFile: ... VCD.o.tmp to ... VCD.o: does not exist`. Build them
+# through a -j1 sub-make, which holds however the caller invoked make.
+# Little is lost, because the objects are shared: after the first target the
+# rest compile only their own main and link, and GHCJOBS still parallelises
+# within each compile. Naming one executable directly still builds just it.
 .PHONY: install
 install: $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(CHECKEXES) install-bsc install-bluetcl install-bo2bloogle install-checkers
 
