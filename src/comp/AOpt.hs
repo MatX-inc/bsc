@@ -50,7 +50,7 @@ import FStringCompat(mkFString)
 import Id
 import ASyntax
 import ASyntaxUtil
-import ASourceTypes(anchorASPackage, anchorSourceTypes)
+import ASourceTypes(anchorASPackage, anchorSourceTypes, anchorSourceProvenance)
 import AExpand(aExpand, xaSRemoveUnused, xaXExpand, expandAPackage)
 import BoolExp
 import Prim
@@ -1783,7 +1783,9 @@ aOptAPackageLite errh flags apkg =
       (ds1) = aOptPackage1 apkg1
       apkg2 = apkg1 { apkg_local_defs = ds1,
                      apkg_expr_types = anchorSourceTypes (apkg_local_defs apkg1)
-                                                         (apkg_expr_types apkg1) }
+                                                         (apkg_expr_types apkg1),
+                     apkg_provenance = anchorSourceProvenance (apkg_local_defs apkg1)
+                                                              (apkg_provenance apkg1) }
       -- remove unused defs
       apkg3 = apkg2  -- XXX ?
       -- final pass (to merge AND/OR operators)

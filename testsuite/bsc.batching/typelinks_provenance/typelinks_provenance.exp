@@ -1,0 +1,54 @@
+# Verify TypeLinks (.tl record emission under BSC_TYPELINKS=1, zero .tl file
+# emission by default and under BSC_TYPELINKS=0, byte-for-byte .tl and .v
+# identity under -trace-intern-reverse, and .ba round-trip with -opt-join-defs).
+
+set join_flags {-keep-fires -opt-join-defs}
+
+if { $vtest == 1 } {
+    # 1. Default mode (BSC_TYPELINKS unset): in-memory provenance active, no .tl file written
+    catch { unset ::env(BSC_TYPELINKS) }
+    file delete -force [file join $subdir mkTypeLinksProv.tl] [file join $subdir mkTypeLinksProv.v] [file join $subdir TypeLinksProv.bo]
+    compile_verilog_pass TypeLinksProv.bs mkTypeLinksProv $join_flags
+    copy mkTypeLinksProv.v mkTypeLinksProv.default.v
+    if { [file exists [file join $subdir mkTypeLinksProv.tl]] } {
+        fail "mkTypeLinksProv.tl should not be written when BSC_TYPELINKS is unset"
+    } else {
+        pass "no .tl file written when BSC_TYPELINKS is unset"
+    }
+
+    # 2. BSC_TYPELINKS=1: writes mkTypeLinksProv.tl with header and core record kinds,
+    #    and produces identical mkTypeLinksProv.tl under -trace-intern-reverse.
+    set ::env(BSC_TYPELINKS) 1
+    file delete -force [file join $subdir mkTypeLinksProv.tl] [file join $subdir mkTypeLinksProv.v] [file join $subdir TypeLinksProv.bo]
+    compile_verilog_pass TypeLinksProv.bs mkTypeLinksProv $join_flags
+    copy mkTypeLinksProv.tl mkTypeLinksProv.normal.tl
+
+    find_regexp mkTypeLinksProv.normal.tl {^tl 1 TypeLinksProv mkTypeLinksProv}
+    find_regexp mkTypeLinksProv.normal.tl {^T }
+    find_regexp mkTypeLinksProv.normal.tl {^K }
+    find_regexp mkTypeLinksProv.normal.tl {^C }
+    find_regexp mkTypeLinksProv.normal.tl {^E }
+    find_regexp mkTypeLinksProv.normal.tl {^Y }
+    find_regexp mkTypeLinksProv.normal.tl {^W }
+    find_regexp mkTypeLinksProv.normal.tl {^U }
+
+    file delete -force [file join $subdir mkTypeLinksProv.tl] [file join $subdir mkTypeLinksProv.v] [file join $subdir TypeLinksProv.bo]
+    compile_verilog_pass TypeLinksProv.bs mkTypeLinksProv [concat $join_flags {-trace-intern-reverse}]
+    copy mkTypeLinksProv.tl mkTypeLinksProv.rev.tl
+    compare_file mkTypeLinksProv.normal.tl mkTypeLinksProv.rev.tl
+
+    # 3. BSC_TYPELINKS=0: suppresses both .tl output and capture cleanly
+    set ::env(BSC_TYPELINKS) 0
+    file delete -force [file join $subdir mkTypeLinksProv.tl] [file join $subdir mkTypeLinksProv.v] [file join $subdir TypeLinksProv.bo]
+    compile_verilog_pass TypeLinksProv.bs mkTypeLinksProv $join_flags
+    if { [file exists [file join $subdir mkTypeLinksProv.tl]] } {
+        fail "mkTypeLinksProv.tl should not be written when BSC_TYPELINKS=0"
+    } else {
+        pass "no .tl file written when BSC_TYPELINKS=0"
+    }
+    unset ::env(BSC_TYPELINKS)
+}
+
+reverse_intern_same_bo TypeLinksProv.bs
+reverse_intern_same_verilog TypeLinksProv.bs mkTypeLinksProv $join_flags
+check_verilog_regen TypeLinksProv.bs mkTypeLinksProv $join_flags

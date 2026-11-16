@@ -16,7 +16,7 @@ import Id
 import Prim
 import ASyntax
 import ASyntaxUtil
-import ASourceTypes(anchorSourceTypes)
+import ASourceTypes(anchorSourceTypes, anchorSourceProvenance)
 import VModInfo
 import AConv(isLocalAId)
 --import Util(traces)
@@ -106,7 +106,10 @@ expandASPackage errh keepFires expnond expcheap pkg =
               aspkg_foreign_calls = fs',
               aspkg_expr_types = inlineDroppedExprTypes ds ds' $
                                   mapExprTypes (aSubst subst) $
-                                  anchorSourceTypes ds (aspkg_expr_types pkg) }
+                                  anchorSourceTypes ds (aspkg_expr_types pkg),
+              aspkg_provenance = inlineDroppedProvenance ds ds' $
+                                  mapProvenance (aSubst subst) $
+                                  anchorSourceProvenance ds (aspkg_provenance pkg) }
 
 
 -- ==============================
@@ -257,7 +260,9 @@ aSRemoveUnused keepfires pkg =
         --traces( "aSRemoveUnused : new defs: " ++ ppReadable ds' ) $
         pkg { aspkg_values = ds',
               aspkg_expr_types = inlineDroppedExprTypes ds ds'
-                                      (aspkg_expr_types pkg) }
+                                      (aspkg_expr_types pkg),
+              aspkg_provenance = inlineDroppedProvenance ds ds'
+                                      (aspkg_provenance pkg) }
 
 
 -- ==============================
@@ -277,7 +282,9 @@ aRemoveUnused apkg =
 --    ++ "\n   iused: " ++ ppReadable iused) $
         apkg { apkg_local_defs = ds',
                apkg_expr_types = inlineDroppedExprTypes (apkg_local_defs apkg) ds'
-                                      (apkg_expr_types apkg) }
+                                      (apkg_expr_types apkg),
+               apkg_provenance = inlineDroppedProvenance (apkg_local_defs apkg) ds'
+                                      (apkg_provenance apkg) }
   where ds' = collDefs (vused ++ rused ++ iused) (apkg_local_defs apkg)
         vused = aVars (apkg_state_instances apkg)
         rused = aVars (apkg_rules apkg)
@@ -354,7 +361,9 @@ xaSRemoveUnused keepFires pkg =
     --        "\n ds' = " ++ ppReadable ds' ++ "\n os = " ++ ppReadable os) $
     pkg { aspkg_values = ds',
           aspkg_expr_types = inlineDroppedExprTypes ds ds'
-                                  (aspkg_expr_types pkg) }
+                                  (aspkg_expr_types pkg),
+          aspkg_provenance = inlineDroppedProvenance ds ds'
+                                  (aspkg_provenance pkg) }
   where
         ds = aspkg_values pkg
         ss = aspkg_state_instances pkg
@@ -786,7 +795,10 @@ expandAPackage errh apkg = apkgN
                                          apkg_interface = ifc,
                                          apkg_expr_types = inlineDroppedExprTypes sorted_defs defs $
                                              mapExprTypes (aSubst subst) $
-                                             anchorSourceTypes sorted_defs (apkg_expr_types apkg)}
+                                             anchorSourceTypes sorted_defs (apkg_expr_types apkg),
+                                         apkg_provenance = inlineDroppedProvenance sorted_defs defs $
+                                             mapProvenance (aSubst subst) $
+                                             anchorSourceProvenance sorted_defs (apkg_provenance apkg)}
 
 
 -- Tests on AId and AExpr to determine if the expression should be inlined during aOpt

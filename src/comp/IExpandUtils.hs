@@ -9,6 +9,7 @@ module IExpandUtils(
         saveSourceType, shareHeapSourceTypes, saveEvaluatedSourceTypes,
         HExpr, HeapData(..), HClock, HReset, HInout, HStateVar, HRules, HWireSet, HDef, HRule, HEFace,
         runG, G, GOutput(..),
+        tlNextPtr, tlIO, tlIOR, tlHeaped, tlTakeCond,
         errG, errsG, deferErrors, eWarning, eWarnings, getElabProgressContext,
         eNoNF, addRules,
         pushTopModuleSchedNameScope, pushTopValueSchedNameScope, pushModuleSchedNameScope,
@@ -118,6 +119,7 @@ import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
                  newIStateLocTop, hasIgnore, isAddRules, isLoop, extendStateLocMap,
                  stateLocToPrefix, createSuffixedId,  hasHide, hasHideAll, stateLocToHierName)
+import TypeLinks(TLog, tlOn, tlCell, tlCellWHNF, tlCopy, tlArgPush, tlCondTake)
 
 {- DEBUGGING AIDS
 import Util(getEnvDef,traces)
@@ -614,11 +616,13 @@ data GRefs = GRefs {
         newClockDomain :: !(IORef ClockDomain), -- to generate unique ids for clock families
         newResetId     :: !(IORef ResetId), -- to generate unique ids for resets
         hp             :: !(IORef HeapPointer), -- next unique id for a new heap reference
-        newRuleSuffix  :: !(IORef Integer) -- store for creating unique names when ruleNameCheck is off
+        newRuleSuffix  :: !(IORef Integer), -- store for creating unique names when ruleNameCheck is off
+        -- the type-links log (TypeLinks); nothing in GState depends on it
+        tlLog          :: !TLog
         }
 
-newGRefs :: Flags -> IO GRefs
-newGRefs flags = do
+newGRefs :: Flags -> TLog -> IO GRefs
+newGRefs flags tl_log = do
   step_r <- newIORef 0
   warn_r <- newIORef (redStepsWarnInterval flags)
   state_r <- newIORef 0
@@ -632,7 +636,51 @@ newGRefs flags = do
                   stateNo = state_r, ffcallNo = ffcall_r,
                   newClockId = clock_r, newClockDomain = domain_r,
                   newResetId = reset_r, hp = hp_r,
-                  newRuleSuffix = suffix_r })
+                  newRuleSuffix = suffix_r,
+                  tlLog = tl_log })
+
+-- The type-links log's view of the evaluator (TypeLinks).  A hook reads
+-- only the hp counter and the log, never GState.
+{-# INLINE tlNextPtr #-}
+tlNextPtr :: G HeapPointer
+tlNextPtr = readCounter hp
+
+{-# INLINE tlIO #-}
+tlIO :: (TLog -> IO ()) -> G ()
+tlIO act = G $ \ st@(GS r _) -> do
+  let l = tlLog r
+  when (tlOn l) $ act l
+  return ((), st)
+
+-- Run an action with the log when it is on, and give its result (Nothing
+-- when the log is off).
+{-# INLINE tlIOR #-}
+tlIOR :: (TLog -> IO a) -> G (Maybe a)
+tlIOR act = G $ \ st@(GS r _) -> do
+  let l = tlLog r
+  x <- if tlOn l then Just <$> act l else return Nothing
+  return (x, st)
+
+-- The cell whose own conditional the evaluator is entering (-1: none, or
+-- the log is off); see TypeLinks, decided conditionals.
+{-# INLINE tlTakeCond #-}
+tlTakeCond :: G HeapPointer
+tlTakeCond = G $ \ st@(GS r _) -> do
+  let l = tlLog r
+  p <- if tlOn l then tlCondTake l else return (-1)
+  return (p, st)
+
+-- Run a heaping action for one argument and log the end it gave: the one
+-- cell it made (the counter moved by one), or else the value it returned,
+-- which its own clauses matched.
+{-# INLINE tlHeaped #-}
+tlHeaped :: G HExpr -> G HExpr
+tlHeaped act = do
+  h0 <- tlNextPtr
+  r <- act
+  h1 <- tlNextPtr
+  tlIO (\ l -> tlArgPush l h0 h1 r)
+  return r
 
 {-# INLINE readCounter #-}
 readCounter :: (GRefs -> IORef a) -> G a
@@ -946,10 +994,10 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
 runG :: ErrorHandle -> Flags ->
         SymTab -> M.Map Id HExpr ->
         ATFRules ->
-        Id -> Bool -> [PProp] -> G a ->
+        Id -> Bool -> [PProp] -> TLog -> G a ->
         IO (GOutput a)
-runG errh flags symt alldefs atf_rules defId is_noinlined_func pps gFn =
-  do refs <- newGRefs flags
+runG errh flags symt alldefs atf_rules defId is_noinlined_func pps tl_log gFn =
+  do refs <- newGRefs flags tl_log
      let gs = initGState errh flags symt alldefs atf_rules defId is_noinlined_func pps
      (retval, GS _ gs') <- unG gFn (GS refs gs)
      final_steps <- readIORef (stepNo refs)
@@ -2795,7 +2843,9 @@ addHeapUnev :: String -> IType -> HExpr -> Maybe Id -> G HExpr
 addHeapUnev tag t e cell_name_orig = do
  cell_name <- improveCellName e cell_name_orig
  let newcell = (HUnev { hc_hexpr = e, hc_name = cell_name })
+ h0 <- tlNextPtr
  (p, r) <- addHeapCell tag newcell
+ tlIO (\ l -> tlCell l h0 t tag)
  -- trace_hcell p e
  let poss = S.singleton $ getIExprPosition e
  let result = mkIRefT t p poss r
@@ -2806,10 +2856,19 @@ addHeapUnev tag t e cell_name_orig = do
 
 -- add an expression to the heap, noting it is WHNF
 addHeapWHNF :: String -> IType -> PExpr -> Maybe Id -> G HExpr
-addHeapWHNF tag t pe@(P _ e) cell_name_orig = do
+addHeapWHNF = addHeapWHNFV True
+
+-- addHeapWHNF; the flag says whether the type-links log describes the
+-- value (not when the cell is a copy of another cell's value, which the
+-- caller logs as a link)
+{-# INLINE addHeapWHNFV #-}
+addHeapWHNFV :: Bool -> String -> IType -> PExpr -> Maybe Id -> G HExpr
+addHeapWHNFV logValue tag t pe@(P _ e) cell_name_orig = do
   cell_name <- improveCellName e cell_name_orig
   let newcell = (HWHNF { hc_pexpr = pe, hc_name = cell_name })
+  h0 <- tlNextPtr
   (p, r) <- addHeapCell tag newcell
+  tlIO (\ l -> tlCellWHNF l h0 t tag logValue e)
   let poss = S.singleton $ getIExprPosition e
   let result = mkIRefT t p poss r
   when doTraceHeap $ traceM ("addHeapWHNF " ++ ppString cell_name ++ " [" ++
@@ -2842,7 +2901,9 @@ addHeapPred tag e = do
       pe = P pTrue e   -- no implicit condition
       ws = wsEmpty     -- no wire set
   let newcell = (HNF { hc_pexpr = pe, hc_wire_set = ws, hc_name = Nothing })
+  h0 <- tlNextPtr
   (p, r) <- addHeapCell tag newcell
+  tlIO (\ l -> tlCell l h0 t tag)
   let poss = S.singleton $ getIExprPosition e
   let result = mkIRefT t p poss r
   when doTraceHeap $ traceM ("addHeapPred " ++ ppReadable (result,e))
@@ -3184,7 +3245,15 @@ toHeapWHNF tag _ (P p e) cell_name
 toHeapWHNF tag t pe@(P p e) cell_name = do
     -- Pointing to an IRefT (because p /= pTrue) is not WHNF
     pe' <- unheap pe
-    result <- addHeapWHNF tag t pe' cell_name
+    result <- case e of
+      -- the new cell is a copy of the referenced cell's value (a
+      -- type-links copy link; the clauses above matched e)
+      IRefT _ src _ _ -> do
+          h0 <- tlNextPtr
+          r <- addHeapWHNFV False tag t pe' cell_name
+          tlIO (\ l -> tlCopy l "reheap" h0 src)
+          return r
+      _ -> addHeapWHNF tag t pe' cell_name
     case result of
       IRefT _ _ _ ref -> shareHeapSourceTypes ref e
       _ -> return ()

@@ -103,6 +103,7 @@ import PreIds(idBind, idReturn, idPack, idUnpack, idMonad, idLiftModule, idBit, 
 import Backend
 import Prim(PrimOp(..))
 import ConTagInfo
+import SourceProvenance(SourceProvenance)
 import VModInfo(VModInfo, vArgs, vName, VName(..), {- VeriPortProp(..), -}
                 VArgInfo(..), VFieldInfo(..), isParam, VWireInfo)
 import DefProp(DefProp)
@@ -161,6 +162,7 @@ data IModule a
                 imod_state_insts :: [(Id, IStateVar a)], -- state elements
                 imod_port_types :: PortTypeMap, -- map from state variable -> port -> source type
                 imod_expr_types :: SourceTypeInfo a, -- source interpretations of packed expressions
+                imod_provenance :: SourceProvenance (IExpr a), -- evaluator provenance facts for naming/digests
                 imod_local_defs :: [IDef a],            -- local definitions
                 imod_rules :: IRules a,                 -- rules
                 imod_interface :: [IEFace a],           -- package interface
@@ -1096,7 +1098,7 @@ instance PPrint (IPackage a) where
   where sep a b c = b $+$ a $+$ c
 
 instance PPrint (IModule a) where
- pPrint d p (IModule mi fmod be wi ps ks as clks rsts vs pts ets ds rs ifc ffcalNo cmap) =
+ pPrint d p (IModule mi fmod be wi ps ks as clks rsts vs pts ets _prov ds rs ifc ffcalNo cmap) =
         (text "IModule" <+> ppId d mi <> if fmod then text " -- function" else text "") $+$
         (case be of
              Nothing -> empty
@@ -1274,9 +1276,10 @@ instance NFData (IPackage a) where
     rnf (IPackage i lps ps ds) = rnf4 i ps lps ds
 
 instance NFData (IModule a) where
-    rnf (IModule x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 ets x12 x13 x14 x15 x16) =
+    rnf (IModule x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 ets prov x12 x13 x14 x15 x16) =
         rnf16 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 `seq`
-        rnf [(e, S.toList ts) | (e, ts) <- ets]
+        rnf [(e, S.toList ts) | (e, ts) <- ets] `seq`
+        rnf prov
 
 instance NFData (IEFace a) where
     rnf (IEFace x1 x2 x3 x4 x5 x6) = rnf6 x1 x2 x3 x4 x5 x6

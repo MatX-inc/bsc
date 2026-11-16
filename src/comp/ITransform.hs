@@ -42,6 +42,7 @@ import ISyntaxUtil
 import IPrims(doPrimOp)
 import IInline(iSortDs, iInline)
 import ISignalNaming(nameIModuleDefs)
+import SourceProvenance(mapProvFact, mapMProvFact)
 import MapTurns(Found(..), lookupTurns, insertTurns)
 import BExpr
 
@@ -133,6 +134,10 @@ applyTempNames flags m0 =
                      [ (renExpr e, ts)
                      | (e, ts) <- imod_expr_types m0
                      ]
+               , imod_provenance =
+                     [ (renExpr e, map (mapProvFact renExpr) fs)
+                     | (e, fs) <- imod_provenance m0
+                     ]
                }
 
 iTransform1 :: Integer -> ErrorHandle -> Flags -> String ->
@@ -145,8 +150,9 @@ iTransform1 no errh flags prefix imod@(IModule { imod_state_insts = itvs,
            imod_local_defs  = ds',
            imod_rules       = rs',
            imod_interface   = ifc',
-           imod_expr_types  = ets' }
-  where ((itvs', rs', ifc', ets'), ds') = runT errh flags no prefix trMod
+           imod_expr_types  = ets',
+           imod_provenance  = prov' }
+  where ((itvs', rs', ifc', ets', prov'), ds') = runT errh flags no prefix trMod
         trMod = do
             mapM_ iTrDef ds
             iTransFixupDefNames flags
@@ -164,7 +170,33 @@ iTransform1 no errh flags prefix imod@(IModule { imod_state_insts = itvs,
                              e' <- iTrExprL emptyCtx [] e
                              return (e', ts))
                          (imod_expr_types imod)
-            return (itvs', rs', ifc', ets')
+            runtimeState <- get
+            prov0 <- mapM (\(e, fs) -> do
+                              e' <- iTrExprL emptyCtx [] e
+                              fs' <- mapM (mapMProvFact (iTrExprL emptyCtx [])) fs
+                              return (e', fs'))
+                          (imod_provenance imod)
+            provState <- get
+            put runtimeState
+            let runtimeMaxOrd = idNo runtimeState
+                metaOnly = M.fromList
+                    [ (i, inlMeta rhs)
+                    | (_, IDef i _ rhs _, ord) <- M.elems (cse_map provState)
+                    , ord >= runtimeMaxOrd
+                    ]
+                inlMeta (IAps f ts es) = IAps (inlMeta f) ts (map inlMeta es)
+                inlMeta d@(ICon i (ICValue {})) =
+                    case M.lookup i metaOnly of
+                        Just e -> e
+                        Nothing -> d
+                inlMeta (ICon i (ICUndet t k (Just v))) =
+                    ICon i (ICUndet t k (Just (inlMeta v)))
+                inlMeta e = e
+                prov' = if M.null metaOnly
+                        then prov0
+                        else [ (inlMeta e, map (mapProvFact inlMeta) fs)
+                             | (e, fs) <- prov0 ]
+            return (itvs', rs', ifc', ets', prov')
 
 iTrIfc :: IEFace a -> T (IEFace a) a
 iTrIfc (IEFace i its met mrs wp fi)

@@ -18,7 +18,9 @@ import qualified Data.Map as M
 import qualified Data.Map.Strict as MS
 import qualified Data.Set as S
 import ISyntax(IType)
-import ASourceTypes(sourceTypeKey, sourceTypeLookup, anchorSourceTypes)
+import ASourceTypes(sourceTypeKey, sourceTypeLookup, anchorSourceTypes,
+                    provenanceLookup, anchorSourceProvenance)
+import SourceProvenance(ProvFact, dedupFactsBy)
 import Prim
 import DefProp(defPropsHasNoCSE)
 import ASyntax
@@ -63,6 +65,9 @@ data QState = QState {
     sourceTypes :: AExpr -> S.Set IType,
     hasSourceTypes :: Bool,
     rewrittenTypes :: M.Map AExpr (Int, S.Set IType),
+    sourceProvenance :: AExpr -> [ProvFact AExpr],
+    hasSourceProvenance :: Bool,
+    rewrittenProvenance :: M.Map AExpr (Int, [ProvFact AExpr]),
     rewriteSerial :: !Int
   }
 
@@ -141,6 +146,11 @@ aVeriQuirks flags pkg =
                     (aspkg_expr_types pkg),
                 hasSourceTypes = not (null (aspkg_expr_types pkg)),
                 rewrittenTypes = M.empty,
+                sourceProvenance = provenanceLookup
+                    (aspkg_values pkg ++ aspkg_inout_values pkg)
+                    (aspkg_provenance pkg),
+                hasSourceProvenance = not (null (aspkg_provenance pkg)),
+                rewrittenProvenance = M.empty,
                 rewriteSerial = 0
                    }
 
@@ -151,16 +161,23 @@ aVeriQuirks flags pkg =
                 fs' <- mapM aQForeignBlock (aspkg_foreign_calls pkg)
                 ds' <- gets defs
                 ts' <- gets rewrittenTypes
+                ps' <- gets rewrittenProvenance
                 let rewrittenList =
                         [ (e, ts)
                         | (e, (_, ts)) <- sortOn (fst . snd) (M.toList ts')
                         ]
+                    rewrittenProvList =
+                        [ (e, pr)
+                        | (e, (_, pr)) <- sortOn (fst . snd) (M.toList ps')
+                        ]
+                    finalDefs = reverse ds' ++ aspkg_inout_values pkg
                 return (pkg { aspkg_values = (reverse ds'),
                               aspkg_state_instances = is',
                               aspkg_foreign_calls = fs',
-                              aspkg_expr_types = anchorSourceTypes
-                                  (reverse ds' ++ aspkg_inout_values pkg)
-                                  (aspkg_expr_types pkg ++ rewrittenList) })
+                              aspkg_expr_types = anchorSourceTypes finalDefs
+                                  (aspkg_expr_types pkg ++ rewrittenList),
+                              aspkg_provenance = anchorSourceProvenance finalDefs
+                                  (aspkg_provenance pkg ++ rewrittenProvList) })
 
 
 aQDef :: ADef -> QQState ()
@@ -237,6 +254,28 @@ retainSourceTypes old new = do
                       extra' = ord `seq` MS.insert key (ord, ts) extra
                   in ord' `seq` extra' `seq`
                      put state { rewrittenTypes = extra', rewriteSerial = ord' }
+    provEnabled <- gets hasSourceProvenance
+    when (provEnabled && aType old == aType new) $ do
+        lookupProv <- gets sourceProvenance
+        extraProv <- gets rewrittenProvenance
+        let fs = dedupFactsBy sourceTypeKey $
+                 lookupProv old ++
+                 maybe [] snd (M.lookup (sourceTypeKey old) extraProv)
+        when (not (null fs) && shareableSourceExpr old &&
+              shareableSourceExpr new) $ do
+            state <- get
+            let key = sourceTypeKey new
+            case M.lookup key extraProv of
+              Just (ord, oldFs) ->
+                  let fs' = dedupFactsBy sourceTypeKey (oldFs ++ fs)
+                      extra' = length fs' `seq` MS.insert key (ord, fs') extraProv
+                  in extra' `seq` put state { rewrittenProvenance = extra' }
+              Nothing ->
+                  let ord = rewriteSerial state
+                      ord' = ord + 1
+                      extra' = ord `seq` MS.insert key (ord, fs) extraProv
+                  in ord' `seq` extra' `seq`
+                     put state { rewrittenProvenance = extra', rewriteSerial = ord' }
 
 -- Anonymous unknowns are independent choices, including when nested in an
 -- expression. Literal occurrences must not relay interpretations to unrelated
@@ -264,7 +303,7 @@ shareableSourceExpr e = not (containsAny e)
 markRewrite :: QQState ()
 markRewrite = do
     state <- get
-    when (hasSourceTypes state) $
+    when (hasSourceTypes state || hasSourceProvenance state) $
         put state { rewriteSerial = rewriteSerial state + 1 }
 
 rewriting :: QQState AExpr -> QQState AExpr

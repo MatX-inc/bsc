@@ -35,6 +35,7 @@ import VModInfo(lookupOutputClockWires, lookupOutputResetWire,
                 lookupIfcInoutWire, vArgs, VArgInfo(..))
 import ASignalNaming(signalNameFromAExprDefault, applyAPackageTempNames)
 import InstNodes(mkInstTree)
+import SourceProvenance(mapProvFact, mapMProvFact)
 
 -- import Wires
 
@@ -203,7 +204,7 @@ checkForeignInRules method rs =
 
 
 aDo :: IModule a -> M APackage
-aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ idefs rs ifc ffcalNo cmap) = do
+aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ _ idefs rs ifc ffcalNo cmap) = do
         flags <- getFlags
 
         -- AVInst keeps the types of method ports
@@ -268,6 +269,11 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ idefs rs ifc ffc
                                e' <- aExpr e
                                return (e', ts))
                            (imod_expr_types imod)
+        provenance0 <- mapM (\(e, fs) -> do
+                                e' <- aExpr e
+                                fs' <- mapM (mapMProvFact aExpr) fs
+                                return (e', fs'))
+                            (imod_provenance imod)
         metadataState <- get
         put runtimeState
         let orderedCse m =
@@ -284,6 +290,8 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ idefs rs ifc ffc
                            defPropsHasNoCSE props]
             exprTypes = inlineDroppedExprTypes (stateDefs metadataState)
                                               (stateDefs runtimeState) exprTypes0
+            provenance = inlineDroppedProvenance (stateDefs metadataState)
+                                                 (stateDefs runtimeState) provenance0
         defMap <- getDA
         cseMap <- getMap
         -- traceM $ "defMap = " ++ ppReadable defMap
@@ -357,6 +365,9 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ idefs rs ifc ffc
                             apkg_external_wire_types = lookupInstPorts Nothing,
                             apkg_expr_types = [(aSubst subst_map e, ts) |
                                                (e, ts) <- exprTypes],
+                            apkg_provenance = [(aSubst subst_map e,
+                                                map (mapProvFact (aSubst subst_map)) fs) |
+                                               (e, fs) <- provenance],
                             apkg_final_wire_names = Nothing,
                             apkg_final_wire_types = Nothing,
                             apkg_clock_domains = clock_domains,

@@ -18,6 +18,7 @@ import ForeignFunctions
 import Flags(Flags(..), FrontEndMode(..), DumpFlag(..), ResourceFlag(..), SATFlag(..),
              MsgListFlag(..), Verbosity(..))
 import InstNodes(InstNode(..))
+import SourceProvenance(NamedLitInfo(..), ProvStep(..), ProvFact(..))
 import Verilog
 
 import ABin
@@ -36,7 +37,7 @@ import qualified Data.ByteString.Lazy as BL
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261115-10"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261115-11"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -152,6 +153,7 @@ instance Bin APackage where
                apkg_external_wires = wi,
                apkg_external_wire_types = wpt,
                apkg_expr_types = ets,
+               apkg_provenance = prov,
                apkg_final_wire_names = names,
                apkg_final_wire_types = finalTypes,
                apkg_reset_list = rsts,
@@ -174,6 +176,7 @@ instance Bin APackage where
                         toBin wi
                         toBin wpt
                         toBin ets
+                        toBin prov
                         -- Share names with the existing identifier strings.
                         -- Sort before interning: FString ordering depends on
                         -- process history. Identity pairs prove wire liveness.
@@ -200,6 +203,7 @@ instance Bin APackage where
                    wi <- fromBin
                    wpt <- fromBin
                    ets <- fromBin
+                   prov <- fromBin
                    sharedNames <- fromBin
                    let names = fmap (M.fromList .
                                      map (\(a,b) -> (getFString a, getFString b)))
@@ -225,6 +229,7 @@ instance Bin APackage where
                              apkg_external_wires = wi,
                              apkg_external_wire_types = wpt,
                              apkg_expr_types = ets,
+                             apkg_provenance = prov,
                              apkg_final_wire_names = names,
                              apkg_final_wire_types = finalTypes,
                              apkg_reset_list = rsts,
@@ -237,6 +242,59 @@ instance Bin APackage where
                              apkg_inst_tree = inst_tree,
                              apkg_proof_obligations = []
                                     })
+
+-- ----------
+-- Bin SourceProvenance
+
+instance Bin NamedLitInfo where
+    writeBytes (NLitEnum tb tq cn ci nc lw lv) = do
+        putI 0; toBin tb; toBin tq; toBin cn; toBin ci; toBin nc; toBin lw; toBin lv
+    writeBytes (NLitTag tb tq cn ci nc lw lv isEn) = do
+        putI 1; toBin tb; toBin tq; toBin cn; toBin ci; toBin nc; toBin lw; toBin lv; toBin isEn
+    writeBytes (NLitSlot idx n lw lv) = do
+        putI 2; toBin idx; toBin n; toBin lw; toBin lv
+    readBytes = do
+        tag <- getI
+        case tag of
+          0 -> NLitEnum <$> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin
+          1 -> NLitTag <$> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin
+          2 -> NLitSlot <$> fromBin <*> fromBin <*> fromBin <*> fromBin
+          n -> internalError $ "GenABin.Bin(NamedLitInfo).readBytes: " ++ show n
+
+instance Bin ProvStep where
+    writeBytes (PStepField tb tq fn fi nf isTup) = do
+        putI 0; toBin tb; toBin tq; toBin fn; toBin fi; toBin nf; toBin isTup
+    writeBytes (PStepElem idx n) = do
+        putI 1; toBin idx; toBin n
+    writeBytes (PStepVariantPayload tb tq cn ci nc) = do
+        putI 2; toBin tb; toBin tq; toBin cn; toBin ci; toBin nc
+    writeBytes (PStepVariantTest tb tq cn ci nc isEn) = do
+        putI 3; toBin tb; toBin tq; toBin cn; toBin ci; toBin nc; toBin isEn
+    writeBytes (PStepVariantTag tb tq nc) = do
+        putI 4; toBin tb; toBin tq; toBin nc
+    readBytes = do
+        tag <- getI
+        case tag of
+          0 -> PStepField <$> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin
+          1 -> PStepElem <$> fromBin <*> fromBin
+          2 -> PStepVariantPayload <$> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin
+          3 -> PStepVariantTest <$> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin
+          4 -> PStepVariantTag <$> fromBin <*> fromBin <*> fromBin
+          n -> internalError $ "GenABin.Bin(ProvStep).readBytes: " ++ show n
+
+instance Bin a => Bin (ProvFact a) where
+    writeBytes (PFactAccess base steps) = do putI 0; toBin base; toBin steps
+    writeBytes (PFactConcat parts)      = do putI 1; toBin parts
+    writeBytes (PFactLit nli)           = do putI 2; toBin nli
+    writeBytes (PFactArgLits kws)       = do putI 3; toBin kws
+    readBytes = do
+        tag <- getI
+        case tag of
+          0 -> PFactAccess <$> fromBin <*> fromBin
+          1 -> PFactConcat <$> fromBin
+          2 -> PFactLit <$> fromBin
+          3 -> PFactArgLits <$> fromBin
+          n -> internalError $ "GenABin.Bin(ProvFact).readBytes: " ++ show n
 
 -- ----------
 -- Bin Backend

@@ -23,7 +23,9 @@ dVars = findAExprs dVarsE
 aDropDefs :: ASPackage -> ASPackage
 aDropDefs aspkg = aspkg { aspkg_values = defs',
                         aspkg_expr_types = inlineDroppedExprTypes defs defs'
-                                               (aspkg_expr_types aspkg) }
+                                               (aspkg_expr_types aspkg),
+                        aspkg_provenance = inlineDroppedProvenance defs defs'
+                                               (aspkg_provenance aspkg) }
   where roots = dVars (aspkg_state_instances aspkg) ++
                 map fst (aspkg_outputs aspkg) ++
                 dVars (aspkg_foreign_calls aspkg) ++
