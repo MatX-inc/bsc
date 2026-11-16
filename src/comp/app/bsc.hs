@@ -51,7 +51,7 @@ import FileIOUtil(writeFileCatch, readFileMaybe, removeFileCatch,
 import TopUtils
 import SystemCheck(doSystemCheck)
 import BuildSystem
-import IOUtil(getEnvDef)
+import IOUtil(getEnvDef, progArgs)
 
 -- compiler libs
 --import FStringCompat
@@ -94,7 +94,10 @@ import ISyntax(IPackage(..), IModule(..), IATFCache, mergeIATFCaches,
                IEFace(..), IDef(..), IExpr(..), fdVars)
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
-import IConv(iConvPackage, iConvDef)
+import IConv(iConvPackage, iConvDef, iConvTStats)
+import CType(cTypeConsStats)
+import GroundCType(groundCTypeStats)
+import BinData(binTypeStats)
 import LiftDicts(liftDictsPkg, liftDictsWrapper,
                  LiftDictsContext, prepareLiftDictsContext,
                  reserveLiftDictsNames)
@@ -197,7 +200,7 @@ main = do
       _ -> return ()
     args <- getArgs
     -- bsc can raise exception,  catch them here  print the message and exit out.
-    bsCatch (hmain args) `finally` ctypeStatsDump
+    bsCatch (hmain args) `CE.finally` ctypeStatsDump
 
 -- -trace-ctype-stats: the construction, interning and conversion-memo
 -- counters, on every exit path so that a failing compile still reports
