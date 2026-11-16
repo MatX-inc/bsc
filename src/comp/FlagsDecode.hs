@@ -773,7 +773,8 @@ defaultFlags bluespecdir = Flags {
         warnOverlappingPatterns = True,
         warnRedundantProvisos = False,
         warnUndetPred = False,
-        semanticPortsComment = False
+        semanticPortsComment = False,
+        rebuildSymTab = False
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -1549,6 +1550,10 @@ externalFlags = [
          (Toggle (\f x -> f {removeCross=x}) (showIfTrue removeCross),
           "flatten NullCrossing module uses in the generated Verilog", Hidden)),
 
+        ("rebuild-symtab",
+         (Toggle (\f x -> f {rebuildSymTab=x}) (showIfTrue rebuildSymTab),
+          "build each symbol table from scratch instead of extending the first", Hidden)),
+
         ("relax-method-earliness",
          (Toggle (\f x -> f {relaxMethodEarliness=x}) (showIfTrue relaxMethodEarliness),
           "Allows rules to be scheduled before method calls", Hidden)),
@@ -2099,6 +2104,7 @@ showFlagsRaw flags =
           ("printFlagsRaw", show (printFlagsRaw flags)),
           ("promoteWarnings", show (promoteWarnings flags)),
           ("readableMux", show (readableMux flags)),
+          ("rebuildSymTab", show (rebuildSymTab flags)),
           ("redStepsMaxIntervals", show (redStepsMaxIntervals flags)),
           ("redStepsWarnInterval", show (redStepsWarnInterval flags)),
           ("relaxMethodEarliness", show (relaxMethodEarliness flags)),
