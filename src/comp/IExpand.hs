@@ -341,7 +341,7 @@ iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
       userHeapName :: NameInfo -> NameInfo
       userHeapName mn =
           case legalizeNameInfo mn of
-              Just n | not (isBadId n) || SN.isEnvAnchorId namingEnv n -> Just n
+              Just n | not (isBadId n) || SN.isDefAnchorId namingEnv n -> Just n
               _ -> Nothing
 
       -- from a heap pointer, get the expression and its name info

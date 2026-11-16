@@ -101,3 +101,10 @@ reverse_intern_same_verilog SignalNamingAfter.bs mkPropChurn $readable_flags
 
 batching_verilog_pair SignalNamingBefore.bs mkPropChurn SignalNamingBatchTop.bs mkSignalNamingBatchTop {SignalNamingScramble.bs} $readable_flags
 check_verilog_regen SignalNamingBefore.bs mkPropChurn $readable_flags
+
+# Local or inlined binders sharing a top-level port name disambiguate cleanly
+# without AnchorPort collision or APaths interface/def overlap.
+compile_verilog_pass PortShadowAnchors.bs
+reverse_intern_same_verilog PortShadowAnchors.bs mkSinglePortShadow {-keep-fires}
+reverse_intern_same_verilog PortShadowAnchors.bs mkDualInlinedPortShadow {-keep-fires}
+

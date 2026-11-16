@@ -1454,22 +1454,34 @@ classifyAnchorId env i
 isEnvAnchorId :: SignalNamingEnv -> Id -> Bool
 isEnvAnchorId env i = isJust (classifyAnchorId env i)
 
-isDefAnchorKind :: AnchorKind -> Bool
-isDefAnchorKind AnchorStateInst = False
-isDefAnchorKind AnchorParam = False
-isDefAnchorKind AnchorClockResetInout = False
-isDefAnchorKind _ = True
+-- Intrinsic anchor classification for an IDef or ADef in local_defs
+-- ($-qualified submodule ports, EN_/RDY_, WILL_FIRE_/CAN_FIRE_, and explicit
+-- keep/probe/method-predicate defs). Module-level boundary sets (top-level
+-- ports, state instances, special submodule outputs, parameters, and
+-- clocks/resets) reserve their names in envAnchorNames so local definitions
+-- sharing their spelling disambiguate rather than impersonate the boundary
+-- anchor or collide with each other.
+classifyIntrinsicAnchor :: Id -> Maybe AnchorKind
+classifyIntrinsicAnchor i
+    | isIdWillFire i || isIdCanFire i ||
+      "WILL_FIRE_" `L.isPrefixOf` s || "CAN_FIRE_" `L.isPrefixOf` s =
+        Just AnchorRuleFire
+    | isIdEnable i || isRdyId i ||
+      "EN_" `L.isPrefixOf` s || "RDY_" `L.isPrefixOf` s =
+        Just AnchorEnableReady
+    | '$' `elem` s =
+        Just AnchorSubmodPort
+    | hasIdProp i IdPProbe ||
+      hasIdProp i IdP_keepEvenUnused ||
+      hasIdProp i IdPMethodPredicate ||
+      "COND_" `L.isPrefixOf` s =
+        Just AnchorExplicitKeep
+    | otherwise = Nothing
+  where
+    s = getIdBaseString i
 
--- Whether an IDef or ADef in local_defs is itself a preserved anchor
--- (ports, submodule ports, EN_/RDY_, WILL_FIRE_/CAN_FIRE_, explicit keep/probe).
--- State instances, parameters, and clocks/resets reserve their names in
--- envAnchorNames, so a local definition sharing their spelling must disambiguate
--- rather than impersonate the instance/param/clock.
 classifyDefAnchorId :: SignalNamingEnv -> Id -> Maybe AnchorKind
-classifyDefAnchorId env i =
-    case classifyAnchorId env i of
-        Just k | isDefAnchorKind k -> Just k
-        _ -> Nothing
+classifyDefAnchorId _ i = classifyIntrinsicAnchor i
 
 isDefAnchorId :: SignalNamingEnv -> Id -> Bool
 isDefAnchorId env i = isJust (classifyDefAnchorId env i)
@@ -1668,25 +1680,6 @@ assignModuleNames env items = do
                     _ -> acc)
             S.empty
             items
-
-    classifyIntrinsicAnchor :: Id -> Maybe AnchorKind
-    classifyIntrinsicAnchor i
-        | isIdWillFire i || isIdCanFire i ||
-          "WILL_FIRE_" `L.isPrefixOf` s || "CAN_FIRE_" `L.isPrefixOf` s =
-            Just AnchorRuleFire
-        | isIdEnable i || isRdyId i ||
-          "EN_" `L.isPrefixOf` s || "RDY_" `L.isPrefixOf` s =
-            Just AnchorEnableReady
-        | '$' `elem` s =
-            Just AnchorSubmodPort
-        | hasIdProp i IdPProbe ||
-          hasIdProp i IdP_keepEvenUnused ||
-          hasIdProp i IdPMethodPredicate ||
-          "COND_" `L.isPrefixOf` s =
-            Just AnchorExplicitKeep
-        | otherwise = Nothing
-      where
-        s = getIdBaseString i
 
     itemAnchorKind :: ModuleNameItem tag1 -> Maybe (String, AnchorKind)
     itemAnchorKind (ItemAnchor _ i) =
