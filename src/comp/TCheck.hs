@@ -22,7 +22,7 @@ import FStringCompat
 import PreStrings(fsEmpty, fsConstAllBitsSet)
 import PreIds
 import Position(Position(..), noPosition)
-import Error(internalError, ErrMsg(..))
+import Error(internalError, ErrMsg(..), EMsgs(..))
 import ContextErrors
 import Type
 import Subst
@@ -386,12 +386,15 @@ tiExpr as td (CAny pos uk) = do
 -- '0 and '1 are desugared to Prelude variables, so report a type error
 -- in terms of the literal instead of the desugaring
 tiExpr as td exp@(CVar i) | hasIdProp i IdPUnbasedUnsized =
-    tiVar NoRead as td exp `handle` \ _ -> do
-        s <- getSubst
-        let lit = if getIdBase i == fsConstAllBitsSet then "'1" else "'0"
-            hint = if isBSV() then "unpack(" ++ lit ++ ")" else "unpack " ++ lit
-        err (getPosition exp,
-             EUnbasedUnsizedType lit (pfpReadable (niceTypes (apSub s td))) hint)
+    tiVar NoRead as td exp `handle` \ es ->
+        if any (\ (_, m) -> case m of { EUnboundVar {} -> True; _ -> False }) (errmsgs es)
+        then errs "TCheck.tiExpr" (errmsgs es)
+        else do
+            s <- getSubst
+            let lit = if getIdBase i == fsConstAllBitsSet then "'1" else "'0"
+                hint = if isBSV() then "unpack(" ++ lit ++ ")" else "unpack " ++ lit
+            err (getPosition exp,
+                 EUnbasedUnsizedType lit (pfpReadable (niceTypes (apSub s td))) hint)
 
 tiExpr as td exp@(CVar i) =
     -- it is ok to add register read to the variable
