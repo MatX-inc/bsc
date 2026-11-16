@@ -398,12 +398,7 @@ ignoreInstId _                                                      = False
 
 -- count the number of underscores at the start of an Id
 idUnderscoreDepth :: Id -> Integer
-idUnderscoreDepth = underscoreDepth . getIdString
-
--- count the number of underscores at the start of a string
-underscoreDepth :: String -> Integer
-underscoreDepth ('_':s) = 1 + underscoreDepth s
-underscoreDepth _       = 0
+idUnderscoreDepth = foldrIdString (\c r -> if c == '_' then 1 + r else 0) 0
 
 
 

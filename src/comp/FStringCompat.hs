@@ -3,7 +3,9 @@ module FStringCompat(FString, getFString,
                      tmpFString, enumFString, cloneFString, concatFString,
                      mkNumFString, mkStrFString, mkFString,
                      filterFString, fstringId,
-                     fstringUtf8, mkFStringUtf8
+                     fstringUtf8, mkFStringUtf8,
+                     foldrFString, headFString, takeFString, allFString,
+                     eqFString, isSuffixOfFString, lookupFString
                     ) where
 
 -- wrapper to make SStrings look like FStrings
@@ -15,6 +17,7 @@ import qualified Data.ByteString.Short as SBS
 import PPrint(PPrint(..), text)
 import Util(itos)
 import qualified Data.Generics as Generic
+import Data.Maybe(isJust)
 
 
 newtype FString = FString S.SString deriving (Eq,Ord,Generic.Data, Generic.Typeable)
@@ -77,3 +80,41 @@ mkNumFString i = fromString (itos i)
 
 mkStrFString :: String -> FString
 mkStrFString s = fromString (show s)
+
+-- Shape tests on the packed spelling: each is the String function on
+-- getFString fs without building the String.
+
+{-# INLINE foldrFString #-}
+foldrFString :: (Char -> b -> b) -> b -> FString -> b
+foldrFString f z (FString s) = S.foldrChars f z s
+
+-- The first Char of getFString fs, if any.
+{-# INLINE headFString #-}
+headFString :: FString -> Maybe Char
+headFString = foldrFString (\c _ -> Just c) Nothing
+
+-- take n (getFString fs), decoding at most n Chars.
+{-# INLINE takeFString #-}
+takeFString :: Int -> FString -> String
+takeFString n fs
+    | n <= 0 = []
+    | otherwise = foldrFString (\c k m -> if m <= 0 then [] else c : k (m - 1))
+                               (const []) fs n
+
+-- all p (getFString fs).
+{-# INLINE allFString #-}
+allFString :: (Char -> Bool) -> FString -> Bool
+allFString p = foldrFString (\c r -> p c && r) True
+
+-- getFString fs == str, for a literal str.
+{-# INLINE eqFString #-}
+eqFString :: FString -> String -> Bool
+eqFString fs str = isJust (lookupFString [(str, ())] fs)
+
+-- isSuffixOf str (getFString fs), for a literal str.
+isSuffixOfFString :: String -> FString -> Bool
+isSuffixOfFString str (FString s) = S.isSuffixOfChars str s
+
+-- lookup (getFString fs) tbl, for literal keys.
+lookupFString :: [(String, a)] -> FString -> Maybe a
+lookupFString tbl (FString s) = S.lookupChars tbl s
