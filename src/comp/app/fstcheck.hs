@@ -12,8 +12,7 @@ import Error(EMsg, ErrMsg(..), showErrorList)
 import Util(separate)
 import WaveCheck
 import FSTRead(readFST)
-import IOUtil(getEnvDef)
-import TopUtils(dfltBluespecDir)
+import TopUtils(getBluespecDir)
 
 import System.Environment(getArgs)
 import System.Console.GetOpt
@@ -151,7 +150,7 @@ checkCmdLine opts _args errs =
 main :: IO ()
 main = do -- parse command line arguments
           argv <- getArgs
-          bluespecdir <- getEnvDef "BLUESPECDIR" dfltBluespecDir
+          bluespecdir <- getBluespecDir
           let (opts, args, emsgs) = parseOpts argv bluespecdir
 
           -- handle errors and/or request for help and version info

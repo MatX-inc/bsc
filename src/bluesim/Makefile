@@ -131,11 +131,12 @@ KERNEL_OBJS = kernel.o event_queue.o priority.o symbol.o \
 FST_LIB_DIR = ../vendor/libfst/src
 FST_LIB_OBJS = fstapi.o fastlz.o lz4.o
 # Third-party C code: compiled with relaxed warnings; fstapi.c
-# includes <config.h>, supplied from src/libfst_config/
+# includes <config.h>, supplied from src/libfst_config/.  These flags
+# replace CFLAGS, so they map the checkout themselves.
 FST_LIB_CFLAGS = -Wall -g -std=gnu99 \
                  -D_FILE_OFFSET_BITS=64 \
                  -I../libfst_config \
-                 -fPIC $(PROF) $(COPT)
+                 -fPIC $(PROF) $(COPT) $(PREFIX_MAP)
 
 LIBS = $(LIB_PRIM) $(LIB_KERNEL)
 

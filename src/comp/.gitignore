@@ -7,6 +7,8 @@ bsc
 bluetcl
 dumpbo
 dumpba
+fstcheck
+fstscopes
 bsc2bsv
 bsv2bsc
 fstcheck
