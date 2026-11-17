@@ -1,5 +1,5 @@
 module Simplify(simplify) where
-import Data.List(partition)
+import Data.List(partition, sortOn)
 import Util(mapSnd)
 import ListMap(lookupWithDefault)
 import qualified Data.Set as S
@@ -274,8 +274,12 @@ selectSimple :: Env -> [CDef] -> (Env, [CDef])
 selectSimple env defs =
     let defNames = S.fromList (map getDName defs)
         defMap = M.fromList [(getDName def, def) | def <- defs]
-        defDeps = [(name, S.toList (S.delete name
-                                    (snd (getFVD def) `S.intersection` defNames)))
+        -- dependency lists in definition order, so that scc's traversal
+        -- and the sort below depend on the input alone (see SCC.tsortStable)
+        defIndex = M.fromList (zip (map getDName defs) [0 :: Int ..])
+        inDefOrder = sortOn (\n -> M.findWithDefault maxBound n defIndex)
+        defDeps = [(name, inDefOrder (S.toList (S.delete name
+                                    (snd (getFVD def) `S.intersection` defNames))))
                    | def <- defs, let name = getDName def]
         defDepMap = M.fromList defDeps
         defSCCs = scc defDeps
@@ -283,9 +287,9 @@ selectSimple env defs =
         isSingleton _ = False
         (defSimple, defLoops) = partition isSingleton defSCCs
         orderedSimpleDefs =
-            case tsort [(name,
-                         (M.findWithDefault (errLook name) name defDepMap))
-                        | name <- concat defSimple] of
+            case tsortStable [(name,
+                               (M.findWithDefault (errLook name) name defDepMap))
+                              | name <- concat defSimple] of
                 Right order -> [M.findWithDefault (errLook name) name defMap
                                 | name <- order]
                 Left loops -> errSort loops

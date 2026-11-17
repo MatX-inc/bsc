@@ -84,6 +84,7 @@ import Prelude hiding ((<>))
 #endif
 
 import System.IO(Handle)
+import qualified Data.List as L
 import qualified Data.Map as M
 import Data.List(intercalate)
 
@@ -978,20 +979,23 @@ fVars (IRefT _ _ _ _) = S.empty
 
 -- --------------------
 
--- All definitions and variables
+-- All definitions and variables, in first-occurrence left-to-right AST order
 fdVars :: IExpr a -> [Id]
-fdVars e = S.toList (fdVars' e)
-
-fdVars' :: IExpr a -> S.Set Id
-fdVars' (ILam i _ e) = fdVars' e
-fdVars' (IVar i) = S.singleton i
-fdVars' (ILAM _ _ e) = fdVars' e
-fdVars' (IAps f ts es) = fdVars' f `S.union` (S.unions (map fdVars' es))
-fdVars' (ICon i (ICDef { })) = S.singleton i
-fdVars' (ICon i (ICValue { })) = S.singleton i
-fdVars' (ICon i (ICUndet {imVal = Just e})) = fdVars' e
-fdVars' (ICon _ _) = S.empty
-fdVars' (IRefT _ _ _ _) = S.empty
+fdVars expr = reverse (snd (walk (S.empty, []) expr))
+  where
+    add i st@(seen, acc)
+        | i `S.member` seen = st
+        | otherwise = let seen' = S.insert i seen
+                      in  seen' `seq` (seen', i : acc)
+    walk st (ILam _ _ e) = walk st e
+    walk st (IVar i) = add i st
+    walk st (ILAM _ _ e) = walk st e
+    walk st (IAps f _ es) = L.foldl' walk (walk st f) es
+    walk st (ICon i (ICDef { })) = add i st
+    walk st (ICon i (ICValue { })) = add i st
+    walk st (ICon _ (ICUndet {imVal = Just e})) = walk st e
+    walk st (ICon _ _) = st
+    walk st (IRefT _ _ _ _) = st
 
 -- --------------------
 

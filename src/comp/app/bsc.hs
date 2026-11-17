@@ -19,7 +19,7 @@ import Data.Char(isSpace, ord)
 import Data.List(nub, partition, intersperse, sort,
             isPrefixOf, isSuffixOf, unzip5, intercalate, tails, foldl')
 import Data.Time.Clock.POSIX(getPOSIXTime)
-import Data.Maybe(isJust, isNothing, fromMaybe)
+import Data.Maybe(isJust, isNothing, fromMaybe, mapMaybe)
 import Numeric(showOct)
 
 import Control.DeepSeq(force)
@@ -28,6 +28,7 @@ import Control.Monad.Except(runExceptT)
 import Control.Concurrent(forkIO)
 import Control.Concurrent.MVar(newEmptyMVar, putMVar, takeMVar)
 import qualified Control.Exception as CE
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.ByteString.Lazy as BL
@@ -37,13 +38,12 @@ import qualified Data.Text.Encoding as TE
 import Data.IORef(IORef, newIORef, readIORef, writeIORef)
 import System.IO.Unsafe(unsafePerformIO)
 
-import ListMap(lookupWithDefault)
-import SCC(scc)
+import SCC(sccInt)
 
 -- utility libs
 import ParseOp
 import PFPrint
-import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3,
+import Util(fromJustOrErr, joinByFst, quote, fst3,
             hashInit, nextHashByte, showHash)
 import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, storedPath,
                     mkAName, mkVName, mkVPICName, mkDPICName,
@@ -940,28 +940,34 @@ compilePackage
 
     let orderGens :: IPackage HeapData -> [WrapInfo] -> [WrapInfo]
         orderGens (IPackage pid _ _ ds) gs =
-                --trace (ppReadable (gis, g, os)) $
-                                              map get os
-          where gis = [ qualId pid i
-                                | (WrapInfo i _ _ _ _ _) <- gs ]
-                tr = [ (qualId pid i_, qualId pid i)
-                                | (WrapInfo i _ _ i_ _ _) <- gs ]
-                -- Set-backed membership for the three scans below.  As
-                -- lists these cost O(|ds| * |gis|) and, for the SCC edge
-                -- lists, O(|ds| * |fdVars| * |ds'|) Id comparisons, each
-                -- of them two FString compares.  The filters keep the
-                -- order and duplicates of the list they scan.
-                gisSet = S.fromList gis
-                ds' = [ IDef (lookupWithDefault tr i i) t e p
-                                | IDef i t e p <- ds, i `S.notMember` gisSet ]
-                isSet = S.fromList [ i | IDef i _ _ _ <- ds' ]
-                g  = [ (i, filter (`S.member` isSet) (fdVars e))
-                                | IDef i _ e _ <- ds' ]
-                iis = scc g
-                os = filter (`S.member` gisSet) (concat iis)
-                get i = headOrErr "bsc.orderGens: no WrapInfo"
-                                  [ x | x@(WrapInfo i' _ _ _ _ _) <- gs,
-                                                unQualId i == i' ]
+                concatMap (\n -> IM.findWithDefault [] n genMap) (concat (sccInt g))
+          where wrapPairs = [ (qualId pid i, qualId pid i_, wi)
+                            | wi@(WrapInfo i _ _ i_ _ _) <- gs ]
+                stubToWrap = M.fromListWith (\_ old -> old)
+                                 [ (qi, qi_) | (qi, qi_, _) <- wrapPairs ]
+                wiById     = M.fromListWith (flip (++))
+                                 [ (qi, [wi]) | (qi, _, wi) <- wrapPairs ]
+                wrapSet    = S.fromList [ qi_ | (_, qi_, _) <- wrapPairs ]
+                wrapDefs   = M.fromList [ (i, (t, e, p))
+                                        | IDef i t e p <- ds
+                                        , i `S.member` wrapSet ]
+                spliceDef d@(IDef i _ _ _)
+                  | Just qi_ <- M.lookup i stubToWrap
+                  , Just (wt, we, wp) <- M.lookup qi_ wrapDefs
+                  = IDef i wt we wp
+                  | otherwise = d
+                ds' = [ spliceDef d
+                      | d@(IDef i _ _ _) <- ds
+                      , i `S.notMember` wrapSet ]
+                nds = zip [0 :: Int ..] ds'
+                defPos = M.fromListWith (\_ old -> old)
+                             [ (i, n) | (n, IDef i _ _ _) <- nds ]
+                g = [ (n, mapMaybe (`M.lookup` defPos) (fdVars e))
+                    | (n, IDef _ _ e _) <- nds ]
+                genMap = IM.fromList
+                             [ (n, wis)
+                             | (n, IDef i _ _ _) <- nds
+                             , Just wis <- [M.lookup i wiById] ]
         ordgens :: [WrapInfo]
         ordgens = orderGens imods gens
 

@@ -1,0 +1,10 @@
+# Issue: SCC.tsort broke ties by Ord Id (string-intern order) or tournament
+# tree shape, so let nesting in IConv, simple-def order in Simplify, and
+# binding groups in TCheck reached the .bo in intern-dependent order.
+# Fix: break topological-sort ties by input position and keep SCC neighbour
+# lists in definition order.
+# Probe: compare LetOrder.bo alone vs. behind LetOrderScramble and under
+# -trace-intern-reverse.
+
+batching_bo_pair LetOrder.bs LetOrderRoot.bs LetOrderScramble.bs
+reverse_intern_same_bo LetOrder.bs

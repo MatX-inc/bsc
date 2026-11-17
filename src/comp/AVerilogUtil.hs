@@ -62,7 +62,7 @@ import IntegerUtil
 import qualified Data.Map as M
 import qualified Data.Set as S
 import GraphUtil(reverseMap, extractOneCycle_map)
-import SCC(tsort)
+import SCC(tsortStable)
 
 --import Debug.Trace
 --import Util(traces)
@@ -141,12 +141,6 @@ vForeignBlock vco ffmap ds (clks, all_fcalls) =
       sva_items = if null sva_fcalls then []
                   else [VMIfdef "FORMAL" (map (vSvaRuntimeCheck vco clks) sva_fcalls)]
 
-      -- make a def map
-      def_map = M.fromList [(i, d) | d@(ADef i _ _ _) <- ds]
-      findDef i = let err = internalError ("vForeignBlock findDef: " ++
-                                           ppReadable i)
-                  in  M.findWithDefault err i def_map
-
       -- make a def dependency map
       dep_map = M.fromList [(i, aVars d) | d@(ADef i _ _ _) <- ds]
       -- make a reverse dependency map
@@ -156,14 +150,11 @@ vForeignBlock vco ffmap ds (clks, all_fcalls) =
       av_depend_defs = getAVDependDefs rev_dep_map fcalls
       -- find the defs which fcalls depend on
       fcall_depend_defs = getFCallDependDefs dep_map fcalls
-      -- the intersection of these lists is the defs that we need to inline
-      -- (both lists are sorted and duplicate-free, coming from Sets, and
-      -- the result must stay in that sorted order)
-      inline_def_ids = S.toList (S.intersection (S.fromList av_depend_defs)
-                                                (S.fromList fcall_depend_defs))
-
-      -- convert from the ids back to the defs
-      inline_defs = map findDef inline_def_ids
+      -- the intersection of these sets is the defs to inline, kept in
+      -- definition order rather than Ord AId order
+      inline_def_set = S.intersection (S.fromList av_depend_defs)
+                                      (S.fromList fcall_depend_defs)
+      inline_defs = [ d | d@(ADef i _ _ _) <- ds, i `S.member` inline_def_set ]
 
       -- tsort these inlined defs among the fcalls
       fcalls_and_defs = tsortForeignCallsAndDefs inline_defs fcalls
@@ -218,7 +209,7 @@ vForeignBlock vco ffmap ds (clks, all_fcalls) =
            (if null asses then [] else ass_stmts) ++
            sva_items,
 
-           inline_def_ids)
+           map adef_objid inline_defs)
 
 -- An assertion that a runtime check never fires, commented with the message
 -- that the check reports.  The clock comes from an always block, rather than
@@ -423,8 +414,10 @@ tsortForeignCallsAndDefs ds fcalls =
             map_insertManyWith union (def_fcall_edges) $
             M.fromList def_edges
 
-        -- Convert the graph to the format expected by tsort.
-        g_edges = M.toList g
+        -- Nodes in tie-break order: defs first (in definition order),
+        -- followed by foreign calls in their user-specified order.
+        nodes = map (Left . adef_objid) ds ++ map (Right . fst) numbered_fcalls
+        g_edges = [ (n, M.findWithDefault [] n g) | n <- nodes ]
 
         -- ----------
         -- convert a graph node back into a def/action
@@ -434,8 +427,8 @@ tsortForeignCallsAndDefs ds fcalls =
         convertNode (Right n) = Right (getFCall n)
 
     in
-        -- tsort returns Left if there is a loop, Right if sorted.
-        case (tsort g_edges) of
+        -- tsortStable returns Left if there is a loop, Right if sorted.
+        case (tsortStable g_edges) of
             Right is -> map convertNode is
             Left (scc:_) ->
                 let path = extractOneCycle_map g scc

@@ -1,0 +1,47 @@
+package OrderGens where
+
+-- Parent declared before its synthesized children; instantiates mkSubZeta
+-- before mkSubAlpha in its body and reaches mkLeafHelper through a
+-- mutually-recursive helper cycle, while mkUnrefMid is unreferenced.
+-- Condensed-SCC tsortStable must synthesize independent children in
+-- declaration order: mkSubAlpha, mkUnrefMid, mkSubZeta, mkLeafHelper,
+-- then mkOrderParent.
+{-# verilog mkOrderParent #-}
+mkOrderParent :: Module Empty
+mkOrderParent =
+  module
+    z <- mkSubZeta
+    a <- mkSubAlpha
+    h <- evenStep 2
+    s :: Reg (Bit 8) <- mkReg 0
+    rules
+      "comb": when True ==>
+        s := z._read + a._read + h._read
+
+evenStep :: Integer -> Module (Reg (Bit 8))
+evenStep n =
+  if n <= 0
+  then mkReg 1
+  else oddStep (n - 1)
+
+oddStep :: Integer -> Module (Reg (Bit 8))
+oddStep n =
+  if n == 1
+  then mkLeafHelper
+  else evenStep (n - 1)
+
+{-# verilog mkSubAlpha #-}
+mkSubAlpha :: Module (Reg (Bit 8))
+mkSubAlpha = mkReg 10
+
+{-# verilog mkUnrefMid #-}
+mkUnrefMid :: Module (Reg (Bit 8))
+mkUnrefMid = mkReg 20
+
+{-# verilog mkSubZeta #-}
+mkSubZeta :: Module (Reg (Bit 8))
+mkSubZeta = mkReg 30
+
+{-# verilog mkLeafHelper #-}
+mkLeafHelper :: Module (Reg (Bit 8))
+mkLeafHelper = mkReg 40

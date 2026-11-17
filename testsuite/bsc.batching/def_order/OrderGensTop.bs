@@ -1,0 +1,12 @@
+package OrderGensTop where
+
+import OrderGensScrambleA
+import OrderGensScrambleB
+import OrderGens
+
+{-# verilog mkOrderGensTop #-}
+mkOrderGensTop :: Module Empty
+mkOrderGensTop = do
+  _ <- mkOrderGensScrambleA
+  _ <- mkOrderGensScrambleB
+  mkOrderParent

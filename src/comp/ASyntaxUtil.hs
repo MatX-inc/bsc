@@ -11,7 +11,7 @@ import qualified Data.Map as M
 import Prim
 import PPrint
 import IntLit
-import SCC(tsort)
+import SCC(tsortStable)
 import Util(separate)
 import Data.List(nub, genericIndex, genericDrop)
 import Data.Maybe(mapMaybe, fromMaybe)
@@ -742,8 +742,8 @@ tsortADefs ds =
     --   drop all other AIds (mostly AVars)
 --        g = [(i, filter (`S.member` s) (aVars e)) | ADef i _ e <- ds ]
         g = zip ds_ids (map ((filter (`S.member` s)) . aVars . adef_expr) ds)
-    -- tsort returns Left if there is a loop, Right if sorted
-    in  case tsort g of
+    -- tsortStable returns Left if there is a loop, Right if sorted
+    in  case tsortStable g of
         Left is -> internalError ("tsortADefs: cyclic " ++ ppReadable is ++ ppReadable ds)
         Right is -> --trace ("tsortADefs exit " ++ show (length is)) $
     -- m is OrdMap of (AId of ADef, ADef) from input ADefs

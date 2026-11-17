@@ -1,0 +1,10 @@
+package OrderGensScrambleB where
+
+{-# verilog mkOrderGensScrambleB #-}
+mkOrderGensScrambleB :: Module Empty
+mkOrderGensScrambleB =
+  module
+    mkOrderParent :: Reg (Bit 8) <- mkReg 7
+    rules
+      "tickB": when True ==>
+        mkOrderParent := mkOrderParent._read + 1

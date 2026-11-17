@@ -20,12 +20,12 @@ arg info  [clockarg default_clock;, resetarg default_reset;]
 [(0, { wire:  RST_N })]
 -- AP state elements
 -- AP local definitions
-fnFFunc_0_PLUS_8___d2 :: Bit 8;
-fnFFunc_0_PLUS_8___d2  = fnFFunc_0___d1 + 8'd8;
--- IdProp fnFFunc_0_PLUS_8___d2[IdP_from_rhs]
 fnFFunc_0___d1 :: Bit 8;
 fnFFunc_0___d1  = fnFFunc 8'd0;
 -- IdProp fnFFunc_0___d1[IdP_from_rhs]
+fnFFunc_0_PLUS_8___d2 :: Bit 8;
+fnFFunc_0_PLUS_8___d2  = fnFFunc_0___d1 + 8'd8;
+-- IdProp fnFFunc_0_PLUS_8___d2[IdP_from_rhs]
 -- AP rules
 rule RL_r "r":
  when 1'd1

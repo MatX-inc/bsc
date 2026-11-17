@@ -1,36 +1,5 @@
 checking package dependencies
 compiling SplitTupleMethodTest_sat-stp.bsv
-code generation for mkValSub starts
-=== schedule (SplitTupleMethodTest_sat-stp mkValSub):
-parallel: [esposito: [get -> []]]
-order: [get]
-
------
-
-=== resources (SplitTupleMethodTest_sat-stp mkValSub):
-[]
-
------
-
-=== vschedinfo (SplitTupleMethodTest_sat-stp mkValSub):
-SchedInfo [RDY_get CF [RDY_get, get], get CF get] [] [] []
-
------
-
-Schedule dump file created: mkValSub.sched
-=== Generated schedule for mkValSub ===
-
-Method schedule
----------------
-Method: get
-Ready signal: True
-Conflict-free: get
- 
-Logical execution order: get
-
-========================================
-Verilog file created: mkValSub.v
-Elaborated module file created: mkValSub.ba
 code generation for mkAVSub starts
 === schedule (SplitTupleMethodTest_sat-stp mkAVSub):
 parallel: [esposito: [get -> []]]
@@ -62,6 +31,37 @@ Logical execution order: get
 =======================================
 Verilog file created: mkAVSub.v
 Elaborated module file created: mkAVSub.ba
+code generation for mkValSub starts
+=== schedule (SplitTupleMethodTest_sat-stp mkValSub):
+parallel: [esposito: [get -> []]]
+order: [get]
+
+-----
+
+=== resources (SplitTupleMethodTest_sat-stp mkValSub):
+[]
+
+-----
+
+=== vschedinfo (SplitTupleMethodTest_sat-stp mkValSub):
+SchedInfo [RDY_get CF [RDY_get, get], get CF get] [] [] []
+
+-----
+
+Schedule dump file created: mkValSub.sched
+=== Generated schedule for mkValSub ===
+
+Method schedule
+---------------
+Method: get
+Ready signal: True
+Conflict-free: get
+ 
+Logical execution order: get
+
+========================================
+Verilog file created: mkValSub.v
+Elaborated module file created: mkValSub.ba
 code generation for sysSplitTupleMethodTest starts
 === schedule (SplitTupleMethodTest_sat-stp sysSplitTupleMethodTest):
 parallel: [esposito: [RL_aa -> [], RL_ab -> [], RL_cc -> []]]

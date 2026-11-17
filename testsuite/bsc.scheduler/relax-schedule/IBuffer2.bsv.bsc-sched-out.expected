@@ -70,10 +70,10 @@ parallel: [esposito: [handleIBufferRequest -> [],
 		      cacheRequest -> [],
 		      RL_cacheAddrQueue_caq_doUpdate_enq -> [],
 		      RL_cacheAddrQueue_caq_doUpdate_deq -> [],
-		      RL_responseQueue_rq_doUpdate_deq -> [],
 		      RL_responseQueue_rq_doResult -> [],
 		      iBufferResponse -> [],
-		      RL_responseQueue_rq_doUpdate_enq -> []]]
+		      RL_responseQueue_rq_doUpdate_enq -> [],
+		      RL_responseQueue_rq_doUpdate_deq -> []]]
 order: [handleIBufferRequest,
 	handleCacheResponse,
 	RL_cacheAddrQueue_caq_doResult,

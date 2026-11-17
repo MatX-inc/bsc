@@ -1,7 +1,7 @@
 ########## variant: default (Verilog default flags; Bluesim is flag-agnostic) ##########
 ##### module: mkWireTypes  @  main.top.dut #####
 === Verilog ===
-  hits:    185
+  hits:    186
   matched wires (sorted):
     CLK : Clock
     EN_loadPixel : Bool
@@ -13,6 +13,7 @@
     RDY_setPalette : Bool
     RDY_topPixel : Bool
     RST_N : Reset
+    WILL_FIRE_RL_bram_serverAdapter_moveToOutFIFO : Bool
     annot.EN_push : Bool
     annot.RDY_push : Bool
     annot.count : Bit#(8)
@@ -404,7 +405,7 @@
     ticks : Bit#(8)
 
 === summary ===
-  total VCD hits across all (module, scope) pairs: 405
+  total VCD hits across all (module, scope) pairs: 406
 RESULT: PASS
 
 ##### module: mkSplitPortsTest  @  main.top.dut #####
@@ -476,7 +477,7 @@ RESULT: PASS
 ########## variant: kib (Verilog -keep-inlined-boundaries; Bluesim is flag-agnostic) ##########
 ##### module: mkWireTypes  @  main.top.dut #####
 === Verilog ===
-  hits:    216
+  hits:    217
   matched wires (sorted):
     CLK : Clock
     EN_loadPixel : Bool
@@ -488,6 +489,7 @@ RESULT: PASS
     RDY_setPalette : Bool
     RDY_topPixel : Bool
     RST_N : Reset
+    WILL_FIRE_RL_bram_serverAdapter_moveToOutFIFO : Bool
     annot.EN_push : Bool
     annot.RDY_push : Bool
     annot.count : Bit#(8)
@@ -910,7 +912,7 @@ RESULT: PASS
     ticks : Bit#(8)
 
 === summary ===
-  total VCD hits across all (module, scope) pairs: 436
+  total VCD hits across all (module, scope) pairs: 437
 RESULT: PASS
 
 ##### module: mkSplitPortsTest  @  main.top.dut #####
