@@ -1,0 +1,16 @@
+package PosFileZeta where
+
+mkZetaSub :: Module (Reg (Bit 8))
+mkZetaSub =
+    module
+        locReg :: Reg (Bit 8) <- mkReg 2
+        let rHi =
+                rules
+                    "rl_zeta_hi": when locReg == 2 ==> action
+                        locReg := locReg + 2
+            rLo =
+                rules
+                    "rl_zeta_lo": when locReg == 2 ==> action
+                        locReg := locReg + 5
+        addRules (rHi <+ rLo)
+        return locReg

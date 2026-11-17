@@ -3,6 +3,7 @@
 module InstNodes(
     InstNode(..), InstTree,
     mkInstTree, getIStateLocs, flattenInstTree,
+    pPrintInstTree, ppInstTreeReadable,
     isHidden, isHiddenKP, isHiddenAll, nodeChildren, comparein
   ) where
 
@@ -69,16 +70,24 @@ instance PPrint InstNode where
   pPrint d p (Loc n ct ig ign un children) | isHideId n = text "[Loc (H) " <> pPrint d p n <+> pPrint d p ig <+> pPrint d p (getIdDisplayName n)
                                             -- <+> pPrint d p (M.keys children)
                                             -- <+> pparen True (pPrint d p ct)
-                                            $+$ (pPrint d p children)
+                                            $+$ pPrintInstTree d children
                                             <+> (text "]")
   pPrint d p (Loc n ct ig ign un children) | isHideAllId n = text "[Loc (HA) " <> pPrint d p n <+> pPrint d p ig <+> pPrint d p (getIdDisplayName n)
                                             -- <+> pparen True (pPrint d p ct)
-                                            $+$ (pPrint d p children)
+                                            $+$ pPrintInstTree d children
                                            <+> (text "]")
   pPrint d p (Loc n ct ig ign un children) = text "[Loc " <> pPrint d p n <+> pPrint d p ig <+> pPrint d p (getIdDisplayName n)
                                             -- <+> pPrint d p (M.keys children)
                                             -- <+> pparen True (pPrint d p ct)
-                                            $+$ (pPrint d p children) <+> (text "]")
+                                            $+$ pPrintInstTree d children <+> (text "]")
+
+pPrintInstTree :: PDetail -> InstTree -> Doc
+pPrintInstTree d m =
+    vsep [ pPrint d 0 k <+> text "->" <+> pPrint d 0 v
+         | (k, v) <- sortBy (comparein `on` snd) (M.toList m) ]
+
+ppInstTreeReadable :: InstTree -> String
+ppInstTreeReadable = ppDoc . pPrintInstTree PDReadable
 
 -- we need to know if the name is ignored
 -- AND if the hierarchy location is ignored (they are different)
@@ -96,7 +105,7 @@ flattenInstNode (Rule i) = [(i, [])]
 flattenInstNode (Loc i ct _ _ _ children) = mapSnd ((:) (i, ct)) (flattenInstTree children)
 
 flattenInstTree :: M.Map k InstNode -> [(Id, [(Id, Maybe CType)])]
-flattenInstTree tree = concatMap flattenInstNode (M.elems tree)
+flattenInstTree tree = concatMap flattenInstNode (sortBy comparein (M.elems tree))
 
 -- -----------------------------------------------------------
 -- Trees with 1 child and an ignore flag are reduced
@@ -226,16 +235,16 @@ mkInstTree imod = optTrace result
  where inst_tree = mkInstTree' imod
        transform_tree = compressIgnoredChildren
        result = transform_tree inst_tree
-       tracethis = trace ("Inst tree \n" ++ ppReadable inst_tree ++ "\n") .
+       tracethis = trace ("Inst tree \n" ++ ppInstTreeReadable inst_tree ++ "\n") .
                    -- trace ("Ref tree\n"   ++ ppReadable ref_tree  ++ "\n") .
-                   trace ("Final tree\n" ++ ppReadable result ++ "\n")
+                   trace ("Final tree\n" ++ ppInstTreeReadable result ++ "\n")
        optTrace = if doTraceTree then tracethis else id
 
 mkInstTree' :: IModule a -> InstTree
 mkInstTree' imod = optTrace (mergeTreeList singleTrees)
   where optTrace = if doTraceTree then tracethis else id
         tracethis = trace ("Tree: " ++ ppReadable (zip sv_nodes sv_locs))
-                    . trace ("Unmerged: " ++ ppReadable singleTrees)
+                    . trace ("Unmerged: " ++ ppDoc (encloseSep (text "[") (text "]") (text ",") (map (pPrintInstTree PDReadable) singleTrees)))
                     -- . trace ("RTree: " ++ ppReadable (zip sv_nodes (map mkRefLocs sv_locs))) $
         (sv_pairs, rule_pairs) = getIStateLocs imod
         (sv_ids, sv_isls) = unzip sv_pairs
@@ -326,17 +335,17 @@ nodeChildren :: Bool -> InstNode -> [InstNode]
 nodeChildren hide i =
  let result = nodeChildren' hide i
  in case (result) of
-    [x@(Loc {})] | (isHidden x && hide) -> (M.elems $ node_children x)
+    [x@(Loc {})] | (isHidden x && hide) -> sortBy comparein (M.elems $ node_children x)
     _                                   -> result
 
 nodeChildren' :: Bool -> InstNode -> [InstNode]
-nodeChildren' False i@(Loc {}) = M.elems $ node_children i
+nodeChildren' False i@(Loc {}) = sortBy comparein (M.elems $ node_children i)
 nodeChildren' True i@(Loc {}) =
   let getList x | isHiddenAll x = []
       getList x@(Loc {}) | isHiddenKP x = concatMap getList (M.elems $ node_children x)
       getList x | isHiddenKP x = []
       getList x = [x]
-  in concatMap getList (M.elems $ node_children i)
+  in sortBy comparein (concatMap getList (M.elems $ node_children i))
 
 nodeChildren' _ _ = []
 

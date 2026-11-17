@@ -1,9 +1,5 @@
 checking package dependencies
 compiling Cpreprocess_line.bsv
-Error: "more.bsv", line 2, column 13: (T0031)
-  The provisos for this expression could not be resolved because there are no
-  instances of the form:
-    Literal#(Bool)
 Error: "Cpreprocess_line.bsv", line 4, column 12: (T0080)
   Type error at the use of the following function:
     False
@@ -14,3 +10,7 @@ Error: "Cpreprocess_line.bsv", line 4, column 12: (T0080)
   The return type according to the use:
     Bool
 
+Error: "more.bsv", line 2, column 13: (T0031)
+  The provisos for this expression could not be resolved because there are no
+  instances of the form:
+    Literal#(Bool)
