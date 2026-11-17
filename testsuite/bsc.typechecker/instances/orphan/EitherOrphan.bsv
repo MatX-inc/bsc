@@ -1,3 +1,5 @@
+import classes::*;
+
 instance Functor#(Either#(String));
   function \fmap (f, x);
     case (x) matches

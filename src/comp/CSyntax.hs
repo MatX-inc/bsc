@@ -193,23 +193,25 @@ instance PPrint CAssocDepFun where
         text "=" <+> ppVarId d rhs
 
 -- Annotations written between the "class" keyword and the class name,
--- in any order: "coherent" or "incoherent", and "no_orphan".
+-- in any order: "coherent" or "incoherent", and "orphan".
 data CClassAnnots = CClassAnnots
     { -- Just True = incoherent, Just False = coherent,
       -- Nothing = follow the -incoherent-instance-matches flag
       cca_incoherent :: Maybe Bool
-      -- an orphan instance of the class is an error (T0127), not a warning
+      -- an orphan instance of the class is an error (T0127), not a warning;
+      -- true unless the class is declared "orphan"
     , cca_no_orphan  :: Bool
     } deriving (Eq, Ord, Show)
 
+-- The annotations of a class declared with none
 noCClassAnnots :: CClassAnnots
-noCClassAnnots = CClassAnnots { cca_incoherent = Nothing, cca_no_orphan = False }
+noCClassAnnots = CClassAnnots { cca_incoherent = Nothing, cca_no_orphan = True }
 
 -- The annotation keywords, in the order they are printed
 cClassAnnotWords :: CClassAnnots -> [String]
 cClassAnnotWords (CClassAnnots incoh no_orphan) =
     [ w | Just b <- [incoh], let w = if b then "incoherent" else "coherent" ] ++
-    [ "no_orphan" | no_orphan ]
+    [ "orphan" | not no_orphan ]
 
 instance NFData CClassAnnots where
     rnf (CClassAnnots incoh no_orphan) = rnf2 incoh no_orphan

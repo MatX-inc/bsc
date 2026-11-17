@@ -1,12 +1,12 @@
-package NoOrphanIncoherentBSV;
+package OrphanIncoherentBSV;
 
 import Real::*;
 
-// "incoherent" keeps its meaning next to "no_orphan", in either order:
+// "incoherent" keeps its meaning next to "orphan", in either order:
 // the eqLiteral functions are accepted only because the classes are
 // incoherent
 
-typeclass incoherent no_orphan EqIntegerFirst#(type a);
+typeclass incoherent orphan EqIntegerFirst#(type a);
    function Bool eqIntegerFirst(a x, Integer i);
 endtypeclass
 
@@ -22,7 +22,7 @@ function Bool eqLiteralFirst(a x, Integer i) provisos (Literal#(a), Eq#(a));
    return eqIntegerFirst(x, i);
 endfunction
 
-typeclass no_orphan incoherent EqIntegerSecond#(type a);
+typeclass orphan incoherent EqIntegerSecond#(type a);
    function Bool eqIntegerSecond(a x, Integer i);
 endtypeclass
 

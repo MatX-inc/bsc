@@ -1,10 +1,10 @@
-package NoOrphanCoherent where
+package OrphanCoherent where
 
--- "coherent" keeps its meaning next to "no_orphan", in either order:
+-- "coherent" keeps its meaning next to "orphan", in either order:
 -- even with -incoherent-instance-matches, the polymorphic uses below
 -- cannot commit to the catch-all instance (T0030, once per class)
 
-class coherent no_orphan CoherentFirst a where
+class coherent orphan CoherentFirst a where
   coherentFirst :: a -> Bit 8
 
 instance CoherentFirst a where
@@ -16,7 +16,7 @@ instance CoherentFirst Bool where
 throughFirst :: (Bits a na) => a -> Bit 8
 throughFirst = coherentFirst
 
-class no_orphan coherent CoherentSecond a where
+class orphan coherent CoherentSecond a where
   coherentSecond :: a -> Bit 8
 
 instance CoherentSecond a where

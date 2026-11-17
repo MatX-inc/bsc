@@ -1,0 +1,5 @@
+package OrphanTwice where
+
+-- Each annotation may be given at most once
+class orphan coherent orphan OrphanTwice a where
+  orphanTwice :: a -> Bool

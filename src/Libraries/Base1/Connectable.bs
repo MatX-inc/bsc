@@ -17,7 +17,10 @@ import Inout
 --@     module mkConnection#(a x1, b x2)(Empty);
 --@ endtypeclass
 --@ \end{libverbatim}
-class Connectable a b where
+-- XXX Declared orphan for now, because existing code defines catch-all
+-- instances (such as Connectable#(a, b) for any IVec types) outside this
+-- package.  We should try to make it not orphan later.
+class orphan Connectable a b where
     mkConnection :: (IsModule m c) => a -> b -> m Empty
 
 -- @ The special \te{(<->)} operator is defined in terms of \te{connect},

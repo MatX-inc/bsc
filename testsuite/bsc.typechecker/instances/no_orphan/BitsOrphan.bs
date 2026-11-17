@@ -2,8 +2,8 @@ package BitsOrphan where
 
 import NoBitsType
 
--- An orphan instance of Bits, which the Prelude declares no_orphan.
--- Unlike other no_orphan classes, this error can be demoted.
+-- An orphan instance of Bits, which is not declared orphan.
+-- Unlike for other such classes, this error can be demoted.
 instance Bits NoBitsType 8 where
   pack (NoBitsType x) = pack x
   unpack b = NoBitsType (unpack b)

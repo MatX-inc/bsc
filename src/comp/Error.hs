@@ -804,7 +804,7 @@ data ErrMsg =
         | EClassFundepsExtra String [String]
         | EClassFundepsEmpty String
         | WIncoherentMatch String String
-        -- the instance, and, if the class is declared no_orphan (which
+        -- the instance, and, if the class is not declared orphan (which
         -- makes the message an error), the class and whether the error
         -- can be demoted
         | WOrphanInst String (Maybe (String, Bool))
@@ -2914,7 +2914,7 @@ getErrorText (WOrphanInst inst m_no_orphan_cls) =
      case m_no_orphan_cls of
        Nothing -> empty
        Just (cls, demotable) ->
-         s2par ("The typeclass " ++ cls ++ " is declared no_orphan, " ++
+         s2par ("The typeclass " ++ cls ++ " is not declared orphan, " ++
                 "so its instances must be defined in the package that defines " ++
                 "the typeclass or one of the instance's source types.") $$
          (if demotable

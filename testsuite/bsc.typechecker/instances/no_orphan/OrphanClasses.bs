@@ -1,0 +1,18 @@
+package OrphanClasses where
+
+-- "orphan" alone, and in either order with a coherence annotation
+
+class orphan Orphan a where
+  orphan :: a -> Bool
+
+class coherent orphan CoherentOrphan a where
+  coherentOrphan :: a -> Bool
+
+class orphan coherent OrphanCoherent a where
+  orphanCoherent :: a -> Bool
+
+class incoherent orphan IncoherentOrphan a where
+  incoherentOrphan :: a -> Bool
+
+class orphan incoherent OrphanIncoherent a where
+  orphanIncoherent :: a -> Bool

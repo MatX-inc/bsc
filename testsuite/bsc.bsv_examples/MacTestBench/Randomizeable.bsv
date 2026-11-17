@@ -104,7 +104,7 @@ endfunction
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
-typeclass Randomizeable#(type t);
+typeclass orphan Randomizeable#(type t);
    module mkRandomizer (Randomize#(t));
 endtypeclass
 

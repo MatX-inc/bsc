@@ -1,5 +1,5 @@
 package ClassKind3Sub (TC(..)) where
 
-class (TC :: (# -> *) -> *) c where
+class orphan (TC :: (# -> *) -> *) c where
    fn :: c n -> c n
 

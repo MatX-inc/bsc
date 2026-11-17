@@ -1,7 +1,8 @@
 # The orphan-defining packages from the reproduction in B-Lang-org/bsc#1061
 # (testsuite/bsc.typechecker/instances/orphan_mislink on the
 # orphan-instance-mislink-repro branch of nanavati/bsc).  Each defines an
-# orphan instance of a no_orphan Prelude class, so none of them compiles.
+# orphan instance of a Prelude class not declared orphan, so none of them
+# compiles.
 
 # The packages they import
 compile_pass_no_warning MsgDefs.bs

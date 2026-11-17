@@ -343,7 +343,7 @@ data SignMsgLevel = SignWarning | SignDemotableError | SignError
     deriving (Eq)
 
 -- How an orphan instance of a class is reported.
--- An orphan instance of a no_orphan class is an error.
+-- An orphan instance of a class not declared orphan is an error.
 -- Orphan Bits instances exist in the wild, so for now that error
 -- can be demoted (-demote-errors T0127) while code migrates.
 orphanInstLevel :: Class -> SignMsgLevel
@@ -458,7 +458,8 @@ genDefSign s look currentPkg d@(Cinstance qt@(CQType ps t) _) =
         orphan_head = not . (any exported) . (concatMap allTyCons)
         orphan_inst = imported (cls_tcon) && any orphan_head inst_heads
         orphan_level = orphanInstLevel cls
-        -- for a no_orphan class: its name, and whether the error is demotable
+        -- for a class not declared orphan: its name, and whether the error
+        -- is demotable
         no_orphan_cls = (pfpString cls_id, orphan_level == SignDemotableError)
                             <$ guard (noOrphan cls)
         orphan_msg = (getPosition d, WOrphanInst (pfpString (expandSyn t)) no_orphan_cls)

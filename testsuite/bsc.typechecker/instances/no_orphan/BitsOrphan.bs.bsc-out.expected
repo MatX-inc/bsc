@@ -6,7 +6,7 @@ Error: "BitsOrphan.bs", line 7, column 9: (T0127)
   parameters are defined in other packages. This can lead to confusing and
   inconsistent instance resolution if the orphan instance is not imported
   everywhere it could be used.
-  The typeclass Prelude.Bits is declared no_orphan, so its instances must be
+  The typeclass Prelude.Bits is not declared orphan, so its instances must be
   defined in the package that defines the typeclass or one of the instance's
   source types.
   For now, this error can be demoted to a warning with -demote-errors T0127.

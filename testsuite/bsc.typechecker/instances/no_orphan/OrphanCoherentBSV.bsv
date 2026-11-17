@@ -1,10 +1,10 @@
-package NoOrphanCoherentBSV;
+package OrphanCoherentBSV;
 
-// "coherent" keeps its meaning next to "no_orphan", in either order:
+// "coherent" keeps its meaning next to "orphan", in either order:
 // even with -incoherent-instance-matches, the polymorphic uses below
 // cannot commit to the catch-all instance (T0030, once per class)
 
-typeclass coherent no_orphan CoherentFirst#(type a);
+typeclass coherent orphan CoherentFirst#(type a);
    function Bit#(8) coherentFirst(a x);
 endtypeclass
 
@@ -20,7 +20,7 @@ function Bit#(8) throughFirst(a x) provisos (Bits#(a, na));
    return coherentFirst(x);
 endfunction
 
-typeclass no_orphan coherent CoherentSecond#(type a);
+typeclass orphan coherent CoherentSecond#(type a);
    function Bit#(8) coherentSecond(a x);
 endtypeclass
 

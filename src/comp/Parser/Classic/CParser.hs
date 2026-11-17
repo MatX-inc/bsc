@@ -5,7 +5,7 @@
 module Parser.Classic.CParser(pPackage, pDefnsAndEOF, errSyntax, CParser, pType, qcon, eof) where
 
 import Data.List(nub)
-import Data.Maybe(isJust)
+import Data.Maybe(isNothing)
 
 import Parse
 import IntLit
@@ -432,18 +432,19 @@ pClassBodyItem =
   ||! (pQStructField >>- Right)
 
 -- Annotations after "class", in either order: "coherent" or "incoherent",
--- and "no_orphan" (a soft keyword, unambiguous because class names
--- are uppercase)
+-- and "orphan" (a soft keyword, unambiguous because class names are
+-- uppercase).  Unless the class is declared "orphan", an orphan instance
+-- of it is an error.
 pClassAnnots :: CParser CClassAnnots
 pClassAnnots =
-        pCoherence +.+ option pNoOrphan
-            >>- (\ (incoh, no_orphan) -> CClassAnnots (Just incoh) (isJust no_orphan))
-    ||! pNoOrphan ..+ option pCoherence
-            >>- (\ incoh -> CClassAnnots incoh True)
+        pCoherence +.+ option pOrphan
+            >>- (\ (incoh, orphan) -> CClassAnnots (Just incoh) (isNothing orphan))
+    ||! pOrphan ..+ option pCoherence
+            >>- (\ incoh -> CClassAnnots incoh False)
     ||! succeed noCClassAnnots
 
-pNoOrphan :: CParser ()
-pNoOrphan = literal (mkFString "no_orphan")
+pOrphan :: CParser ()
+pOrphan = literal (mkFString "orphan")
 
 pCoherence :: CParser Bool
 pCoherence = l L_incoherent ..+ succeed True

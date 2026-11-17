@@ -4481,8 +4481,8 @@ A new class is declared using the following syntax:
 \grammore          { \hmm \many{ \nterm{overloadedDef} } } \\
 \grammore          { \term{endtypeclass} \opt{: \nterm{typeclassIde} } }
 
-\gram{typeclassAnnos}{ \nterm{coherenceAnno} \opt{\term{no\_orphan}} } \\
-\gramalt              { \term{no\_orphan} \opt{\nterm{coherenceAnno}} }
+\gram{typeclassAnnos}{ \nterm{coherenceAnno} \opt{\term{orphan}} } \\
+\gramalt              { \term{orphan} \opt{\nterm{coherenceAnno}} }
 
 \gram{coherenceAnno}{ \term{coherent} {\alt} \term{incoherent} }
 
@@ -4538,27 +4538,22 @@ position and remain usable as ordinary identifiers elsewhere.
 syntax.)  Section \ref{sec-instance-coherence} specifies the
 selection rules and exactly what the annotation changes.
 
-\index{no\_orphan@\te{no\_orphan} (typeclass annotation)}
+\index{orphan@\te{orphan} (typeclass annotation)}
 \index{orphan instance}
 An instance is an \emph{orphan} when its typeclass and all of its
 source types (the types not determined by the class's dependencies)
 are defined in packages other than the one containing the instance.
 An orphan is used only where its package is imported, so two packages
 that use the same type can silently resolve the class to different
-instances.  The compiler warns about an exported orphan instance
-(T0127).  The optional \texttt{no\_orphan} annotation, written before
-or after any coherence annotation, makes that warning an error for
-instances of the class: they must be defined in the package that
-defines the typeclass or one of the instance's source types.  To give
-a type a different instance, wrap it in a new type defined alongside
-the instance.  Like the coherence words, \texttt{no\_orphan} is
-recognized only in this position.  The Standard Prelude declares
-\te{Bits} and \te{SplitPorts} \texttt{no\_orphan}, because their
-instances determine the ports and bit layouts of generated hardware,
-and likewise the classes the compiler uses to build a synthesized
-module's ports (\te{WrapField}, \te{WrapMethod}, \te{WrapPorts},
-\te{SplitTuplePorts} and \te{NonEmptyBits}).  For now, and
-for \te{Bits} only, the error can be demoted to a warning with
+instances.  An exported orphan instance is therefore an error (T0127):
+instances must be defined in the package that defines the typeclass or
+one of the instance's source types.  To give a type a different
+instance, wrap it in a new type defined alongside the instance.  The
+optional \texttt{orphan} annotation, written before or after any
+coherence annotation, allows orphan instances of the class, and makes
+T0127 a warning for them.  Like the coherence words, \texttt{orphan}
+is recognized only in this position.  For now, and for \te{Bits}
+only, the error can be demoted to a warning with
 \texttt{-demote-errors T0127}, so that existing code can migrate.
 This will change in a future release, which will make an orphan
 \te{Bits} instance an error that cannot be demoted.

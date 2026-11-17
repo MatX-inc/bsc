@@ -1,0 +1,37 @@
+package classes where
+
+-- Copies of Prelude classes, declared orphan, so that the tests here can
+-- define orphan instances of them and check the orphan warning (T0127).
+-- The Prelude's own classes reject orphan instances.
+
+class orphan Functor f where
+  fmap :: (a -> b) -> f a -> f b
+
+  (<$) :: a -> f b -> f a
+  (<$) = fmap ∘ const
+
+-- An infix synonym for fmap, for use in applicative style
+(<$>) :: (Functor f) => (a -> b) -> f a -> f b
+(<$>) = fmap
+
+class orphan (Functor f) => Applicative f where
+  pure :: a -> f a
+
+  (<*>) :: f (a -> b) -> f a -> f b
+  (<*>) = liftA2 id
+
+  liftA2 :: (a -> b -> c) -> f a -> f b -> f c
+  liftA2 f x y = f <$> x <*> y
+
+  (*>) :: f a -> f b -> f b
+  u *> v = (id <$ u) <*> v
+
+  (<*) :: f a -> f b -> f a
+  u <* v = liftA2 const u v
+
+class orphan (Applicative m) => Monad m where
+    bind   :: m a -> (a -> m b) -> m b
+
+class orphan Bounded a where
+    minBound :: a
+    maxBound :: a

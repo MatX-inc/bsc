@@ -2,7 +2,7 @@ package SplitPortsOrphan where
 
 import NoBitsType
 
--- An orphan instance of SplitPorts, which the Prelude declares no_orphan
+-- An orphan instance of SplitPorts, which is not declared orphan
 instance SplitPorts NoBitsType (Port (UInt 8)) where
   splitPorts (NoBitsType x) = Port x
   unsplitPorts (Port x) = NoBitsType x

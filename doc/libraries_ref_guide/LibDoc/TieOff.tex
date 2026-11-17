@@ -23,7 +23,7 @@ enable methods of some interface \te{t}, some of which must be
 {\bf Typeclasses}
 
 \begin{verbatim}
-typeclass TieOff #(type t);
+typeclass orphan TieOff #(type t);
   module mkTieOff#(t ifc) (Empty);
 endtypeclass
 \end{verbatim}

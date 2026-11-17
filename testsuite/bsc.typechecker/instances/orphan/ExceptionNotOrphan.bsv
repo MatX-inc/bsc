@@ -1,3 +1,5 @@
+import classes::*;
+
 typedef struct { Either#(String, b) result; } Exception#(type b);
 
 instance Functor#(Exception);

@@ -414,13 +414,14 @@ class (Monad m) => MonadFix m where
 --@ are cancelled during elaboration without evaluating the instance
 --@ methods, choosing the identity as the round trip's resolution.
 --@
---@ The class is declared \te{no\_orphan}: an instance must be defined
---@ in the package that defines its type (an orphan instance is error
---@ T0127).  Different packages could otherwise see different instances
---@ for one type, and so generate different port layouts for it.  For
---@ now, this error can be demoted with \te{-demote-errors T0127}; a
---@ future release will make it a hard error.
-class coherent no_orphan Bits a n | a -> n where
+--@ As for any class not declared \te{orphan}, an instance must be
+--@ defined in the package that defines its type (an orphan instance is
+--@ error T0127).  Different packages could otherwise see different
+--@ instances for one type, and so generate different port layouts for
+--@ it.  Unlike for other classes, this error can for now be demoted
+--@ with \te{-demote-errors T0127}; a future release will make it a hard
+--@ error.
+class coherent Bits a n | a -> n where
     type SizeOf a = n
     pack   :: a -> Bit n
     unpack :: Bit n -> a
@@ -458,7 +459,8 @@ unpack b = primUnpack b
 --@     function Bool (!=)(a x, a y);
 --@ endtypeclass
 --@ \end{libverbatim}
-class Eq  a where
+-- Declared orphan for the EqFunction library's instance for functions
+class orphan Eq a where
     (==) :: a -> a -> Bool
     x == y = not (x /= y)
     (/=) :: a -> a -> Bool
@@ -4453,7 +4455,10 @@ instance PrimParam Real Real where
 
 ------------------
 
-class FShow t where
+-- XXX Declared orphan for now, because existing code defines instances
+-- for interfaces from other libraries (such as FShow#(FIFO#(t))) outside
+-- those libraries.  We should try to make it not orphan later.
+class orphan FShow t where
   fshow :: t -> Fmt
 
 instance FShow Fmt where
@@ -4680,7 +4685,7 @@ primitive primNoInline :: List (List String) -> List String -> a -> a
 -- Convert bewtween a field in an interface that is being synthesized,
 -- and a field in the corresponding field in the generated wrapper interface.
 -- Also takes the name of the field for error reporting purposes.
-class no_orphan (WrapField :: $ -> * -> * -> *) name f w | name f -> w where
+class (WrapField :: $ -> * -> * -> *) name f w | name f -> w where
   -- Given a proxy value for the field name, and the values of the prefix, arg_names and result pragmas,
   -- converts a synthesized interface field value to its wrapper interface field.
   toWrapField :: StrArg name -> String -> List String -> String -> f -> w
@@ -4748,7 +4753,7 @@ fromWrapNoInline name argNames x =
                        (outputPortNames (_ :: m) pos name)
                        x)
 
-class no_orphan WrapMethod m w | m -> w where
+class WrapMethod m w | m -> w where
   -- Convert a synthesized interface method to its wrapper interface method.
   toWrapMethod :: m -> w
 
@@ -4830,7 +4835,7 @@ instance (WrapPorts (PortsOf a) pb, TupleSize (PortsOf a) n,
   saveMethodPortTypes _ pos modName _ result =
     savePortTypes (_ :: PortsOf a) modName $ checkPortNames pos (_ :: a) result
 
-class no_orphan WrapPorts p pb | p -> pb where
+class WrapPorts p pb | p -> pb where
   -- Convert from a tuple of Port values to a tuple of bits.
   packPorts :: p -> pb
   -- Convert from a tuple of bits to a tuple of Port values.
@@ -4875,7 +4880,7 @@ instance WrapPorts () () where
   filterZeroWidthPorts _ _ = error "filterZeroWidthPorts: non-empty port names list"
 
 -- Helper class to conditionally convert Bit 0 to ()
-class no_orphan NonEmptyBits n pb | n -> pb where
+class NonEmptyBits n pb | n -> pb where
   toNonEmptyBits :: Bit n -> pb
   fromNonEmptyBits :: pb -> Bit n
 
@@ -4917,7 +4922,7 @@ checkPortNames pos proxy base =
       " ports, but " +++ integerToString (listLength pn) +++ " port names were given"
     else pn
 
-class no_orphan SplitPorts a p | a -> p where
+class SplitPorts a p | a -> p where
   type PortsOf a = p
   -- Convert a value to a tuple of values corresponding to ports.
   splitPorts :: a -> p
@@ -4957,7 +4962,7 @@ instance (SplitTuplePorts (a, b) r) => SplitPorts (a, b) r where
   unsplitPorts = unsplitTuplePorts
   portNames = splitTuplePortNames 1
 
-class no_orphan SplitTuplePorts a p | a -> p where
+class SplitTuplePorts a p | a -> p where
   splitTuplePorts :: a -> p
   unsplitTuplePorts :: p -> a
   splitTuplePortNames :: Integer -> a -> String -> List String

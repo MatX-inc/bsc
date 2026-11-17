@@ -1142,16 +1142,18 @@ TYPE CLASSES AND INSTANCES
 >                 (failWithErr (pos, EForbiddenTypeclass (pvpString (stmtContext flags))))
 >        assertEmptyAttributes EAttribsTypeclass atts
 >        -- optional annotations, in either order: "coherent" or
->        -- "incoherent", and "no_orphan".  They are soft keywords like
+>        -- "incoherent", and "orphan".  They are soft keywords like
 >        -- "dependencies": unambiguous because typeclass names are
->        -- uppercase.
+>        -- uppercase.  Unless the typeclass is declared "orphan", an
+>        -- orphan instance of it is an error.
 >        let pCoherence =     (pTheString "incoherent" >> return True)
 >                         <|> (pTheString "coherent"   >> return False)
->            pNoOrphan = pTheString "no_orphan" >> return True
+>            -- "orphan" turns off cca_no_orphan
+>            pOrphan = pTheString "orphan" >> return False
 >        annots <- option noCClassAnnots
 >                    (    (CClassAnnots <$> (Just <$> pCoherence)
->                                       <*> option False pNoOrphan)
->                     <|> (flip CClassAnnots <$> pNoOrphan
+>                                       <*> option True pOrphan)
+>                     <|> (flip CClassAnnots <$> pOrphan
 >                                            <*> option Nothing (Just <$> pCoherence)))
 >        (name, params) <- pTypedefConParams <?> "typeclass name"
 >        context <- option [] pProvisos

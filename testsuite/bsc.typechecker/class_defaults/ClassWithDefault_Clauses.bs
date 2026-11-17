@@ -1,6 +1,6 @@
 package ClassWithDefault_Clauses (C(..)) where
 
-class C a where
+class orphan C a where
   f :: Integer -> a
   h :: Integer -> a
   g :: Integer -> a

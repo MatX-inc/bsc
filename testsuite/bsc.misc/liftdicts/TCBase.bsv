@@ -5,7 +5,7 @@ package TCBase;
 // (orphan) instance, and packages then legitimately disagree about
 // the evidence for TC#(Maybe#(Bool)).
 
-typeclass TC#(type t);
+typeclass orphan TC#(type t);
    function Bit#(8) tag(t x);
 endtypeclass
 

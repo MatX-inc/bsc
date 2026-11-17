@@ -1,5 +1,0 @@
-package NoOrphanTwice where
-
--- Each annotation may be given at most once
-class no_orphan coherent no_orphan NoOrphanTwice a where
-  noOrphanTwice :: a -> Bool

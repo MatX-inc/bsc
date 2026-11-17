@@ -1,12 +1,12 @@
-package NoOrphanIncoherent where
+package OrphanIncoherent where
 
 import Real
 
--- "incoherent" keeps its meaning next to "no_orphan", in either order:
+-- "incoherent" keeps its meaning next to "orphan", in either order:
 -- the eqLiteral functions are accepted only because the classes are
 -- incoherent
 
-class incoherent no_orphan EqIntegerFirst a where
+class incoherent orphan EqIntegerFirst a where
   eqIntegerFirst :: a -> Integer -> Bool
 
 instance (Literal a, Eq a) => (EqIntegerFirst a) where
@@ -18,7 +18,7 @@ instance EqIntegerFirst Real where
 eqLiteralFirst :: (Literal a, Eq a) => a -> Integer -> Bool
 eqLiteralFirst = eqIntegerFirst
 
-class no_orphan incoherent EqIntegerSecond a where
+class orphan incoherent EqIntegerSecond a where
   eqIntegerSecond :: a -> Integer -> Bool
 
 instance (Literal a, Eq a) => (EqIntegerSecond a) where

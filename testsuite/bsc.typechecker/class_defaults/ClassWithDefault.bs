@@ -1,6 +1,6 @@
 package ClassWithDefault (C(..)) where
 
-class C a where
+class orphan C a where
   f :: a -> Bool
   g :: a -> Bool
   g x = not (f x)

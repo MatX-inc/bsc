@@ -1,0 +1,21 @@
+package OrphanInsts where
+
+import OrphanClasses
+
+-- Each of these is an orphan instance of a class declared orphan, which
+-- is allowed with a warning (T0127)
+
+instance Orphan (UInt n) where
+  orphan x = x == 0
+
+instance CoherentOrphan (UInt n) where
+  coherentOrphan x = x == 0
+
+instance OrphanCoherent (UInt n) where
+  orphanCoherent x = x == 0
+
+instance IncoherentOrphan (UInt n) where
+  incoherentOrphan x = x == 0
+
+instance OrphanIncoherent (UInt n) where
+  orphanIncoherent x = x == 0

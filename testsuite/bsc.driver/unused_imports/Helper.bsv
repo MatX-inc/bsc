@@ -17,7 +17,7 @@ typedef struct {
 } Point deriving (Bits);
 
 // Typeclass
-typeclass Describable#(type t);
+typeclass orphan Describable#(type t);
     function String describe(t val);
 endtypeclass
 

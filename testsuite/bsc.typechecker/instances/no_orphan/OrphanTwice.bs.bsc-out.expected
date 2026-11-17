@@ -1,0 +1,3 @@
+checking package dependencies
+Error: "OrphanTwice.bs", line 4, column 22: (P0005)
+  Unexpected "orphan"; expected "(" or "<con>"

@@ -1,6 +1,6 @@
 package Displayable(Displayable(..)) where
 
-class Displayable a where
+class orphan Displayable a where
    display :: a -> Action
 
 instance (Bits a sa) => Displayable a

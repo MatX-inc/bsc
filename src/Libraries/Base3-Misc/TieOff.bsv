@@ -23,7 +23,9 @@ import Vector::*;
 
 
 
-typeclass TieOff #(type t);
+// Declared orphan: users define instances for interfaces from other
+// packages, as in the Get example above
+typeclass orphan TieOff #(type t);
   module mkTieOff#(t ifc) (Empty);
 endtypeclass
 

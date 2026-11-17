@@ -3,4 +3,4 @@ package NoOrphanAbstract(NoOrphanAbstract) where
 -- Exported abstractly, so importers see the class through a CIclass
 -- entry in the .bo file.  (It has no methods: an instance cannot
 -- define methods that it cannot see.)
-class no_orphan NoOrphanAbstract a where {}
+class NoOrphanAbstract a where {}

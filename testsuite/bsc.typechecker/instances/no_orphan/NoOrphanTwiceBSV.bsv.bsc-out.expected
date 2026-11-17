@@ -1,3 +1,0 @@
-checking package dependencies
-Error: "NoOrphanTwiceBSV.bsv", line 4, column 30: (P0005)
-  Unexpected identifier `no_orphan'; expected typeclass name

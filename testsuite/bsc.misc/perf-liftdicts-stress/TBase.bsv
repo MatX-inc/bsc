@@ -1,5 +1,5 @@
 package TBase;
-typeclass TK#(type t); function Bit#(8) tag(t x); endtypeclass
+typeclass orphan TK#(type t); function Bit#(8) tag(t x); endtypeclass
 typeclass TDK#(type t); function Bit#(8) dtag(t x); endtypeclass
 instance TDK#(t) provisos (TK#(t)); function dtag(x) = tag(x); endinstance
 typeclass B_#(type t); function Bit#(8) getB(t x); endtypeclass
