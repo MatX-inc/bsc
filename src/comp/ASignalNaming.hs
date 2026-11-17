@@ -14,14 +14,15 @@ module ASignalNaming (
     collectAPackageExistingIds,
     collectASPackageExistingIds,
     nameAPackageDefs,
-    applyAPackageTempNames
+    applyAPackageTempNames,
+    refreshASPackageTempIds
 ) where
 
 import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
 import qualified Data.List as L
 import qualified Data.Map.Strict as M
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Set as S
 
 import ASourceTypes (provenanceLookup, sourceTypeKey)
@@ -73,16 +74,20 @@ import SignalNaming (
     SignalExpr(..),
     SignalNamingEnv(..),
     SignalType(..),
+    allocSignalTempName,
     assignModuleNames,
     cleanGenBase,
     emptySignalNamingEnv,
     exprName,
+    hasStructuredProvenance,
     ifcBoundaryNames,
+    initSignalNameTable,
     isClockOrResetPortName,
     isDefAnchorId,
     isDefTempId,
     lookupArgNamedLit,
     lookupCaseArmNamedLit,
+    lookupCaseIdxVariantTag,
     lowerResolvedMethodRead,
     mkDefOrPort,
     mkSignalConcat,
@@ -100,7 +105,7 @@ import SignalNaming (
     signalExprType,
     wireInfoSpecialNames
     )
-import SourceProvenance (NamedLitInfo, ProvFact(..))
+import SourceProvenance (NamedLitInfo, ProvFact(..), dedupFactsBy)
 
 isIfWrapperPrim :: PrimOp -> Bool
 isIfWrapperPrim PrimExpIf = True
@@ -452,7 +457,27 @@ signalAExprStructural env lookupProv stemMap nextDepth _ (APrim _ (ATBit outW) P
 signalAExprStructural env lookupProv stemMap nextDepth _ (APrim _ _ PrimConcat es) =
     mkSignalConcat (map (signalAExprGo env lookupProv stemMap Nothing nextDepth) es)
 signalAExprStructural env lookupProv stemMap nextDepth facts (APrim _ ty PrimCase (idx : dflt : ces)) =
-    let sIdx = signalAExprGo env lookupProv stemMap Nothing nextDepth idx
+    let sIdx0 = signalAExprGo env lookupProv stemMap Nothing nextDepth idx
+        pairArms (l : a : rest) = (l, a) : pairArms rest
+        pairArms _ = []
+        sIdx
+            | hasStructuredProvenance sIdx0 = sIdx0
+            | otherwise =
+                let armEqFacts =
+                        concat
+                            [ lookupProv (APrim defaultAId aTBool PrimEQ [idx, lbl]) ++
+                              lookupProv (APrim defaultAId aTBool PrimEQ [lbl, idx])
+                            | (lbl, _) <- pairArms ces
+                            , ASInt _ (ATBit _) _ <- [lbl]
+                            ]
+                    mTagIdx =
+                        lookupCaseIdxVariantTag
+                            env
+                            (signalAType (ae_type idx))
+                            (== idx)
+                            (signalAExprGo env lookupProv stemMap Nothing nextDepth)
+                            armEqFacts
+                in fromMaybe sIdx0 mTagIdx
         sDflt = signalAExprGo env lookupProv stemMap Nothing nextDepth dflt
         lowerCaseLabel lblPos lbl
             | not (null facts)
@@ -567,7 +592,7 @@ nameAPackageDefs flags apkg =
         defProvMap =
             if null rawProv
             then M.empty
-            else M.fromList
+            else M.fromListWith (\new old -> dedupFactsBy sourceTypeKey (old ++ new))
                      [ (sourceTypeKey e, fsDef)
                      | ADef i t e _ <- ds
                      , let fsDef = lookupProv0 (ASDef t i)
@@ -709,3 +734,86 @@ applyAPackageTempNames flags apkg =
                          | (rid, r) <- apkg_reset_list apkg
                          ]
                    }
+
+-- Refresh compiler-minted temporary ADefs whose equivalence classes merged
+-- distinct per-arm expressions during AOpt (-opt-join-defs).
+refreshASPackageTempIds :: Flags -> S.Set Id -> ASPackage -> ASPackage
+refreshASPackageTempIds flags refreshIds pkg
+    | S.null refreshIds = pkg
+    | otherwise =
+        let env = mkSignalNamingEnvFromASPackage flags pkg
+            targetIds = S.filter (isDefTempId env) refreshIds
+        in if S.null targetIds
+           then pkg
+           else let allDefs = aspkg_values pkg ++ aspkg_inout_values pkg
+                    rawProv = aspkg_provenance pkg
+                    lookupProv0 = provenanceLookup allDefs rawProv
+                    defProvMap =
+                        if null rawProv
+                        then M.empty
+                        else M.fromListWith (\new old -> dedupFactsBy sourceTypeKey (old ++ new))
+                                 [ (sourceTypeKey e, fsDef)
+                                 | ADef i t e _ <- allDefs
+                                 , let fsDef = lookupProv0 (ASDef t i)
+                                 , not (null fsDef)
+                                 ]
+                    lookupProv expr
+                        | null rawProv = []
+                        | otherwise =
+                            let fs0 = lookupProv0 expr
+                            in if not (null fs0)
+                               then fs0
+                               else M.findWithDefault [] (sourceTypeKey expr) defProvMap
+                    existingIds =
+                        filter (`S.notMember` targetIds) (collectASPackageExistingIds pkg)
+                    nameTable0 =
+                        case initSignalNameTable env existingIds of
+                            Left (AnchorCollision nm k1 k2) ->
+                                internalError
+                                    ("ASignalNaming.refreshASPackageTempIds: anchor collision on " ++
+                                     nm ++ " (" ++ show k1 ++ " vs " ++ show k2 ++ ")")
+                            Right tbl -> tbl
+                    stepAlloc (!nt, !stemAcc, !renAcc) (ADef i _ e _)
+                        | i `S.member` targetIds =
+                            let se = signalAExprWithProvSelf env lookupProv stemAcc (Just i) e
+                                st = signalExprStem env se
+                                (chosenStr, !nt') = allocSignalTempName env se nt
+                                !stemAcc' = rnf st `seq` M.insert i st stemAcc
+                                !renAcc' =
+                                    if chosenStr /= getIdBaseString i
+                                    then let !newId = setIdBaseString i chosenStr
+                                         in M.insert i newId renAcc
+                                    else renAcc
+                            in (nt', stemAcc', renAcc')
+                        | otherwise = (nt, stemAcc, renAcc)
+                    (_, _, renMap) =
+                        L.foldl' stepAlloc (nameTable0, M.empty, M.empty) (aspkg_values pkg)
+                in if M.null renMap
+                   then pkg
+                   else let renId i = M.findWithDefault i i renMap
+                            renClk (AClock osc gate) = AClock (renExpr osc) (renExpr gate)
+                            renRst (AReset w) = AReset (renExpr w)
+                            renIot (AInout w) = AInout (renExpr w)
+                            renExpr (ASDef ty i) = ASDef ty (renId i)
+                            renExpr (APrim aid ty op es) = APrim aid ty op (map renExpr es)
+                            renExpr (AMethCall ty i meth es) = AMethCall ty i meth (map renExpr es)
+                            renExpr (ATuple ty es) = ATuple ty (map renExpr es)
+                            renExpr (ATupleSel ty e idx) = ATupleSel ty (renExpr e) idx
+                            renExpr (ANoInlineFunCall ty i f es) = ANoInlineFunCall ty i f (map renExpr es)
+                            renExpr (AFunCall ty i f isC es) = AFunCall ty i f isC (map renExpr es)
+                            renExpr (ASAny ty me) = ASAny ty (fmap renExpr me)
+                            renExpr (ASClock i c) = ASClock i (renClk c)
+                            renExpr (ASReset i r) = ASReset i (renRst r)
+                            renExpr (ASInout ty io) = ASInout ty (renIot io)
+                            renExpr e = e
+                            pkg1 = mapAExprs renExpr pkg
+                        in pkg1
+                               { aspkg_values =
+                                     [ ADef (renId i) ty e props
+                                     | ADef i ty e props <- aspkg_values pkg1
+                                     ]
+                               , aspkg_inout_values =
+                                     [ ADef (renId i) ty e props
+                                     | ADef i ty e props <- aspkg_inout_values pkg1
+                                     ]
+                               }

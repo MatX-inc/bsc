@@ -66,6 +66,7 @@ module SignalNaming (
     selectProvenanceSignalExpr,
     lookupArgNamedLit,
     lookupCaseArmNamedLit,
+    lookupCaseIdxVariantTag,
 
     -- Anchor classification and hard anchor invariant
     AnchorKind(..),
@@ -1087,7 +1088,23 @@ formatExprTempName en hSuffix =
        then "_h" ++ hSuffix ++ pd
        else cleanCore ++ "_h" ++ hSuffix ++ pd
 
+peelUnionTagEq :: SignalType -> PrimOp -> [SignalExpr] -> Maybe SignalExpr
+peelUnionTagEq ty PrimEQ [a, b] =
+    case matchTagLit a b of
+        Just se -> Just se
+        Nothing -> matchTagLit b a
+  where
+    matchTagLit (SignalAccess _ base steps) (SignalNamedLit _ (NLitTag tb' tq' cn _ _ _ _ False))
+        | PStepVariantTag tb tq _ : revInit <- reverse steps
+        , tb == tb' && tq == tq' =
+            Just (SignalAccess ty base (reverse revInit ++ [PStepVariantTest tb tq cn 0 0 False]))
+    matchTagLit _ _ = Nothing
+peelUnionTagEq _ _ _ = Nothing
+
 signalExprStemRaw :: SignalNamingEnv -> SignalExpr -> String
+signalExprStemRaw env (SignalPrim ty op args)
+    | Just peeled <- peelUnionTagEq ty op args =
+        signalExprStemRaw env peeled
 signalExprStemRaw env (SignalPrim _ PrimZeroExt [arg]) =
     signalExprStemRaw env arg
 signalExprStemRaw env (SignalPrim _ PrimSignExt [arg]) =
@@ -1187,15 +1204,16 @@ renderProvStepStem (PStepElem { ps_elemIdx = idx })
     | idx < 0 = "neg" ++ show (negate idx)
     | otherwise = show idx
 renderProvStepStem (PStepVariantTest { ps_con = cn, ps_isEnum = True }) = "EQ_" ++ cn
-renderProvStepStem _ = ""
+renderProvStepStem (PStepVariantTest { ps_con = cn, ps_isEnum = False }) = "is_" ++ cn
+renderProvStepStem (PStepVariantPayload { ps_con = cn }) = cn
+renderProvStepStem (PStepVariantTag {}) = "tag"
 
 renderNamedLitStem :: NamedLitInfo -> String
 renderNamedLitStem (NLitSlot { nli_slot = idx })
     | idx < 0 = "neg" ++ show (negate idx)
     | otherwise = show idx
 renderNamedLitStem (NLitEnum { nli_member = m }) = m
-renderNamedLitStem (NLitTag { nli_con = m, nli_isEnum = True }) = m
-renderNamedLitStem _ = ""
+renderNamedLitStem (NLitTag { nli_con = m }) = m
 
 renderPortStem :: SignalNamingEnv -> String -> String -> String
 renderPortStem env portStr fallbackInst =
@@ -1242,14 +1260,14 @@ connectParts sep parts =
 isSupportedProvStep :: ProvStep -> Bool
 isSupportedProvStep (PStepField {}) = True
 isSupportedProvStep (PStepElem {}) = True
-isSupportedProvStep (PStepVariantTest { ps_isEnum = True }) = True
-isSupportedProvStep _ = False
+isSupportedProvStep (PStepVariantTest {}) = True
+isSupportedProvStep (PStepVariantPayload {}) = True
+isSupportedProvStep (PStepVariantTag {}) = True
 
 isSupportedNamedLit :: NamedLitInfo -> Bool
 isSupportedNamedLit (NLitSlot {}) = True
 isSupportedNamedLit (NLitEnum {}) = True
-isSupportedNamedLit (NLitTag { nli_isEnum = True }) = True
-isSupportedNamedLit _ = False
+isSupportedNamedLit (NLitTag {}) = True
 
 hasStructuredProvenance :: SignalExpr -> Bool
 hasStructuredProvenance (SignalAccess {}) = True
@@ -1295,6 +1313,7 @@ selectProvenanceSignalExpr env ty isSelf lowerChild litMatches facts
     | [litSe] <- litCands = Just litSe
     | not (null litCands) = Nothing
     | [accSe] <- accessCands = Just accSe
+    | Just sharedPayloadSe <- collapseSharedVariantPayload = Just sharedPayloadSe
     | not (null accessCands) = Nothing
     | [catSe] <- concatCands = Just catSe
     | otherwise = Nothing
@@ -1307,27 +1326,56 @@ selectProvenanceSignalExpr env ty isSelf lowerChild litMatches facts
             , isSupportedNamedLit nli
             , litMatches nli
             ]
+    rawAccesses =
+        [ (lowerChild base, steps)
+        | PFactAccess base steps <- facts
+        , not (null steps)
+        , all isSupportedProvStep steps
+        , not (isSelf base)
+        ]
     accessCands =
         dedupSignalCandidates
             env
-            [ mkAccessSignalExpr base steps
-            | PFactAccess base steps <- facts
-            , not (null steps)
-            , all isSupportedProvStep steps
-            , not (isSelf base)
+            [ mkAccessFromLowered lb steps
+            | (lb, steps) <- rawAccesses
             ]
-    mkAccessSignalExpr base steps =
+    mkAccessFromLowered lb steps =
         case reverse steps of
             PStepVariantTest tb tq cn _ _ True : revInit ->
                 let initSteps = reverse revInit
                     lhs =
                         if null initSteps
-                        then lowerChild base
-                        else SignalAccess SignalUnknownType (lowerChild base) initSteps
+                        then lb
+                        else SignalAccess SignalUnknownType lb initSteps
                     rhs = SignalNamedLit SignalUnknownType (NLitEnum tb tq cn 0 0 0 0)
                 in SignalPrim ty PrimEQ [lhs, rhs]
             _ ->
-                SignalAccess ty (lowerChild base) steps
+                SignalAccess ty lb steps
+    collapseSharedVariantPayload =
+        case rawAccesses of
+            (lb0, steps0) : rest@(_ : _)
+                | let baseKey se = (signalExprStemRaw env se, shallowSignalExpr se)
+                      bk0 = baseKey lb0
+                      len0 = length steps0
+                , all (\(lb, sts) -> baseKey lb == bk0 && length sts == len0) rest ->
+                    case unzip <$> mapM mergePayloadCol (L.transpose (steps0 : map snd rest)) of
+                        Just (mergedSteps, variedFlags)
+                            | or variedFlags ->
+                                Just (mkAccessFromLowered lb0 mergedSteps)
+                        _ -> Nothing
+            _ -> Nothing
+    mergePayloadCol [] = Nothing
+    mergePayloadCol col@(s0 : ss)
+        | let n0 = normalizeProvStep s0
+        , all (\s -> normalizeProvStep s == n0) ss =
+            Just (s0, False)
+        | PStepVariantPayload tb0 tq0 _ _ _ <- s0
+        , all (sameUnionPayload tb0 tq0) ss =
+            Just (PStepVariantPayload tb0 tq0 "payload" 0 0, True)
+        | otherwise = Nothing
+    sameUnionPayload tb0 tq0 (PStepVariantPayload tb tq _ _ _) =
+        tb == tb0 && tq == tq0
+    sameUnionPayload _ _ _ = False
     concatCands =
         dedupSignalCandidates
             env
@@ -1388,6 +1436,26 @@ lookupCaseArmNamedLit argIdx w val eqFacts =
            [single] -> Just single
            _ -> Nothing
 
+lookupCaseIdxVariantTag ::
+    SignalNamingEnv ->
+    SignalType ->
+    (e -> Bool) ->
+    (e -> SignalExpr) ->
+    [ProvFact e] ->
+    Maybe SignalExpr
+lookupCaseIdxVariantTag env idxTy isSelf lowerChild eqFacts =
+    case dedupSignalCandidates
+             env
+             [ SignalAccess idxTy (lowerChild base) (reverse revInit ++ [PStepVariantTag tb tq nc])
+             | PFactAccess base steps <- eqFacts
+             , not (null steps)
+             , all isSupportedProvStep steps
+             , not (isSelf base)
+             , PStepVariantTest tb tq _ _ nc False : revInit <- [reverse steps]
+             ] of
+        [single] -> Just single
+        _ -> Nothing
+
 -- ============================================================
 -- Shallow depth-bounded hashing and base-36 h4 / h8 suffixes
 -- ============================================================
@@ -1395,14 +1463,15 @@ lookupCaseArmNamedLit argIdx w val eqFacts =
 normalizeProvStep :: ProvStep -> ProvStep
 normalizeProvStep (PStepField tb tq fn _ _ anon) = PStepField tb tq fn 0 0 anon
 normalizeProvStep (PStepElem idx _) = PStepElem idx 0
-normalizeProvStep (PStepVariantTest tb tq cn _ _ True) = PStepVariantTest tb tq cn 0 0 True
-normalizeProvStep st = st
+normalizeProvStep (PStepVariantTest tb tq cn _ _ isEn) = PStepVariantTest tb tq cn 0 0 isEn
+normalizeProvStep (PStepVariantPayload tb tq cn _ _) = PStepVariantPayload tb tq cn 0 0
+normalizeProvStep (PStepVariantTag tb tq _) = PStepVariantTag tb tq 0
 
 normalizeNamedLit :: NamedLitInfo -> NamedLitInfo
 normalizeNamedLit (NLitSlot idx _ _ _) = NLitSlot idx 0 0 0
 normalizeNamedLit (NLitEnum tb tq m _ _ _ _) = NLitEnum tb tq m 0 0 0 0
 normalizeNamedLit (NLitTag tb tq m _ _ _ _ True) = NLitEnum tb tq m 0 0 0 0
-normalizeNamedLit nli = nli
+normalizeNamedLit (NLitTag tb tq m _ _ _ _ False) = NLitTag tb tq m 0 0 0 0 False
 
 isSignalNamedLit :: SignalExpr -> Bool
 isSignalNamedLit (SignalNamedLit {}) = True
@@ -1438,6 +1507,9 @@ eraseFixedEntityBitWidth (SignalBit _) = SignalUnknownType
 eraseFixedEntityBitWidth ty = ty
 
 shallowSignalExpr :: SignalExpr -> SignalExpr
+shallowSignalExpr (SignalPrim ty op args)
+    | Just peeled <- peelUnionTagEq ty op args =
+        shallowSignalExpr peeled
 shallowSignalExpr (SignalPrim ty op [a, b])
     | op == PrimEQ || op == PrimEQ3 =
         case (isSignalNamedLit a, isSignalNamedLit b) of
@@ -1488,7 +1560,12 @@ shallowSignalExpr (SignalHeapRef ty _) =
 shallowSignalExpr (SignalLam v vt body) =
     SignalLam (stripGeneratedSuffixes v) vt (shallowSignalExpr body)
 shallowSignalExpr (SignalAccess ty base steps) =
-    SignalAccess ty (eraseCarrierBitWidth base) (map normalizeProvStep steps)
+    let normSteps = map normalizeProvStep steps
+        ty' =
+            case reverse normSteps of
+                PStepVariantTag {} : _ -> eraseFixedEntityBitWidth ty
+                _ -> ty
+    in SignalAccess ty' (eraseCarrierBitWidth base) normSteps
 shallowSignalExpr (SignalNamedLit _ nli) =
     SignalNamedLit SignalUnknownType (normalizeNamedLit nli)
 shallowSignalExpr (SignalOther ty tag args) =
@@ -1637,18 +1714,22 @@ feedProvStep h (PStepElem idx _) =
     feedInt (feedByte h 2) idx
 feedProvStep h (PStepVariantTest tb tq cn _ _ True) =
     feedString (feedString (feedString (feedByte h 3) tb) tq) cn
-feedProvStep h _ =
-    feedByte h 0
+feedProvStep h (PStepVariantTest tb tq cn _ _ False) =
+    feedString (feedString (feedString (feedByte h 4) tb) tq) cn
+feedProvStep h (PStepVariantPayload tb tq cn _ _) =
+    feedString (feedString (feedString (feedByte h 5) tb) tq) cn
+feedProvStep h (PStepVariantTag tb tq _) =
+    feedString (feedString (feedByte h 6) tb) tq
 
 feedNamedLitInfo :: Word64 -> NamedLitInfo -> Word64
 feedNamedLitInfo h (NLitEnum tb tq m _ _ _ _) =
     feedString (feedString (feedString (feedByte h 1) tb) tq) m
 feedNamedLitInfo h (NLitTag tb tq m _ _ _ _ True) =
     feedString (feedString (feedString (feedByte h 1) tb) tq) m
+feedNamedLitInfo h (NLitTag tb tq m _ _ _ _ False) =
+    feedString (feedString (feedString (feedByte h 2) tb) tq) m
 feedNamedLitInfo h (NLitSlot idx _ _ _) =
     feedInt (feedByte h 3) idx
-feedNamedLitInfo h _ =
-    feedByte h 0
 
 avalanche64 :: Word64 -> Word64
 avalanche64 z0 =

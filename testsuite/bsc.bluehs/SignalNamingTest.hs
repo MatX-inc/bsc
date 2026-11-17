@@ -115,6 +115,7 @@ import SignalNaming (
     isUnnamedTempId,
     lookupArgNamedLit,
     lookupCaseArmNamedLit,
+    lookupCaseIdxVariantTag,
     mkSignalNamingEnv,
     selectProvenanceSignalExpr,
     signalExprStem,
@@ -1173,3 +1174,112 @@ main = do
         (lookupCaseArmNamedLit 1 8 8 oneHotArmFacts ==
          Just (NLitEnum "OneHotCmd" "Pkg" "OhRead" 0 0 8 8))
     passGroup "[8] Provenance-driven enum equality, case-arm recovery, & ambiguity fallback"
+
+    -- ============================================================
+    -- [9] Provenance-driven tagged-union stems, shared payload collapse, & tag stability
+    -- ============================================================
+
+    let Just unionIs5 =
+            selectProvenanceSignalExpr
+                envA
+                (SignalBit 1)
+                (const False)
+                id
+                (const True)
+                [ PFactAccess
+                      (SignalDef (SignalBit 15) "msgReg_haaaa")
+                      [PStepVariantTest "FrameMsg" "Pkg" "MsgHit" 1 5 False]
+                ]
+        Just unionIs9 =
+            selectProvenanceSignalExpr
+                envA
+                (SignalBit 1)
+                (const False)
+                id
+                (const True)
+                [ PFactAccess
+                      (SignalDef (SignalBit 24) "msgReg_hbbbb")
+                      [PStepVariantTest "FrameMsg" "Pkg" "MsgHit" 3 9 False]
+                ]
+        peeledTagEq =
+            SignalPrim
+                (SignalBit 1)
+                PrimEQ
+                [ SignalAccess
+                      (SignalBit 4)
+                      (SignalDef (SignalBit 24) "msgReg_hcccc")
+                      [PStepVariantTag "FrameMsg" "Pkg" 9]
+                , SignalNamedLit
+                      (SignalBit 4)
+                      (NLitTag "FrameMsg" "Pkg" "MsgHit" 3 9 4 3 False)
+                ]
+    assert "tagged-union PStepVariantTest and peeled .tag == Con share identical stem & digest across growth"
+        (en_stem (exprName envA unionIs5) == "msgReg_is_MsgHit" &&
+         exprName envA unionIs5 == exprName envA unionIs9 &&
+         exprName envA unionIs5 == exprName envA peeledTagEq)
+
+    let tagSlice3 =
+            SignalAccess
+                (SignalBit 3)
+                (SignalDef (SignalBit 15) "msgReg_haaaa")
+                [PStepVariantTag "FrameMsg" "Pkg" 5]
+        tagSlice4 =
+            SignalAccess
+                (SignalBit 4)
+                (SignalDef (SignalBit 24) "msgReg_hbbbb")
+                [PStepVariantTag "FrameMsg" "Pkg" 9]
+    assert "tagged-union PStepVariantTag stem & digest stable across tag-width & carrier-width growth"
+        (en_stem (exprName envA tagSlice3) == "msgReg_tag" &&
+         exprName envA tagSlice3 == exprName envA tagSlice4)
+
+    let sharedPayloadFacts2 =
+            [ PFactAccess
+                  (SignalDef (SignalBit 15) "msgReg_haaaa")
+                  [PStepVariantPayload "FrameMsg" "Pkg" "MsgHit" 1 5]
+            , PFactAccess
+                  (SignalDef (SignalBit 15) "msgReg_haaaa")
+                  [PStepVariantPayload "FrameMsg" "Pkg" "MsgMiss" 2 5]
+            ]
+        sharedPayloadFacts3 =
+            [ PFactAccess
+                  (SignalDef (SignalBit 24) "msgReg_hbbbb")
+                  [PStepVariantPayload "FrameMsg" "Pkg" "MsgMiss" 4 9]
+            , PFactAccess
+                  (SignalDef (SignalBit 24) "msgReg_hbbbb")
+                  [PStepVariantPayload "FrameMsg" "Pkg" "MsgRetry" 5 9]
+            , PFactAccess
+                  (SignalDef (SignalBit 24) "msgReg_hbbbb")
+                  [PStepVariantPayload "FrameMsg" "Pkg" "MsgHit" 2 9]
+            ]
+        Just sharedPay2 =
+            selectProvenanceSignalExpr envA (SignalBit 8) (const False) id (const True) sharedPayloadFacts2
+        Just sharedPay3 =
+            selectProvenanceSignalExpr envA (SignalBit 8) (const False) id (const True) sharedPayloadFacts3
+    assert "shared multi-constructor payload slice collapses order-independently to <base>_payload"
+        (en_stem (exprName envA sharedPay2) == "msgReg_payload" &&
+         exprName envA sharedPay2 == exprName envA sharedPay3)
+
+    let diffTypePayloadFacts =
+            [ PFactAccess
+                  (SignalDef (SignalBit 10) "rawBits_haaaa")
+                  [PStepVariantPayload "UnionA" "Pkg" "UaVal" 1 3]
+            , PFactAccess
+                  (SignalDef (SignalBit 10) "rawBits_haaaa")
+                  [PStepVariantPayload "UnionB" "Pkg" "UbVal" 1 3]
+            ]
+    assert "conflicting union types sharing a payload slice fall back cleanly"
+        (selectProvenanceSignalExpr envA (SignalBit 8) (const False) id (const True) diffTypePayloadFacts == Nothing)
+
+    let recoveredTagIdx =
+            lookupCaseIdxVariantTag
+                envA
+                (SignalBit 3)
+                (const False)
+                id
+                [ PFactAccess
+                      (SignalDef (SignalBit 15) "msgReg_haaaa")
+                      [PStepVariantTest "FrameMsg" "Pkg" "MsgHit" 1 5 False]
+                ]
+    assert "lookupCaseIdxVariantTag recovers <base>_tag selector from tagged-union arm provenance"
+        (fmap (exprName envA) recoveredTagIdx == Just (exprName envA tagSlice3))
+    passGroup "[9] Provenance-driven tagged-union stems, shared payload collapse, & tag stability"

@@ -16,3 +16,4 @@ PASS: [5] End-to-end SignalNamingMod.bs IModule, APackage, and ASPackage environ
 PASS: [6] 200 deterministic PRNG matched-triple (IExpr, APackage AExpr, ASPackage AExpr) ExprName parity checks
 PASS: [7] Provenance-driven struct/vector/slot stems & carrier-width digest stability
 PASS: [8] Provenance-driven enum equality, case-arm recovery, & ambiguity fallback
+PASS: [9] Provenance-driven tagged-union stems, shared payload collapse, & tag stability
