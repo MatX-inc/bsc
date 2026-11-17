@@ -1,0 +1,59 @@
+package TypeLinksProv where
+
+import Vector
+
+struct PacketHdr =
+    phTag :: Bit 8
+    phLen :: Bit 16
+    phValid :: Bool
+  deriving (Bits, Eq)
+
+data StageState = StIdle | StFetch | StExec | StWrite
+  deriving (Bits, Eq)
+
+data LookupRes = ResEmpty | ResHit (Bit 8) | ResMiss (Bit 8)
+  deriving (Bits, Eq)
+
+interface TypeLinksProvIfc =
+    step :: Bit 2 -> Bit 8 -> Bool -> ActionValue (Bit 8)
+    fusedSlice :: Bit 24
+    pushedLen :: Bool -> Bit 16
+    resultVal :: Bit 8
+
+{-# verilog mkTypeLinksProv #-}
+mkTypeLinksProv :: Module TypeLinksProvIfc
+mkTypeLinksProv =
+    module
+        hdrA :: Reg PacketHdr <- mkRegU
+        hdrB :: Reg PacketHdr <- mkRegU
+        stReg :: Reg StageState <- mkReg StIdle
+        resReg :: Reg LookupRes <- mkReg ResEmpty
+        lanes :: Reg (Vector 4 (Bit 8)) <- mkRegU
+
+        interface
+            step idx val pickB =
+                do
+                    let nextSt =
+                            if stReg == StFetch
+                            then StExec
+                            else if stReg == StExec
+                                 then StWrite
+                                 else StFetch
+                    stReg := nextSt
+                    lanes := update lanes idx val
+                    let lane1 = select lanes 1
+                    resReg := (if pickB then ResHit (lane1 + val) else ResMiss (lane1 ^ val))
+                    hdrA := PacketHdr { phTag = lane1; phLen = zeroExtend val; phValid = pickB }
+                    return lane1
+
+            fusedSlice = hdrA.phTag ++ hdrA.phLen
+
+            pushedLen pickB =
+                let hdr = if pickB then hdrB._read else hdrA._read
+                in hdr.phLen
+
+            resultVal =
+                case resReg of
+                    ResHit x -> x + hdrA.phTag
+                    ResMiss y -> y ^ hdrB.phTag
+                    ResEmpty -> 0

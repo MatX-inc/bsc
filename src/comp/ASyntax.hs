@@ -143,6 +143,7 @@ import Flags
 import qualified Data.Map as M
 import qualified Data.Set as S
 import ISyntax(IType)
+import SourceProvenance(SourceProvenance)
 import InstNodes(InstTree)
 
 -- packages converted from ISyntax
@@ -169,6 +170,8 @@ data APackage = APackage {
             -- Source-level interpretations observed at pack/unpack sites.
             -- These are annotations, never roots for hardware liveness.
     apkg_expr_types :: [(AExpr, S.Set IType)],
+            -- Evaluator provenance facts for signal naming and digest stability.
+    apkg_provenance :: SourceProvenance AExpr,
             -- Actual surviving Verilog signal names, before and after final
             -- renaming. Nothing when elaboration stopped before codegen.
     apkg_final_wire_names :: Maybe (M.Map String String),
@@ -196,8 +199,8 @@ data APackage = APackage {
     } deriving (Eq, Show)
 
 instance NFData APackage where
-    rnf (APackage n1 n2 n3 n4 n5 n6 n7 n8 ets names finalTypes n9 n10 n11 n12 n13 n14 n15 n16 n17) =
-        rnf ets `seq` rnf names `seq` rnf finalTypes `seq` rnf17 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17
+    rnf (APackage n1 n2 n3 n4 n5 n6 n7 n8 ets prov names finalTypes n9 n10 n11 n12 n13 n14 n15 n16 n17) =
+        rnf ets `seq` rnf prov `seq` rnf names `seq` rnf finalTypes `seq` rnf17 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17
 
 getAPackageFieldInfos :: APackage -> [VFieldInfo]
 getAPackageFieldInfos = map aif_fieldinfo . apkg_interface
@@ -292,13 +295,14 @@ data ASPackage = ASPackage {
         aspkg_signal_info :: ASPSignalInfo,
         -- user comments to be included in the output RTL
         aspkg_comment_info :: ASPCommentInfo,
-        aspkg_expr_types :: [(AExpr, S.Set IType)]
+        aspkg_expr_types :: [(AExpr, S.Set IType)],
+        aspkg_provenance :: SourceProvenance AExpr
     }
         deriving (Eq, Show)
 
 instance NFData ASPackage where
-    rnf (ASPackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 ets) =
-        rnf ets `seq` rnf14 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14
+    rnf (ASPackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 ets prov) =
+        rnf ets `seq` rnf prov `seq` rnf14 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14
 
 data ASPSignalInfo = ASPSignalInfo {
         -- input params, ports, clocks, and resets are all in one list
@@ -1498,7 +1502,7 @@ ppVTI :: PDetail -> (VModInfo, [AExpr], [(AId, Integer)]) -> Doc
 ppVTI d (vi, es, ns) = sep [pPrint d 0 (vName vi), pPrint d 0 vi, pPrint d 0 es, pPrint d 0 ns]
 
 instance PPrint ASPackage where
-    pPrint d p pack@(ASPackage mi fmod ps exps is ios ss sos ds iods fs ws ids cmap _) =
+    pPrint d p pack@(ASPackage mi fmod ps exps is ios ss sos ds iods fs ws ids cmap _ _) =
         (text "ASPackage" <+> ppId d mi <> if fmod then text " -- function" else text "") $+$
         text "-- ASPackage parameters" $+$
         (text "" <+> sep (map (pPrint d 0) ps) <> text ";") $+$

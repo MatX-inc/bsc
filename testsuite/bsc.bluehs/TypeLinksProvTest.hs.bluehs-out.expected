@@ -1,0 +1,4 @@
+PASS: [1] APackage (.ba round-trip) preserves field, elem, variant test/payload, enum/tag/slot literal, and concat provenance
+PASS: [2] ASPackage preserves evaluator provenance across AState, InlineWires, InlineCReg, and anchorASPackage
+PASS: [3] ASPackage preserves evaluator provenance across ADropDefs, AOpt (-opt-join-defs), and AVeriQuirks
+PASS: [4] TypeLinksDecl symbol-table query helpers linked cleanly

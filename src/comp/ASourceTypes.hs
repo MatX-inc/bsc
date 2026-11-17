@@ -3,6 +3,7 @@
 -- source-location IDs retained by AExpr's derived Ord instance.
 module ASourceTypes(SourceTypeInfo, sourceTypeKey, canonicalSourceExpr,
                     sourceTypeLookup, anchorSourceTypes,
+                    provenanceLookup, anchorSourceProvenance,
                     namedSourceTypes, anchorASPackage) where
 
 import Data.List(sortOn)
@@ -12,6 +13,7 @@ import qualified Data.Set as S
 import ASyntax
 import Id(getIdString)
 import ISyntax(IType)
+import SourceProvenance(ProvFact, SourceProvenance, dedupFactsBy)
 
 type SourceTypeInfo = [(AExpr, S.Set IType)]
 
@@ -108,7 +110,40 @@ namedSourceTypes defs observations = MS.fromListWith S.union (defined ++ ports)
                                       ASPort _ i <- [canonical e],
                                       not (S.null ts)]
 
+provenanceLookup :: [ADef] -> SourceProvenance AExpr -> AExpr -> [ProvFact AExpr]
+provenanceLookup _ [] = const []
+provenanceLookup defs observations = \e ->
+    M.findWithDefault [] (canonical e) index
+  where canonical = canonicalSourceExpr defs
+        combine new old = dedupFactsBy sourceTypeKey (old ++ new)
+        index = MS.fromListWith combine
+            [ (canonical e, dedupFactsBy sourceTypeKey fs)
+            | (e, fs) <- observations, not (null fs) ]
+
+anchorSourceProvenance :: [ADef] -> SourceProvenance AExpr -> SourceProvenance AExpr
+anchorSourceProvenance _ [] = []
+anchorSourceProvenance defs observations =
+    [ (e, fs)
+    | (_, e, fs) <- sortOn (\(ord, _, _) -> ord) $ M.elems $
+        MS.fromListWith combine
+            [ (sourceTypeKey e, (ord, e, dedupFactsBy sourceTypeKey fs))
+            | (ord, (e, fs)) <- zip [0 :: Int ..] (observations ++ anchors)
+            , not (null fs)
+            ]
+    ]
+  where lookupProv = provenanceLookup defs observations
+        anchors = [ (e, fs)
+                  | ADef i t _ _ <- defs
+                  , let e = ASDef t i
+                        fs = lookupProv e
+                  , not (null fs) ]
+        combine (_, _, newFs) (ord, oldExpr, oldFs) =
+            let fs = dedupFactsBy sourceTypeKey (oldFs ++ newFs)
+            in length fs `seq` (ord, oldExpr, fs)
+
 anchorASPackage :: ASPackage -> ASPackage
-anchorASPackage pkg = pkg {
-    aspkg_expr_types = anchorSourceTypes
-        (aspkg_values pkg ++ aspkg_inout_values pkg) (aspkg_expr_types pkg) }
+anchorASPackage pkg =
+    let allDefs = aspkg_values pkg ++ aspkg_inout_values pkg
+    in pkg {
+        aspkg_expr_types = anchorSourceTypes allDefs (aspkg_expr_types pkg),
+        aspkg_provenance = anchorSourceProvenance allDefs (aspkg_provenance pkg) }

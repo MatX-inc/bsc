@@ -1,0 +1,67 @@
+package TypeLinksProvMod where
+
+import Vector
+
+struct FrameHdr =
+    fhTag :: Bit 8
+    fhLen :: Bit 16
+    fhFlag :: Bool
+  deriving (Bits, Eq)
+
+data Phase = PhIdle | PhLoad | PhRun | PhDone
+  deriving (Bits, Eq)
+
+data Outcome = OutNone | OutHit (Bit 8) | OutMiss (Bit 8)
+  deriving (Bits, Eq)
+
+interface TypeLinksProvIfc =
+    stepAll :: Bit 2 -> Bit 8 -> Bool -> ActionValue (Bit 8)
+    peekFused :: Bit 24
+    peekPushed :: Bool -> Bit 16
+    peekOutcome :: Bit 8
+
+{-# verilog mkTypeLinksProvMod #-}
+mkTypeLinksProvMod :: Module TypeLinksProvIfc
+mkTypeLinksProvMod =
+    module
+        hdrReg :: Reg FrameHdr <- mkRegU
+        hdrAlt :: Reg FrameHdr <- mkRegU
+        phaseReg :: Reg Phase <- mkReg PhIdle
+        outReg :: Reg Outcome <- mkReg OutNone
+        vecReg :: Reg (Vector 4 (Bit 8)) <- mkRegU
+
+        interface
+            stepAll widx wval selAlt =
+                do
+                    let nextPhase =
+                            if phaseReg == PhLoad
+                            then PhRun
+                            else if phaseReg == PhRun
+                                 then PhDone
+                                 else PhLoad
+                    phaseReg := nextPhase
+                    let vecUpdated = update vecReg widx wval
+                    vecReg := vecUpdated
+                    let elem2 = select vecReg 2
+                    let nextOut =
+                            if selAlt
+                            then OutHit (elem2 + wval)
+                            else OutMiss (elem2 ^ wval)
+                    outReg := nextOut
+                    hdrReg := FrameHdr { fhTag = elem2; fhLen = zeroExtend wval; fhFlag = selAlt }
+                    return elem2
+
+            peekFused = hdrReg.fhTag ++ hdrReg.fhLen
+
+            peekPushed selAlt =
+                let chosen = if selAlt then hdrReg._read else hdrAlt._read
+                in chosen.fhLen
+
+            peekOutcome =
+                case outReg of
+                    OutHit x -> x + hdrReg.fhTag
+                    OutMiss y -> y ^ hdrAlt.fhTag
+                    OutNone ->
+                        case phaseReg of
+                            PhDone -> 8'hFF
+                            _ -> 0

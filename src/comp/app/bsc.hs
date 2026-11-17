@@ -133,7 +133,7 @@ import GenBup(BupFile(..), BupInput(..), BupStats(..), genBupFile, readBupFile,
 import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap, FuncInfo)
 import GenForeign(genForeign, checkForeign)
-import IExpand(iExpand)
+import IExpand(iExpandTL)
 import IExpandUtils(HeapData)
 import ITransform(iTransform)
 import IInline(iInline)
@@ -1298,9 +1298,13 @@ genModule
 
     -- "run" it
     start flags DFexpanded
-    imod0 <- iExpand errh flags symt alldefs fwrapper pps def
+    let tl_file = (dropSuf (mkAName (bdir flags) prefix modstr) ++ ".tl",
+                   srcName, modstr)
+    (imod0, tl_end) <- iExpandTL (Just (tl_file, mod_nm wi))
+                           errh flags symt alldefs fwrapper pps def
     iMCheck flags symt imod0 "expanded"
     t <- dump errh flags t DFexpanded dumpnames imod0
+    tl_end
     when (showIESyntax flags) (putStrLnF (show imod0))
     stats flags DFexpanded imod0
 
@@ -1712,9 +1716,10 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
         -- Generate muxes etc.
        start flags DFastate
        asmod0 <- aState errh flags pprops scheduleInfo atsPackage
-       let asmod = if genABin flags
-                   then anchorASPackage (propagateConditionalTypes
-                                         (propagateArgumentMuxTypes flags asmod0))
+       let asmod = anchorASPackage $
+                   if genABin flags
+                   then propagateConditionalTypes
+                            (propagateArgumentMuxTypes flags asmod0)
                    else asmod0
        -- after aState, method calls should no longer exist
        asMethCheck flags asmod "astate"
@@ -1743,8 +1748,9 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Wire and CReg inlining expose selections; close candidate sets
        -- before unused definitions disappear.
-       let asmodPreDrop = if genABin flags
-                          then anchorASPackage (propagateConditionalTypes asmodNoCReg)
+       let asmodPreDrop = anchorASPackage $
+                          if genABin flags
+                          then propagateConditionalTypes asmodNoCReg
                           else asmodNoCReg
 
        -- drop unused defs
@@ -1765,10 +1771,11 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        start flags DFsynthesize
        -- Derive primitive interpretations before lowering erases signedness.
        -- The same closure also joins aliases and selections exposed by AOpt.
-       let asynmod = aSynthesize flags
-                         (if genABin flags
-                          then anchorASPackage (propagatePrimitiveTypes aomod)
-                          else aomod)
+       let asynmod = aSynthesize flags $
+                         anchorASPackage $
+                         if genABin flags
+                         then propagatePrimitiveTypes aomod
+                         else aomod
        asCheck flags asynmod "asynthesize"
        -- Check that referenced signal names exist
        asSignalCheck flags asynmod "synthesize"
@@ -1777,8 +1784,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Transform to adapt to Verilog quirks
        start flags DFveriquirks
-       let aqmod = aVeriQuirks flags
-                       (if genABin flags then anchorASPackage asynmod else asynmod)
+       let aqmod = aVeriQuirks flags (anchorASPackage asynmod)
        -- this check is too strict on plus operator output size
        -- XXX fix the check, don't disable it
        when (not (keepAddSize flags))
@@ -1788,8 +1794,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Transform to adapt to Verilog quirks
        start flags DFfinalcleanup
-       let aumod = finalCleanup flags
-                       (if genABin flags then anchorASPackage aqmod else aqmod)
+       let aumod = finalCleanup flags (anchorASPackage aqmod)
        -- this check is too strict on plus operator output size
        -- XXX fix the check, don't disable it
        when (not (keepAddSize flags))

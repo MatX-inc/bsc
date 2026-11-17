@@ -12,7 +12,7 @@
 --  * if c 0 e  --> {n-bits}c & e
 --  * flatten & (in asyntax)?
 --  * check for name conflict in the generated IEFace
-module IExpand(iExpand, iExpandStrings) where
+module IExpand(iExpand, iExpandTL, iExpandStrings) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
 import Prelude hiding ((<>))
@@ -85,9 +85,26 @@ import qualified IfcBetterInfo as BetterInfo
 
 import ITransform(iTransExpr)
 
+import Data.IORef(IORef, newIORef, modifyIORef', readIORef)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
+import SourceProvenance(mapProvenance, dedupFacts)
+import TypeLinks(TLog, tlNewLog, tlFileOn, exprPtr, RawExpr(..),
+                 tlCell, tlCellNoType, tlCopy, tlCoerce,
+                 tlStoredValue, tlFixValue, tlArgsReset, tlStored, tlRedex,
+                 tlCondBegin, tlCondEnd, tlCondDecided, tlOutPayload,
+                 tlFallUnpack, tlPreRewrite, tlUnpackAt,
+                 tlOpEvent, tlOrdEvent, tlConLit, tlTagLit, tlSlotLit,
+                 tlElemEvent, tlConcatEvent, tlSetBits,
+                 tlRoot, tlCellEnd, tlFinalBegin, tlDef, tlMerge, tlFinalExpr,
+                 tlFinalTuple, tlNamed, tlRootAliases, tlAlias, tlClosedExpr,
+                 tlClosed, tlUnitExpr, tlInstance, tlInstArg, tlInstReset,
+                 tlOutReset, tlMethod, tlFinalEnd)
+import TypeLinksDecl(tlFieldTypes, tlConEncodings, tlBitsInstance,
+                     tlAlwaysMethod, tlParamTypes)
+import TypeLinksProvenance(RawTarget(..), harvestTypeLinksProvenance,
+                           resolveRawTarget, resolveProvFact)
 import qualified SignalNaming as SN
 import qualified ISignalNaming as ISN
 
@@ -285,7 +302,22 @@ iExpand :: ErrorHandle -> Flags ->
            SymTab -> M.Map Id HExpr ->
            Bool -> [PProp] -> HDef ->
            IO (IModule HeapData)
-iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
+iExpand errh flags symt alldefs is_noinlined_func pps def =
+  fst <$> iExpandTL Nothing errh flags symt alldefs is_noinlined_func pps def
+
+-- iExpand, writing the module's type-links file (TypeLinks) when given its
+-- path, package name and module name, and the name of the module as it
+-- was written (the definition whose type has the module's arguments at
+-- their declared types).  The evaluator records facts in memory as it runs
+-- and harvests SourceProvenance at the end of elaboration; when BSC_TYPELINKS
+-- requests a .tl file, the returned action writes the end-of-elaboration
+-- records once the caller has forced the module.
+iExpandTL :: Maybe ((FilePath, String, String), Id) ->
+             ErrorHandle -> Flags ->
+             SymTab -> M.Map Id HExpr ->
+             Bool -> [PProp] -> HDef ->
+             IO (IModule HeapData, IO ())
+iExpandTL tl_file errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
   -- the type-function rewrite rules are a pure view of the symbol table
   let atf_rules = buildATFRules symt
   -- unbuffer output if we're tracing
@@ -294,7 +326,9 @@ iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
          hSetBuffering stderr LineBuffering
   -- execute the static elaboration
   -- go is of type GOutput X, where X is the large tuple output of iExpandModuleDef
-  go <- runG errh flags symt alldefs atf_rules mi is_noinlined_func pps $
+  tl_log <- tlNewLog (fst <$> tl_file)
+  tlSetBits tl_log (tlBitsInstance symt)
+  go <- runG errh flags symt alldefs atf_rules mi is_noinlined_func pps tl_log $
             iExpandModuleDef def
   -- trace the steps and heap size
   when doTraceSteps $ putStrLn ("expansion steps: " ++ (show (go_steps go)))
@@ -496,9 +530,52 @@ iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
             else Nothing
 
       -- the expanded module
+      hasUserBinder c =
+          case IM.lookup c iheap of
+            Just (HNF { hc_name = rawName })
+              | Just name <- userHeapName rawName ->
+                  not (isLibraryId name || isInferredId name)
+            _ -> False
+      canonRawCells =
+          [ (c, RawExpr e)
+          | c <- cse_ptrs
+          , Just (HNF { hc_pexpr = P _ e }) <- [IM.lookup c iheap] ]
+      rootRawExprs =
+          [ RawExpr (irule_pred r) | IRules _ rs <- [rules], r <- rs ] ++
+          [ RawExpr (irule_body r) | IRules _ rs <- [rules], r <- rs ] ++
+          [ RawExpr e | ief <- ifc, Just (e, _) <- [ief_value ief] ] ++
+          [ RawExpr e | (_, sv) <- insts, e <- isv_iargs sv ]
+      lookupPtr p = IM.lookup (ptran p) ptr_expr_map
+      mergeProv kvs =
+          let mp = M.fromListWith (flip (++)) kvs
+              goSeen _ [] = []
+              goSeen seen ((k, _) : rest)
+                  | S.member k seen = goSeen seen rest
+                  | Just fs <- M.lookup k mp =
+                      let fs' = dedupFacts fs
+                      in (if null fs' then id else ((k, fs') :))
+                             (goSeen (S.insert k seen) rest)
+                  | otherwise = goSeen seen rest
+          in goSeen S.empty kvs
+
+  (_, rawProvTargets) <-
+      harvestTypeLinksProvenance
+          tl_log (changedOrId norm) (tlBitsInstance symt)
+          ptran hasUserBinder canonRawCells rootRawExprs
+
+  let resolvedProv = mergeProv
+          [ (targetExpr, fs')
+          | (tgt, rawFacts) <- rawProvTargets
+          , let mSelf = case tgt of
+                          RTCell c -> Just c
+                          RTExpr {} -> Nothing
+          , Just targetExpr <- [resolveRawTarget Nothing lookupPtr tgt]
+          , let fs' = mapMaybe (resolveProvFact mSelf lookupPtr) rawFacts
+          , not (null fs') ]
+
       imod0 = IModule mi is_noinlined_func mbe wi [] iks args
                      (go_clock_domains go) (go_resets go)
-                     insts' (go_port_types go) expr_types
+                     insts' (go_port_types go) expr_types resolvedProv
                      defs rules_cleanup ifc'
                      (go_ffcallNo go) comments_map
       -- if preserving method conditions, then remove the book-keeping info
@@ -515,7 +592,20 @@ iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
       traceM ("iExpand done mod\n" ++ ppReadable imod)
   when doProfile $
       traceM ("iExpand profile\n" ++ ppReadable (go_profile go))
-  return imod
+  let tl_end = when (tlFileOn tl_log) $
+                   iExpandTypeLinks tl_log iheap ptr_map ptr_info insts rules
+                                    rules_cleanup ifc (go_port_types go)
+                                    pps is_noinlined_func vresetinfo
+                                    (case tl_file of
+                                       Just (_, user_mod) ->
+                                           tlParamTypes flags symt (changedOrId norm)
+                                                        user_mod mi varginfo
+                                       Nothing -> [])
+                                    (changedOrId norm)
+                                    (tlFieldTypes flags symt (changedOrId norm))
+                                    (tlConEncodings symt)
+                                    (tlBitsInstance symt)
+  return (imod, tl_end)
 
 -- iExpandStrings
 --   Evaluate a toplevel definition of type List String to its strings, with
@@ -532,7 +622,8 @@ iExpandStrings errh flags symt alldefs (IDef i t e _) = do
                      EGeneric ("Cannot evaluate " ++ quote (getIdString i) ++
                                " to strings: its type is " ++ ppString t ++
                                ", not List String"))]
-  go <- runG errh flags symt alldefs atf_rules i False [] $
+  tl_log <- tlNewLog Nothing
+  go <- runG errh flags symt alldefs atf_rules i False [] tl_log $
             pushTopValueSchedNameScope i >> evalStringList e
   return (fst (goutput go))
 
@@ -699,6 +790,7 @@ removeInlinedPositions flags imod0 =
             imod_resets = map rmReset (imod_resets imod0),
             imod_state_insts =
                 [ (i, rmStateVar sv) | (i, sv) <- imod_state_insts imod0 ],
+            imod_provenance = mapProvenance rmExpr (imod_provenance imod0),
             imod_local_defs = map rmDef (imod_local_defs imod0),
             imod_rules = rmRules (imod_rules imod0),
             imod_interface = map rmIFace (imod_interface imod0)
@@ -726,6 +818,8 @@ removeInlinedPositions flags imod0 =
     rmConInfo (ICLazyArray t arr mu) =
         -- the array cells are heap references, thus leaves
         ICLazyArray t arr (fmap (\ (e1, e2) -> (rmExpr e1, rmExpr e2)) mu)
+    rmConInfo (ICLazyPack t ta tn x a) = ICLazyPack t ta tn (rmExpr x) (rmExpr a)
+    rmConInfo (ICLazyUnpack t ta tn x a) = ICLazyUnpack t ta tn (rmExpr x) (rmExpr a)
     rmConInfo (ICPred t p) = ICPred t (rmPred p)
     rmConInfo ic@(ICPrim {}) = ic
     rmConInfo ic@(ICForeign {}) = ic
@@ -790,6 +884,249 @@ removeInlinedPositions flags imod0 =
     rmIFace ief =
         ief { ief_value = fmap (\ (e, t) -> (rmExpr e, t)) (ief_value ief),
               ief_body = fmap rmRules (ief_body ief) }
+
+-- -----
+
+-- End-of-elaboration .tl writer (run only when BSC_TYPELINKS requests a .tl file).
+iExpandTypeLinks :: TLog -> IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
+                    [(HeapPointer, (HExpr, Maybe HDef))] ->
+                    [(Id, HStateVar)] -> HRules -> HRules -> [HEFace] ->
+                    PortTypeMap -> [PProp] -> Bool -> VResetInfo -> [(String, IType)] ->
+                    (IType -> IType) ->
+                    (IType -> Maybe [(Int, Int, String, Maybe IType)]) ->
+                    (IType -> Maybe [(Integer, Integer, Integer)]) ->
+                    (IType -> Maybe Bool) -> IO ()
+iExpandTypeLinks l iheap ptr_map ptr_info insts (IRules _ rules) (IRules _ rules_clean)
+                 ifc port_types pps is_func own_resets param_types norm field_types
+                 con_encodings has_bits = do
+    tlFinalBegin l norm
+    let cellExpr p = case IM.lookup p iheap of
+                       Just (HNF { hc_pexpr = P _ e }) -> Just e
+                       _ -> Nothing
+        closed_cells = IS.fromList [ c | (c, _) <- ptr_info,
+                                         Just e <- [cellExpr c], tlClosedExpr e ]
+        own_types = M.findWithDefault M.empty Nothing port_types
+        declared kind name
+          | kind == "port" || kind == "arg" = M.lookup (VName name) own_types
+          | kind == "param" = case M.lookup (VName name) own_types of
+                                Nothing -> lookup name param_types
+                                mt -> mt
+          | otherwise = Nothing
+    mapM_ (\ (c, (_, md)) -> do
+               case md of
+                 Just (IDef i t _ _) -> tlDef l c t (getIdString i)
+                 Nothing -> return ()
+               case cellExpr c of
+                 Just e -> do
+                     tlFinalExpr l (tlCellEnd c) e
+                     case e of
+                       IAps _ _ _ | IS.member c closed_cells -> tlClosed l c
+                       _ -> return ()
+                 Nothing -> return ())
+          ptr_info
+    mapM_ (\ (q, c) -> tlMerge l q c (IS.member c closed_cells)) (IM.toList ptr_map)
+    let rule_names | length rules_clean == length rules = map irule_name rules_clean
+                   | otherwise = map irule_name rules
+    mapM_ (\ (i, r) -> do
+               let name = getIdString i
+               np <- tlNamed l "rule" Nothing 1 (name ++ ".pred")
+               tlFinalExpr l np (irule_pred r)
+               nb <- tlNamed l "rule" Nothing (-1) (name ++ ".body")
+               tlFinalExpr l nb (irule_body r))
+          (zip rule_names rules)
+    aliases <- tlRootAliases l
+    meth_ends <- mapM (\ ief ->
+               case ief_value ief of
+                 Just (e, t) -> do
+                     let name = getIdString (ief_name ief)
+                         outs = case ief_fieldinfo ief of
+                                  Method { vf_outputs = os } -> map fst os
+                                  _ -> []
+                         decl = case outs of
+                                  [vn] -> M.lookup vn own_types
+                                  _ -> Nothing
+                         bitw ty = case ty of
+                                     ITAp c (ITNum n) | c == itBit -> fromInteger n
+                                     _ -> -1
+                         alias part x = case (M.lookup (name, part) aliases, x) of
+                                          (Just q, IRefT _ p _ _) | p == q -> Nothing
+                                          (mq, _) -> mq
+                         leaves vt =
+                             case outs of
+                               (_ : _ : _) ->
+                                   let ws = map bitw (itTupleElems vt)
+                                       widths | length ws == length outs = ws
+                                              | otherwise = map (const (-1)) outs
+                                   in  mapM (\ (k, vn, w) ->
+                                                 tlNamed l "out" (M.lookup vn own_types) w
+                                                         (name ++ "." ++ show (k :: Int)))
+                                            (zip3 [0 ..] outs widths)
+                               _ -> return []
+                         port_ends v ls = case (outs, ls) of
+                                            ([_], _) -> [v]
+                                            _ -> ls
+                     ends <- case e of
+                       IAps (ICon _ (ICTuple {})) _ [v, _]
+                         | isActionType t, not (tlUnitExpr v) -> do
+                           let vt = case t of
+                                      ITAp _ x -> x
+                                      _ -> t
+                           n <- tlNamed l "out" Nothing (-1) name
+                           nv <- tlNamed l "out" decl (bitw vt) (name ++ ".value")
+                           tlFinalExpr l nv v
+                           tlAlias l (alias 1 v) nv
+                           tlFinalTuple l n nv e
+                           ls <- leaves vt
+                           return (n, Just nv, port_ends nv ls)
+                       IAps (ICon _ (ICTuple {})) _ [_, _] | isActionType t -> do
+                           n <- tlNamed l "out" decl (bitw t) name
+                           tlFinalExpr l n e
+                           return (n, Nothing, [])
+                       _ -> do
+                           n <- tlNamed l "out" decl (bitw t) name
+                           tlFinalExpr l n e
+                           tlAlias l (alias 0 e) n
+                           ls <- leaves t
+                           return (n, Just n, port_ends n ls)
+                     return (Just (ief, t, ends))
+                 Nothing -> return Nothing)
+          ifc
+    mapM_ (\ (inst, sv) ->
+               tlInstance l (getIdString inst) (getVNameString (vName (isv_vmi sv))))
+          insts
+    mapM_ (\ (inst, sv) ->
+               let vmi = isv_vmi sv
+                   feeds a = case a of
+                     Param vn -> ("param", getVNameString vn)
+                     Port (vn, _) _ _ -> ("port", getVNameString vn)
+                     ClockArg i -> ("clock", case lookupInputClockWires i vmi of
+                                               Just (vn, _) -> getVNameString vn
+                                               Nothing -> "-")
+                     ResetArg i -> ("reset", case lookupInputResetWire i vmi of
+                                               Just vn -> getVNameString vn
+                                               Nothing -> "-")
+                     InoutArg vn _ _ -> ("inout", getVNameString vn)
+               in  mapM_ (\ (k, a) -> let (kind, name) = feeds a
+                                      in  tlInstArg l (getIdString inst) k kind name)
+                         (zip [0 ..] (vArgs vmi)))
+          insts
+    let reset_source Nothing = ("?", [])
+        reset_source (Just r)
+          | isNoReset r = ("none", [])
+          | otherwise =
+              case getResetWire r of
+                ICon i (ICModPort {}) -> ("in", [getIdString i])
+                IAps (ICon f (ICSel {})) _ [ICon src (ICStateVar { iVar = v })] ->
+                    let outs = output_resets (vRst (isv_vmi v))
+                        port = case (lookup f outs, lookup (unQualId f) outs) of
+                                 (Just (Just vn, _), _) -> getVNameString vn
+                                 (Nothing, Just (Just vn, _)) -> getVNameString vn
+                                 _ -> "-"
+                    in  ("inst", [getIdString src, port])
+                _ -> ("?", [])
+    mapM_ (\ (inst, sv) ->
+               mapM_ (\ (k, a) ->
+                          case a of
+                            ResetArg i ->
+                                let (what, names) = reset_source (lookup i (isv_resets sv))
+                                in  tlInstReset l (getIdString inst) k what names
+                            _ -> return ())
+                     (zip [0 ..] (vArgs (isv_vmi sv))))
+          insts
+    mapM_ (\ ief ->
+               case (ief_fieldinfo ief, ief_value ief) of
+                 (Reset _, Just (ICon _ (ICReset { iReset = r }), _)) ->
+                     let i = ief_name ief
+                         outs = output_resets own_resets
+                         port = case (lookup i outs, lookup (unQualId i) outs) of
+                                  (Just (Just vn, _), _) -> getVNameString vn
+                                  (Nothing, Just (Just vn, _)) -> getVNameString vn
+                                  _ -> "-"
+                         (what, names) = reset_source (Just r)
+                     in  tlOutReset l (getIdString i) port what names
+                 _ -> return ())
+          ifc
+    mapM_ (\ (inst, sv) ->
+               mapM_ (\ (k, e) -> do
+                          n <- tlNamed l "instarg" Nothing (-1)
+                                       (getIdString inst ++ ".arg" ++ show (k :: Int))
+                          tlFinalExpr l n e)
+                     (zip [0 ..] (isv_iargs sv)))
+          insts
+    mapM_ (\ (inst, sv) ->
+               let itypes = M.findWithDefault M.empty (Just inst) port_types
+                   iname = getIdString inst
+                   port kind vn name = tlNamed l kind (M.lookup vn itypes) (-1) name
+               in  mapM_ (\ f ->
+                              case f of
+                                Method { vf_name = m, vf_inputs = ins, vf_outputs = outs } -> do
+                                    let mname = iname ++ "." ++ getIdBaseString m
+                                    mapM_ (\ (k, (vn, _)) ->
+                                               port "instin" vn (mname ++ "." ++ show (k :: Int)))
+                                          (zip [0 ..] (concat ins))
+                                    case outs of
+                                      [(vn, _)] -> port "instout" vn mname >> return ()
+                                      (_ : _ : _) ->
+                                          mapM_ (\ (k, (vn, _)) ->
+                                                     port "instout" vn (mname ++ "." ++ show (k :: Int)))
+                                                (zip [0 ..] outs)
+                                      [] -> return ()
+                                _ -> return ())
+                         (vFields (isv_vmi sv)))
+          insts
+    -- Order port_types deterministically: module's own ports first, then
+    -- instances in elaboration order, then any remaining entries by name.
+    let inst_names_seen = S.fromList [ getIdString inst | (inst, _) <- insts ]
+        extra_inst_ptypes = L.sortOn (fmap getIdString . fst)
+            [ (Just inst, m)
+            | (Just inst, m) <- M.toList port_types
+            , not (S.member (getIdString inst) inst_names_seen) ]
+        ordered_port_types =
+            [ (Nothing, m) | Just m <- [M.lookup Nothing port_types] ] ++
+            [ (Just inst, m)
+            | (inst, _) <- insts
+            , Just m <- [M.lookup (Just inst) port_types] ] ++
+            extra_inst_ptypes
+    mapM_ (\ (minst, m) ->
+               mapM_ (\ (VName port, t) ->
+                          case minst of
+                            Nothing -> tlNamed l "ptype" (Just t) (-1) port
+                            Just inst -> tlNamed l "inst" (Just t) (-1)
+                                                 (getIdString inst ++ "$" ++ port))
+                     (M.toList m))
+          ordered_port_types
+    let always = tlAlwaysMethod pps
+        fields = catMaybes meth_ends
+    mapM_ (\ ((ief, t, (root, value, ports)), next) ->
+               case ief_fieldinfo ief of
+                 Method { vf_enable = men } | not (isRdyId (ief_name ief)) -> do
+                     let kind | isitActionValue_ t = "actionvalue"
+                              | isActionType t = "action"
+                              | otherwise = "value"
+                         (always_en, always_rdy) = always (ief_name ief)
+                         en = case men of
+                                Just (vn, _) | kind /= "value", not always_en ->
+                                    Just (getVNameString vn)
+                                _ -> Nothing
+                         (rdy, rdy_port) =
+                             case next of
+                               Just (rief, _, (rroot, _, _)) | isRdyId (ief_name rief) ->
+                                   (Just rroot,
+                                    case ief_fieldinfo rief of
+                                      Method { vf_outputs = [(vn, _)] }
+                                        | not always_rdy, not is_func ->
+                                          Just (getVNameString vn)
+                                      _ -> Nothing)
+                               _ -> (Nothing, Nothing)
+                     tlMethod l kind (getIdString (ief_name ief)) en rdy rdy_port
+                              root value ports
+                              (map (getIdString . fst) (concat (ief_args ief)))
+                 _ -> return ())
+          (zip fields (map Just (drop 1 fields) ++ [Nothing]))
+    let meth_names = [ getIdString inst ++ "." ++ getIdBaseString m
+                     | (inst, sv) <- insts,
+                       Method { vf_name = m } <- vFields (isv_vmi sv) ]
+    tlFinalEnd l declared field_types con_encodings has_bits meth_names
 
 -- -----
 
@@ -1497,7 +1834,9 @@ iExpandMethod modId n args implicitCond clkRst@(curClk, _) (i, bi, ins, outs, e)
         -- should only be adding Bits)
         errG (reportNonSynthTypeInMethod modId i e')
      ILam li ty eb -> iExpandMethodLam modId n args implicitCond clkRst (i, bi, ins, outs, eb) li ty p
-     _ -> iExpandMethod' implicitCond curClk (i, bi, outs, e') p
+     _ -> do
+        tlIO (\ l -> tlRoot l i 0 (exprPtr ee))
+        iExpandMethod' implicitCond curClk (i, bi, outs, e') p
     saveEvaluatedSourceTypes ee value
     return result
 
@@ -1563,7 +1902,11 @@ iExpandMethod' implicitCond curClk (i, bi, outs, e0) p0 = do
                          -- tuples are allowable for ActionValue methods only
                          IAps f@(ICon _ (ICTuple {})) ts [e1, e2] |
                                 isActionType methType ->
-                             do (P p1 e1', ws_a) <- evalUHNF e1
+                             do (ee1, P p1a e1a) <- evalUHSrc e1
+                                tlIO (\ l -> tlRoot l i 1 (exprPtr ee1))
+                                (P p1b e1', ws_a) <- walkNF e1a
+                                saveEvaluatedSourceTypes ee1 e1'
+                                let p1 = pConj p1b p1a
                                 (P p2 e2', ws_b) <- evalUHNF e2
                                 -- the pair is (value, action); the action's
                                 -- conditions go first, as the method body
@@ -1801,7 +2144,9 @@ handlePrim isMFix curClkRstn ns p ea@(IAps (ICon _ (ICPrim { primOp = PrimModule
         when doDebug $ traceM "handlePrim: enter PrimModuleFix"
         showModProgress ns ("Attempting recursive module instantiation")
         let name = stateLocToId ns
+        tl_ptr <- tlNextPtr
         (ptr, ref) <- addHeapCell "prim-mod-fix" (HLoop (Just name))
+        tlIO (\ l -> tlCell l tl_ptr t "prim-mod-fix")
         let rt = IRefT t ptr (S.singleton $ getPosition name) ref
         stno <- getStateNo
         old_rblobs <- getSavedRules
@@ -1810,8 +2155,10 @@ handlePrim isMFix curClkRstn ns p ea@(IAps (ICon _ (ICPrim { primOp = PrimModule
         new_rblobs <- getSavedRules
         -- correctly writing the recursive reference (making sure it is evaluated and unheaped)
         -- requires some contortions
-        _ <- do e'' <- (addPredG p' $ eval1 e') >>= unheap
+        _ <- do pe_fix@(P _ e_fix) <- addPredG p' $ eval1 e'
+                e'' <- unheap pe_fix
                 updHeap "moduleFix" (ptr, ref) (HWHNF e'' Nothing)
+                tlIO (\ l -> tlFixValue l tl_ptr e_fix)
         -- handle any recursively deferred rules
         oldAggressive <- isAggressive
         mapM_ (\(agg,a,b,c,d) -> do
@@ -2926,9 +3273,11 @@ walkNF e =
     nfError "walkNF" e
   else do
     when (doDebug || doTraceNF) $ traceM ("walkNF " ++ ppReadable e)
-    let upd p next@(IRefT _ _ _ _) ws = do
+    let upd p next@(IRefT _ src _ _) ws = do
             case e of
-              IRefT _ _ _ ref -> shareHeapSourceTypes ref next
+              IRefT _ w _ ref -> do
+                  shareHeapSourceTypes ref next
+                  tlIO (\ l -> tlCopy l "walk" w src)
               _ -> return ()
             P p' e' <- unheap (P p next)
             upd p' e' ws
@@ -3147,10 +3496,20 @@ walkNF e =
                 -- the walkNF below updates to HNF on the first walk
                 -- (later walks are the memoized-ref fast path).
                 (ICon _ (ICLazyPack { lzApplied = a })) -> do
+                    case e of
+                      IRefT _ w _ _ ->
+                          let src = exprPtr a
+                          in when (src >= 0) $ tlIO (\ l -> tlCopy l "mat" w src)
+                      _ -> return ()
                     _ <- evalUHV a  -- force the applied cell to WHNF
                     (P pa a', ws) <- walkNF a
                     upd (pConj pa p0) a' ws
                 (ICon _ (ICLazyUnpack { lzApplied = a })) -> do
+                    case e of
+                      IRefT _ w _ _ ->
+                          let src = exprPtr a
+                          in when (src >= 0) $ tlIO (\ l -> tlCopy l "mat" w src)
+                      _ -> return ()
                     _ <- evalUHV a
                     (P pa a', ws) <- walkNF a
                     upd (pConj pa p0) a' ws
@@ -3228,8 +3587,33 @@ evalUH e = do
           ICon _ (ICLazyArray t _ u) | specialArr t u -> uhArray e e0 t p0
           _ -> do
             pe' <- uhUnheap e pe
+            h0 <- tlNextPtr
             e' <- uhHeaped pe
+            tlReheap e h0
             return (e', pe')
+
+tlReheap :: HExpr -> HeapPointer -> G ()
+tlReheap e h0 = do
+  h1 <- tlNextPtr
+  when (h1 == h0 + 1) $
+    case e of
+      IRefT _ src _ _ -> tlIO (\ l -> tlCopy l "uh" h0 src)
+      _ -> return ()
+
+tlHeapNew :: G HExpr -> G (HExpr, HeapPointer)
+tlHeapNew act = do
+  h0 <- tlNextPtr
+  e' <- act
+  h1 <- tlNextPtr
+  let p | h1 == h0 + 1 = h0
+        | h1 == h0 = exprPtr e'
+        | otherwise = -1
+  return (e', p)
+
+evalUHP :: HExpr -> G (HExpr, PExpr, HeapPointer)
+evalUHP e = do
+  (e', pe') <- evalUH e
+  return (e', pe', exprPtr e')
 
 -- evalUH without making an "eval-uh" heap cell, returning the pre-unheap
 -- source expression (so saveEvaluatedSourceTypes still observes any heap
@@ -3291,7 +3675,9 @@ uhFuseArray e e0@(ICon _ (ICLazyArray t arr u)) p0 = do
             -- traceM ("specialArr: " ++ ppReadable (e, e0, e'))
             let pe = P (pConj p' p0) e'
             case e of
-              IRefT _ p _ r -> updHeap "evalUH-array" (p, r) (HWHNF pe Nothing)
+              IRefT _ p _ r -> do
+                  updHeap "evalUH-array" (p, r) (HWHNF pe Nothing)
+                  tlIO (\ l -> tlStoredValue l p e')
               _ -> return ()
             return pe
 uhFuseArray _ e0 _ = internalError ("uhFuseArray: " ++ ppReadable e0)
@@ -3481,10 +3867,11 @@ evalStaticOp' doUH doBK doUndet e resultType handler = do
     keepName :: PExpr -> G PExpr
     keepName res =
       case e of
-        IRefT _ _ _ r -> do
+        IRefT _ q _ r -> do
             old_cell <- getHeap r
             let old_name = hc_name old_cell
-            res' <- toHeapWHNF "set-sel-pos" resultType res old_name
+            (res', res_ptr) <- tlHeapNew (toHeapWHNF "set-sel-pos" resultType res old_name)
+            tlIO (\ l -> tlCopy l "selpos" res_ptr q)
             return $ P pTrue res'
         _ -> return res
 
@@ -3742,8 +4129,8 @@ evalApAccum tag fz exprCtx pend typeCtx Nothing e@(IAps f ts es) args
                         addPredG p $ arm sb b
                     ICon _ (ICInt { iVal = IntLit { ilValue = 1 } }) ->
                         addPredG p $ arm sa a
-                    _ -> doIfCond f t c' r (eSubstClosed exprCtx a)
-                                           (eSubstClosed exprCtx b)
+                    _ -> doIfCond (-1) f t c' r (eSubstClosed exprCtx a)
+                                                (eSubstClosed exprCtx b)
                 _ -> flush
             [] -> flush
         [] -> flush
@@ -3872,14 +4259,22 @@ evalHeap (ptr, ref) = do
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, e))
         -- we don't use evalUH here because we don't want to trigger
         -- lazy bit-array fusing
+        tlIO (\ l -> tlCondBegin l ptr e)
         pe <- eval1 e
+        tlIO tlCondEnd
         shareHeapSourceTypes ref (case pe of P _ value -> value)
         pe' <- unheap pe
+        copied <- case pe of
+          P _ (IRefT _ src _ _) -> do tlIO (\ l -> tlCopy l "copy" ptr src)
+                                      return True
+          _ -> return False
+        case pe of
+          P _ e_res -> tlIO (\ l -> tlRedex l ptr e e_res)
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, pe'))
         case pe' of
             P _ (IAps (ICon _ (ICUndet { })) _ _) -> internalError ("evalHeap: " ++ ppReadable (ptr, pe'))
             -- create IRefs for ICTuple fields to prevent repeat evaluation after selection
-            P p (IAps f@(ICon con_name (ICTuple { fieldIds = field_names })) ts as) -> do
+            P p e_ap@(IAps f@(ICon con_name (ICTuple { fieldIds = field_names })) ts as) -> do
                 -- prefix field names with the struct cell's name unless it is
                 -- a library or bad name
                 let prefix | Just pfx <- expr_name, not (isLibraryId pfx || isBadId pfx) =
@@ -3887,8 +4282,11 @@ evalHeap (ptr, ref) = do
                            | otherwise = id
                     struct_field_names =
                          [Just (prefix (unQualId name)) | name <- field_names]
-                argTys <- takeArgTypes (length as) <$> instFunType (iGetType f) ts
-                as' <- mapM (\(t, a, n) -> toHeap "move-tuple" t a n) $ zip3 argTys as struct_field_names
+                ft <- instFunType (iGetType f) ts
+                let argTys = takeArgTypes (length as) ft
+                tlIO tlArgsReset
+                as' <- mapM (\(t, a, n) -> tlHeaped (toHeap "move-tuple" t a n)) $ zip3 argTys as struct_field_names
+                when (not copied) $ tlIO (\ l -> tlStored l ptr e_ap ft)
                 when doDebug $ traceM ("evalHeap move #1\n" ++ ppReadable (zip as' as))
                 let pe'' = P p (IAps f ts as')
                 {-           (mapIExprPosition cross
@@ -3899,7 +4297,7 @@ evalHeap (ptr, ref) = do
                 return pe''
             -- create IRefs for arguments of other potentially non-strict
             -- applications (e.g., ICCon) to prevent repeat evaluation later
-            P p (IAps f ts as) -> do
+            P p e_ap@(IAps f ts as) -> do
                 let isLazyOp (ICon _ (ICCon {})) = True
                     isLazyOp (ICon _ (ICTuple {})) = True
                     isLazyOp (ICon _ (ICPrim _ p)) | p == PrimChr ||
@@ -3907,11 +4305,15 @@ evalHeap (ptr, ref) = do
                                                    | strictPrim p = internalError ("evalHeap - prim should be evaluated:" ++ ppReadable (p, pe'))
                                                    | otherwise = True
                     isLazyOp _ = False
-                argTys <- takeArgTypes (length as) <$> instFunType (iGetType f) ts
-                let th t a = if isLazyOp f
+                ft <- instFunType (iGetType f) ts
+                let argTys = takeArgTypes (length as) ft
+                    th t a = tlHeaped $
+                             if isLazyOp f
                              then toHeap "move-ap" t a Nothing
                              else toHeapWHNF "move-ap" t (P pTrue a) Nothing
+                tlIO tlArgsReset
                 as' <- zipWithM th argTys as
+                when (not copied) $ tlIO (\ l -> tlStored l ptr e_ap ft)
                 when doDebug $ traceM ("evalHeap move #2\n" ++ ppReadable (zip as' as))
                 let pe'' = P p (IAps f ts as')
                 {-            (mapIExprPosition cross
@@ -3923,6 +4325,9 @@ evalHeap (ptr, ref) = do
             _ -> do
                 let new_cell = HWHNF {hc_pexpr = pe', hc_name = expr_name }
                 updHeap "evalHeap" (ptr,ref) new_cell
+                when (not copied) $
+                    case pe' of
+                      P _ e_val -> tlIO (\ l -> tlStoredValue l ptr e_val)
                 return pe'
 
 -- used when IAps expr@(ICon name coninfo) ...
@@ -4159,7 +4564,8 @@ conAp' _ (ICIs { conTagInfo = cti }) i as =
       [ E e ] -> do
           let tys = takeT as
               ty = itBit1
-          evalStaticOp' True True False e ty (doIs i tys cti)
+          tlWholeOp i tys e [] $ \ cnt ->
+              evalStaticOp' True True False e ty (tlCounting cnt (doIs i tys cti))
       _ -> internalError ("conAp': ICIs: " ++ ppReadable (mkAp i as))
 conAp' c (ICOut { iConType = outty, conTagInfo = cti }) o as = do
     case dropT as of
@@ -4175,7 +4581,8 @@ conAp' c (ICOut { iConType = outty, conTagInfo = cti }) o as = do
               toHeapArg a = return a
           as'' <- mapM toHeapArg as'
 -}
-          evalStaticOp' True True False e resType (doOut o c tys ty cti as')
+          tlWholeOp o tys e as' $ \ cnt ->
+              evalStaticOp' True True False e resType (tlCounting cnt (doOut o c tys ty cti as'))
       _ -> internalError ("conAp': ICOut: " ++ ppReadable (mkAp o as))
 conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
     case dropT as of
@@ -4191,7 +4598,8 @@ conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
               toHeapArg a = return a
           as'' <- mapM toHeapArg as'
 -}
-          evalStaticOp' True True False e resType (doSel sel c tys ty n as')
+          tlWholeOp sel tys e as' $ \ cnt ->
+              evalStaticOp' True True False e resType (tlCounting cnt (doSel sel c tys ty n as'))
       _ -> internalError ("conAp': ICSel: " ++ ppReadable (mkAp sel as))
 
 -- constructors are non-strict
@@ -4201,7 +4609,10 @@ conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
 -- improveIf
 conAp' i (ICCon ict cti) _ as | hasNoArg = do
     norm <- getTypeNormalizer
-    evalAp "ICCon Enum" icPrimChr (T sizeNum :  T (norm resultType) :  E bitExpr : as')
+    let res_t = norm resultType
+    r <- evalAp "ICCon Enum" icPrimChr (T sizeNum :  T res_t :  E bitExpr : as')
+    when (null as') $ tlIO (\ l -> tlConLit l res_t cti (tlRes r))
+    return r
   where sizeNum    = mkNumConT (tagSize cti)
         bitExpr    = mkAp icPrimIntegerToBit [T sizeNum, E (iMkLit itInteger (conTag cti))]
         (hasNoArg, resultType, argsToDrop) =
@@ -4409,8 +4820,13 @@ conAp' _ (ICPrim _ PrimGetModuleName) _ as = internalError ("PrimGetModuleName "
 -- ord C_n  -->  n
 -- ord (if c t e)  -->  if c (ord t) (ord e)
 -- ord _  -->  _
-conAp' _ (ICPrim _ PrimOrd) o [T f, T sz, E e] = evalStaticOp e (aitBit sz) handleOrd
-  where handleOrd (IAps (ICon _ (ICPrim _ PrimChr)) _ [e']) = eval1 e'
+conAp' _ (ICPrim _ PrimOrd) o [T f, T sz, E e] =
+    evalStaticOp' True True True e (aitBit sz) handleOrd'
+  where handleOrd' ee (p, v) = addPredG p $ do
+            r <- handleOrd v
+            tlIO (\ l -> tlOrdEvent l f (uhOwn ee) v (tlRes r))
+            return r
+        handleOrd (IAps (ICon _ (ICPrim _ PrimChr)) _ [e']) = eval1 e'
         handleOrd (IAps (ICon _ (ICCon { conTagInfo = cti })) _ _) =
             return $ pExpr $ iMkLitAt (getIExprPosition e) (aitBit sz) (conTag cti)
         handleOrd e' = nfError "primOrd" e'
@@ -4495,18 +4911,21 @@ conAp' _ (ICPrim _ PrimUnpack) _ (T ta : T tn : E _ : E x : rest)
 -- holding.
 conAp' i ci@(ICPrim _ PrimPack) _ [T ta, T tn, E d, E x]
     | not doEagerPackUnpack, tn /= ITNum 0, tn /= ITNum 1 = do
-        (xee, P px xw) <- evalUH x
+        (xee, P px xw, xp) <- evalUHP x
         case xw of
           ICon _ (ICLazyUnpack { lzTa = ta', lzOrig = b }) | ta == ta' ->
               do saveSourceType ta b
+                 tlIO (\ l -> tlCoerce l 'p' "cancel" ta tn (exprPtr b, Just b) (xp, Just xee))
                  return (P px b)
-          ICon _ (ICUndet {}) ->
+          ICon _ (ICUndet {}) -> do
+              tlIO (\ l -> tlCoerce l 'p' "undet" ta tn (-1, Nothing) (xp, Just xee))
               addPredG px $ unfoldBitsCoercion "PrimPack" idPack d [E xee]
           _ -> do
               sel <- mkBitsMethodSel i (iConType ci) idPack
-              aref <- toHeap "coerce" (aitBit tn)
-                             (IAps sel [ta, tn] [d, xee]) Nothing
+              (aref, apt) <- tlHeapNew $
+                  toHeap "coerce" (aitBit tn) (IAps sel [ta, tn] [d, xee]) Nothing
               saveSourceType ta aref
+              tlIO (\ l -> tlCoerce l 'p' "hold" ta tn (apt, Nothing) (xp, Just xw))
               let node = ICLazyPack { iConType = aitBit tn, lzTa = ta,
                                       lzTn = tn, lzOrig = xee,
                                       lzApplied = aref }
@@ -4519,19 +4938,28 @@ conAp' i ci@(ICPrim _ PrimPack) _ [T ta, T tn, E d, E x]
               return (P pTrue (ICon i node))
 conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
     | not doEagerPackUnpack, tn /= ITNum 0, tn /= ITNum 1 = do
-        (xee, P px xw) <- evalUH x
+        (xee, P px xw, xp) <- evalUHP x
         saveSourceType ta xee
         case xw of
-          ICon _ (ICLazyPack { lzTa = ta', lzOrig = v }) | ta == ta' ->
+          ICon _ (ICLazyPack { lzTa = ta', lzOrig = v, lzApplied = a }) | ta == ta' -> do
+              tlIO (\ l -> tlCoerce l 'u' "cancel" ta tn (exprPtr a, Just xee) (exprPtr v, Just v))
               return (P px v)
-          ICon _ (ICUndet {}) ->
+          ICon _ (ICUndet {}) -> do
+              tlIO (\ l -> tlCoerce l 'u' "undet" ta tn (xp, Just xee) (-1, Nothing))
               addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
-          ICon _ (ICInt {}) ->
+          ICon _ (ICInt {}) -> do
+              tlIO (\ l -> tlCoerce l 'u' "const" ta tn (xp, Just xee) (-1, Nothing))
               addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
           _ -> do
               sel <- mkBitsMethodSel i (iConType ci) idUnpack
-              aref <- toHeap "coerce" ta
-                             (IAps sel [ta, tn] [d, xee]) Nothing
+              (aref, apt) <- tlHeapNew $
+                  toHeap "coerce" ta (IAps sel [ta, tn] [d, xee]) Nothing
+              case xw of
+                ICon _ (ICLazyPack { lzTa = ta', lzTn = tn', lzOrig = v, lzApplied = a }) ->
+                    tlIO (\ l -> do tlCoerce l 'u' "repack" ta tn (exprPtr a, Just xee) (apt, Nothing)
+                                    tlCoerce l 'p' "repack" ta' tn' (exprPtr a, Just xee) (exprPtr v, Just v))
+                _ -> tlIO (\ l -> tlCoerce l 'u' "hold" ta tn (xp, Just xw) (apt, Nothing))
+              tlIO (\ l -> tlUnpackAt l apt i)
               let node = ICLazyUnpack { iConType = ta, lzTa = ta,
                                         lzTn = tn, lzOrig = xee,
                                         lzApplied = aref }
@@ -4546,9 +4974,13 @@ conAp' _ (ICPrim _ PrimPack) _ [T ta, T tn, E d, E x] = do
         saveSourceType ta e'
         return (P p e')
 conAp' _ (ICPrim _ PrimUnpack) _ (T ta : T tn : E d : E x : rest) = do
+        tl_own <- if null rest && tn == ITNum 1 then tlTakeCond else return 0
         x' <- toHeap "unpack-source-type" (aitBit tn) x Nothing
         saveSourceType ta x'
-        unfoldBitsCoercion "PrimUnpack" idUnpack d (E x' : rest)
+        r <- unfoldBitsCoercion "PrimUnpack" idUnpack d (E x' : rest)
+        when (null rest && tn == ITNum 1 && tl_own < 0) $
+            tlIO (\ l -> tlFallUnpack l ta tn x')
+        return r
 conAp' _ (ICPrim _ PrimPack) _ (T _ : T _ : E d : rest) =
         unfoldBitsCoercion "PrimPack" idPack d rest
 conAp' _ (ICPrim _ PrimUnpack) _ (T _ : T _ : E d : rest) =
@@ -4991,6 +5423,12 @@ conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
                     -- we used to evaluate further here, but that shouldn't
                     -- be necessary (and probably indicates a bug elsewhere)
                     when (doDebug || doTrans) $ traceM ("conAp: iTransform result: " ++ ppReadable e')
+                    case op of
+                      PrimConcat -> tlIO (\ l -> tlPreRewrite l [ t | T t <- as' ] [ x | E x <- as' ]
+                                                              [ x | E x <- ees ] e')
+                      _ -> return ()
+                    tlIO (\ l -> tlConcatEvent l op [ t | T t <- as' ] [ x | E x <- as' ]
+                                               [ x | E x <- ees ] e')
                     return (P p e')
                   _ -> bldAp' "Prim 2" fe ees
 
@@ -5072,18 +5510,22 @@ conAp' i (ICPrim _ PrimArrayUpdate) f as = do
 
 conAp' sel_i sel_c@(ICPrim _ PrimArrayDynSelect) _
            as@(T elem_ty: T sz_t@(ITNum idx_sz): E arr_e: E idx_e: as') = do
+  tl_own <- tlTakeCond
   (idx_e', _) <- evalUH idx_e
-  let handleDynSel (ICon arr_i (ICLazyArray arr_ty arr Nothing)) = do
+  let handleDynSel av@(ICon arr_i (ICLazyArray arr_ty arr Nothing)) = do
         -- check for constant index
         case idx_e' of
-          ICon _ (ICInt { iVal = IntLit { ilValue = n } }) ->
+          ICon _ (ICInt { iVal = IntLit { ilValue = n } }) -> do
+              tlIO (\ l -> tlCondDecided l tl_own (fromInteger idx_sz) n)
               let (_, idx_max) = Array.bounds arr
-              in  if (n > idx_max)
+              if (n > idx_max)
                   then let pos =  getPosition sel_i
                            u = undefKindToInteger UDontCare
                        in  doBuildUndefined elem_ty pos u as'
-                  else let (ArrayCell ptr ref) = arr Array.! n
-                       in  evalAp "DynSel const" (IRefT elem_ty ptr S.empty ref) as'
+                  else do
+                       let (ArrayCell ptr ref) = arr Array.! n
+                       when (null as') $ tlIO (\ l -> tlElemEvent l av n ptr)
+                       evalAp "DynSel const" (IRefT elem_ty ptr S.empty ref) as'
           _ -> do
             -- check if they're all the same
             -- (this will also convert selection from 1-element arrays
@@ -5433,6 +5875,7 @@ doArraySelect f (T elem_t : E arr_e : E idx_e : as) = do
         let handleArraySelect ic@(ICon _ (ICLazyArray { iArray = arr })) =
                 if iArrayInRange arr index then do
                   (p, r) <- iArraySelect arr index
+                  when (null as) $ tlIO (\ l -> tlElemEvent l ic index p)
                   evalAp "array-select" (IRefT elem_t p S.empty r) as
                 else
                   -- this is the same as the "paradox handling" in doOut
@@ -5450,6 +5893,7 @@ doArraySelect f (T elem_t : E arr_e : E idx_e : as) = do
                     idx_bits_e = ICon idx_i (idx_ic { iConType = upd_idx_t })
                     eq_e = iePrimEQ (ITNum upd_idx_sz) upd_idx_e idx_bits_e
                     if_e = ieIf elem_t eq_e upd_val_e res0
+                tlIO (\ l -> tlSlotLit l elem_t index idx_bits_e)
                 -- despite the name, this is actually 1 greater than the max
                 let max_upd_idx = 2 ^ upd_idx_sz
                     res = if (max_upd_idx > index) then if_e else res0
@@ -5503,25 +5947,34 @@ doArrayUpdate f as = internalError("IExpand.doArrayUpdate : " ++ ppReadable f ++
 -- if without extra arguments
 doIf :: HExpr -> [Arg] -> G PExpr
 doIf f@(ICon _ (ICPrim _ PrimIf)) [T t, E cnd, E thn, E els] = do
-    r <- evalUH cnd
-    doIfCond f t cnd r thn els
+    own <- tlTakeCond
+    doIfOwn own f t cnd thn els
 doIf f as = internalError("IExpand.doIf : " ++ ppReadable f ++ ppReadable as)
 
+doIfOwn :: HeapPointer -> HExpr -> IType -> HExpr -> HExpr -> HExpr -> G PExpr
+doIfOwn own f t cnd thn els = do
+    r <- evalUH cnd
+    doIfCond own f t cnd r thn els
+
 -- doIf once the condition is evaluated
-doIfCond :: HExpr -> IType -> HExpr -> (HExpr, PExpr) -> HExpr -> HExpr -> G PExpr
-doIfCond f t cnd (ecnd, P p cnd') thn els = do
+doIfCond :: HeapPointer -> HExpr -> IType -> HExpr -> (HExpr, PExpr) -> HExpr -> HExpr -> G PExpr
+doIfCond own f t cnd (ecnd, P p cnd') thn els = do
     when doDebug $ traceM ("if " ++ ppReadable (cnd, cnd'))
     --when doDebug $ traceM ("if2 " ++ show cnd')
     case cnd' of
-      ICon _ (ICInt { iVal = IntLit { ilValue = 0 } }) -> addPredG p $ eval1 els
-      ICon _ (ICInt { iVal = IntLit { ilValue = 1 } }) -> addPredG p $ eval1 thn
+      ICon _ (ICInt { iVal = IntLit { ilValue = 0 } }) -> do
+          tlIO (\ l -> tlCondDecided l own 1 0)
+          addPredG p $ eval1 els
+      ICon _ (ICInt { iVal = IntLit { ilValue = 1 } }) -> do
+          tlIO (\ l -> tlCondDecided l own 1 1)
+          addPredG p $ eval1 thn
       -- a held coercion as the condition: squeeze it, so that constant
       -- conditions still fold statically (rule pruning, always-ready
       -- proofs) exactly as without holding
       ICon _ (ICLazyPack { lzApplied = a }) ->
-          addPredG p $ doIf f [T t, E a, E thn, E els]
+          addPredG p $ doIfOwn own f t a thn els
       ICon _ (ICLazyUnpack { lzApplied = a }) ->
-          addPredG p $ doIf f [T t, E a, E thn, E els]
+          addPredG p $ doIfOwn own f t a thn els
       _ ->
       -- The condition did not evaluate, but there is still a chance to proceed.
       -- If the then and else branch are "equal" the condition can be ignored.
@@ -5587,9 +6040,12 @@ improveIf f t cnd thn@(ICon i1 n1@(ICLazyPack { lzTa = ta1, lzTn = tn1,
        -- conAp' builds it with evalUH, and the cancellation path hands
        -- it to consumers that unheap it), so heap the residual payload
        -- mux in WHNF state; lzApplied stays unevaluated, as at creation.
-       o' <- toHeapWHNF "improve-if-held" ta1 (P pTrue (IAps f [ta1] [cnd, o1, o2])) Nothing
-       a' <- toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
+       (o', op) <- tlHeapNew $
+         toHeapWHNF "improve-if-held" ta1 (P pTrue (IAps f [ta1] [cnd, o1, o2])) Nothing
+       (a', app) <- tlHeapNew $
+         toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
        saveSourceType ta1 a'
+       tlIO (\ l -> tlCoerce l 'p' "merge" ta1 tn1 (app, Nothing) (op, Nothing))
        return (ICon i1 (n1 { lzOrig = o', lzApplied = a' }), True)
 improveIf f t cnd thn@(ICon i1 n1@(ICLazyUnpack { lzTa = ta1, lzTn = tn1,
                                                   lzOrig = o1, lzApplied = a1 }))
@@ -5603,9 +6059,12 @@ improveIf f t cnd thn@(ICon i1 n1@(ICLazyUnpack { lzTa = ta1, lzTn = tn1,
        -- the payload if has the packed type (Bit tn), the applied if
        -- the payload type (t = ta = iConType of the node)
        -- see the pack arm above: lzOrig must be an evaluated cell
-       o' <- toHeapWHNF "improve-if-held" (aitBit tn1) (P pTrue (IAps f [aitBit tn1] [cnd, o1, o2])) Nothing
+       (o', op) <- tlHeapNew $
+         toHeapWHNF "improve-if-held" (aitBit tn1) (P pTrue (IAps f [aitBit tn1] [cnd, o1, o2])) Nothing
        saveSourceType ta1 o'
-       a' <- toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
+       (a', app) <- tlHeapNew $
+         toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
+       tlIO (\ l -> tlCoerce l 'u' "merge" ta1 tn1 (op, Nothing) (app, Nothing))
        return (ICon i1 (n1 { lzOrig = o', lzApplied = a' }), True)
 -- Muxing a held coercion against an undefined value drops the undefined
 -- side and keeps the held node, subject to the same improveIfUndet
@@ -6092,19 +6551,46 @@ pushBNot' pos fe visited e = do
 
 -----------------------------------------------------------------------------
 
+uhOwn :: UHCell -> Maybe HExpr
+uhOwn (UHExpr x) = Just x
+uhOwn (UHLater _) = Nothing
+
+tlRes :: PExpr -> HExpr
+tlRes (P _ x) = x
+
+tlCounting :: Maybe (IORef Int) -> (UHCell -> (HPred, HExpr) -> G PExpr) ->
+              UHCell -> (HPred, HExpr) -> G PExpr
+tlCounting Nothing h = h
+tlCounting (Just cnt) h = \ ee pe -> do
+    liftIO (modifyIORef' cnt (+ 1))
+    h ee pe
+
+tlWholeOp :: HExpr -> [IType] -> HExpr -> [Arg] -> (Maybe (IORef Int) -> G PExpr) -> G PExpr
+tlWholeOp hd tys e as act = do
+  mcnt <- tlIOR (\ _ -> newIORef (0 :: Int))
+  r <- act mcnt
+  case mcnt of
+    Just cnt | null as -> do
+        k <- liftIO (readIORef cnt)
+        when (k /= 1) $
+            tlIO (\ l -> tlOpEvent l True hd tys (Just e) e Nothing (tlRes r))
+    _ -> return ()
+  return r
+
 doIs :: HExpr -> [IType] -> ConTagInfo ->
         UHCell -> (HPred,  HExpr) -> G PExpr
-doIs is tys cti ee (p, e) =
-    case e of
+doIs is tys cti ee (p, e) = do
+  r <- case e of
         -- C? (C' e)  -->  True/False
         IAps (ICon _ (ICCon { conTagInfo = cti' })) _ [_] ->
             addPredG p $
             return $ pExpr $ iMkBool (conNo cti == conNo cti')
 
         -- C_n? (primChr e) --> e == conTag
-        IAps (ICon _ (ICPrim _ PrimChr)) [sz,_] [e] ->
+        IAps (ICon _ (ICPrim _ PrimChr)) [sz,_] [e] -> do
+            tlIO (\ l -> tlTagLit l is tys n_lit)
             addPredG p $
-            eval1 (iePrimEQ sz e n_lit)
+              eval1 (iePrimEQ sz e n_lit)
           where pos = getIExprPosition e
                 n_lit = iMkLitAt pos (aitBit sz) (conTag cti)
 
@@ -6117,15 +6603,36 @@ doIs is tys cti ee (p, e) =
 
         -- otherwise fail
         _ -> internalError ("doIs: " ++ ppReadable (is, e))
+  tlIO (\ l -> tlOpEvent l False is tys (uhOwn ee) e Nothing (tlRes r))
+  return r
 
 doOut :: HExpr -> Id -> [IType] -> IType -> ConTagInfo -> [Arg] ->
          UHCell -> (HPred, HExpr) -> G PExpr
-doOut out c tys ty cti as ee (p, e) =
+doOut out c tys ty cti as ee (p, e) = do
+  r <- doOut' out c tys ty cti as ee (p, e)
+  when (null as) $
+      tlIO (\ l -> tlOpEvent l False out tys (uhOwn ee) e
+                             (case e of
+                                IAps (ICon _ (ICCon { conTagInfo = cti' })) _ [e']
+                                  | conNo cti == conNo cti' -> Just e'
+                                _ -> Nothing)
+                             (tlRes r))
+  return r
+
+doOut' :: HExpr -> Id -> [IType] -> IType -> ConTagInfo -> [Arg] ->
+          UHCell -> (HPred, HExpr) -> G PExpr
+doOut' out c tys ty cti as ee (p, e) =
     case e of
         -- outC (C e)  -->  e / _   (not error, because it's "convenient" -- L)
         IAps (ICon _ (ICCon { conTagInfo = cti' })) _ [e'] ->
             if conNo cti == conNo cti'
-            then addPredG p $ evalAp "outC C" e' as
+            then do
+                r <- addPredG p $ evalAp "outC C" e' as
+                when (null as) $
+                    tlIO (\ l -> case (e', r) of
+                                   (IRefT _ _ _ _, _) -> return ()
+                                   (_, P _ r_e) -> tlOutPayload l out tys r_e (uhOwn ee))
+                return r
             else addPredG p $
                  evalAp "out-1" (icUndet ty UNotUsed) as
 
@@ -6160,7 +6667,7 @@ doSel sel s tys ty n as ee (p, e) =
             -- if method conditions are not being preserved,
             -- just return the default result
             flags <- getFlags
-            if (not (methodConditions flags))
+            r <- if (not (methodConditions flags))
               then dflt_res
               else do
                 -- see if the selector has any positions that need preserving
@@ -6189,12 +6696,18 @@ doSel sel s tys ty n as ee (p, e) =
                         args = (T ty : E poss_e : E field_e : as)
                     --traceM("doSel IFC: " ++ ppReadable s)
                     addPredG p $ evalAp "sel k ifc" icon args
+            when (null as) $
+                tlIO (\ l -> tlOpEvent l False sel tys (uhOwn ee) e (Just field_e) (tlRes r))
+            return r
 
         -- XXX evalStaticOp can't do this for us because of "as"
         -- _.s  -->  _
         ICon u (ICUndet { iuKind = k })  -> do
              let kind_integer = undefKindToInteger k
-             addPredG p $ doBuildUndefined ty (getPosition u) kind_integer as
+             r <- addPredG p $ doBuildUndefined ty (getPosition u) kind_integer as
+             when (null as) $
+                 tlIO (\ l -> tlOpEvent l False sel tys (uhOwn ee) e Nothing (tlRes r))
+             return r
 
         -- select clocks out of state variables
         ICon id (ICStateVar {iVar = v}) | ty == itClock -> do
@@ -6634,7 +7147,9 @@ iArrayInRange arr = Array.inRange (Array.bounds arr)
 mkArrayCell :: HExpr -> G (ArrayCell HeapData)
 mkArrayCell e = do
    let hcell = HUnev e Nothing
+   h0 <- tlNextPtr
    (p, r) <- addHeapCell "mk-array-cell" hcell
+   tlIO (\ l -> tlCellNoType l h0 "mk-array-cell")
    return (ArrayCell p r)
 
 -- ===============

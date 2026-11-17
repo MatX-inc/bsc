@@ -16,4 +16,8 @@ bluehs_run_compare_pass IExpandStrings.hs
 compile_verilog_pass SignalNamingMod.bs mkSignalNamingMod "-elab"
 bluehs_run_compare_pass SignalNamingTest.hs
 
+# TypeLinks / TypeLinksProvenance end-to-end evaluator capture and .ba -> AVeriQuirks threading
+compile_verilog_pass TypeLinksProvMod.bs mkTypeLinksProvMod "-elab"
+bluehs_run_compare_pass TypeLinksProvTest.hs
+
 }

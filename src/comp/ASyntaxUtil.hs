@@ -1,8 +1,9 @@
 {-# LANGUAGE PatternGuards #-}
 module ASyntaxUtil where
 import ASyntax
-import ASourceTypes(anchorSourceTypes)
+import ASourceTypes(anchorSourceTypes, anchorSourceProvenance)
 import ISyntax(IType)
+import SourceProvenance(SourceProvenance, mapProvFact, mapMProvFact)
 
 import ErrorUtil(internalError)
 
@@ -427,7 +428,8 @@ instance AExprs ASPackage where
                 aspkg_values = (mapAExprs f defs),
                 aspkg_inout_values = (mapAExprs f iodefs),
                 aspkg_foreign_calls = (mapAExprs f fs),
-                aspkg_expr_types = mapExprTypes (mapAExprs f) (aspkg_expr_types pkg) }
+                aspkg_expr_types = mapExprTypes (mapAExprs f) (aspkg_expr_types pkg),
+                aspkg_provenance = mapProvenance (mapAExprs f) (aspkg_provenance pkg) }
     -- monadic
     mapMAExprs f pkg@(ASPackage { aspkg_state_instances = vs,
                                   aspkg_values = defs,
@@ -438,11 +440,13 @@ instance AExprs ASPackage where
              iodefs' <- mapMAExprs f iodefs
              fs' <- mapMAExprs f fs
              ets' <- mapMExprTypes (mapMAExprs f) (aspkg_expr_types pkg)
+             prov' <- mapMProvenance (mapMAExprs f) (aspkg_provenance pkg)
              return (pkg { aspkg_state_instances = vs',
                            aspkg_values = defs',
                            aspkg_inout_values = iodefs',
                            aspkg_foreign_calls = fs',
-                           aspkg_expr_types = ets' })
+                           aspkg_expr_types = ets',
+                           aspkg_provenance = prov' })
     -- find
     findAExprs f pkg@(ASPackage { aspkg_state_instances = vs,
                                 aspkg_values = defs,
@@ -457,7 +461,8 @@ instance AExprs APackage where
         apkg_rules = mapAExprs f (apkg_rules pack),
         apkg_state_instances = mapAExprs f (apkg_state_instances pack),
         apkg_local_defs = mapAExprs f (apkg_local_defs pack),
-        apkg_expr_types = mapExprTypes (mapAExprs f) (apkg_expr_types pack) }
+        apkg_expr_types = mapExprTypes (mapAExprs f) (apkg_expr_types pack),
+        apkg_provenance = mapProvenance (mapAExprs f) (apkg_provenance pack) }
     -- monadic
     mapMAExprs f pack@(APackage { apkg_interface = ifc,
                                   apkg_rules = rs,
@@ -468,11 +473,13 @@ instance AExprs APackage where
              insts' <- mapMAExprs f insts
              defs' <- mapMAExprs f defs
              ets' <- mapMExprTypes (mapMAExprs f) (apkg_expr_types pack)
+             prov' <- mapMProvenance (mapMAExprs f) (apkg_provenance pack)
              return (pack { apkg_interface = ifc',
                             apkg_rules = rs',
                             apkg_state_instances = insts',
                             apkg_local_defs = defs',
-                            apkg_expr_types = ets' })
+                            apkg_expr_types = ets',
+                            apkg_provenance = prov' })
     -- find
     findAExprs f pack =
         findAExprs f (apkg_interface pack) ++
@@ -489,11 +496,27 @@ mapExprTypes f = map (\(e, ts) -> (f e, ts))
 mapMExprTypes :: Monad m => (a -> m b) -> [(a, t)] -> m [(b, t)]
 mapMExprTypes f = mapM (\(e, ts) -> do e' <- f e; return (e', ts))
 
+mapProvenance :: (a -> b) -> SourceProvenance a -> SourceProvenance b
+mapProvenance f = map (\(e, fs) -> (f e, map (mapProvFact f) fs))
+
+mapMProvenance :: Monad m => (a -> m b) -> SourceProvenance a -> m (SourceProvenance b)
+mapMProvenance f = mapM (\(e, fs) -> do
+    e' <- f e
+    fs' <- mapM (mapMProvFact f) fs
+    return (e', fs'))
+
 -- When a pass removes definitions, replace references in observations using
 -- the definitions' values. The lazy substitution map shares rewritten values.
 inlineDroppedExprTypes :: [ADef] -> [ADef] -> [(AExpr, S.Set IType)] -> [(AExpr, S.Set IType)]
 inlineDroppedExprTypes oldDefs newDefs =
     mapExprTypes (aSubst subst) . anchorSourceTypes oldDefs
+  where kept = S.fromList (map adef_objid newDefs)
+        subst = M.fromList [(i, aSubst subst e) | ADef i _ e _ <- oldDefs,
+                                                 i `S.notMember` kept]
+
+inlineDroppedProvenance :: [ADef] -> [ADef] -> SourceProvenance AExpr -> SourceProvenance AExpr
+inlineDroppedProvenance oldDefs newDefs =
+    mapProvenance (aSubst subst) . anchorSourceProvenance oldDefs
   where kept = S.fromList (map adef_objid newDefs)
         subst = M.fromList [(i, aSubst subst e) | ADef i _ e _ <- oldDefs,
                                                  i `S.notMember` kept]

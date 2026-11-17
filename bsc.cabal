@@ -333,6 +333,7 @@ library
     Simplify
     SolvedBinds
     Sort
+    SourceProvenance
     SpeedyString
     StaleUtils
     StdPrel
@@ -358,6 +359,10 @@ library
     Type
     TypeAnalysis
     TypeAnalysisTclUtil
+    TypeLinks
+    TypeLinksDecl
+    TypeLinksOut
+    TypeLinksProvenance
     TypeCheck
     TypeOps
     Undefined

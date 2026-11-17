@@ -12,6 +12,7 @@ import Id
 import ISyntax
 import ISyntaxUtil(irulesMap, iDefsMap)
 import IInlineUtil(iSubst, iSubstIfc)
+import SourceProvenance(mapProvFact)
 import Prim
 import Data.Maybe(catMaybes, mapMaybe)
 import qualified Data.IntMap as IM
@@ -87,6 +88,9 @@ iInlineS True imod@(IModule { imod_local_defs = ds,
     in  imod { imod_local_defs  = ds',
                imod_expr_types = [(iSubst smap dmap e, ts) |
                                    (e, ts) <- imod_expr_types imod],
+               imod_provenance = [(iSubst smap dmap e,
+                                   map (mapProvFact (iSubst smap dmap)) fs) |
+                                   (e, fs) <- imod_provenance imod],
                imod_rules       = rs',
                imod_interface   = ifc',
                imod_state_insts = state_vars' }
@@ -172,6 +176,9 @@ iInlineUseLimit use_limit
         new_imod = imod { imod_local_defs = ds'',
                           imod_expr_types = [(iSubst meta_smap dmap e, ts) |
                                               (e, ts) <- imod_expr_types imod],
+                          imod_provenance = [(iSubst meta_smap dmap e,
+                                              map (mapProvFact (iSubst meta_smap dmap)) fs) |
+                                              (e, fs) <- imod_provenance imod],
                           imod_rules = rs',
                           imod_interface = ifc',
                           imod_state_insts = state_vars' }
