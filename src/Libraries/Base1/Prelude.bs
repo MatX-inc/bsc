@@ -454,7 +454,7 @@ unpack b = primUnpack b
 --@ \index{==@{\te{==}} (\te{Eq} class method)}
 --@ \index{!=@{\te{!=}} (\te{Eq} class method)}
 --@ \begin{libverbatim}
---@ typeclass Eq #(type a);
+--@ typeclass orphan Eq #(type a);
 --@     function Bool (==)(a x, a y);
 --@     function Bool (!=)(a x, a y);
 --@ endtypeclass
