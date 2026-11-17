@@ -7,7 +7,9 @@ proc check {mod data controls wanted} {
     set candidates [dict create]
     foreach row $rows {
         lassign $row name types
-        dict set candidates $name [lmap ty $types {string map {:: .} $ty}]
+        set mapped {}
+        foreach ty $types { lappend mapped [string map {:: .} $ty] }
+        dict set candidates $name $mapped
     }
     set fd [open "$mod.v" r]; set rtl [read $fd]; close $fd
     foreach name $data {

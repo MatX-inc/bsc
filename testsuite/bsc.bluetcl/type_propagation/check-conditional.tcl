@@ -10,7 +10,9 @@ proc loadCandidates {mod} {
     set candidates [dict create]
     foreach row [module wiretypecandidates $mod] {
         lassign $row name types
-        dict set candidates $name [lmap ty $types {normalize $ty}]
+        set mapped {}
+        foreach ty $types { lappend mapped [normalize $ty] }
+        dict set candidates $name $mapped
     }
     return $candidates
 }

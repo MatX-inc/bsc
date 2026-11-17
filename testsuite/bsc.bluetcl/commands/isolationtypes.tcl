@@ -8,7 +8,9 @@ proc checkIsolation {mod expected physical} {
     set candidates [dict create]
     foreach row $before {
         lassign $row wire types
-        dict set candidates $wire [lmap ty $types {string map {:: .} $ty}]
+        set mapped {}
+        foreach ty $types { lappend mapped [string map {:: .} $ty] }
+        dict set candidates $wire $mapped
     }
     dict for {wire wanted} $expected {
         if {![dict exists $candidates $wire]} { error "$mod lost $wire" }

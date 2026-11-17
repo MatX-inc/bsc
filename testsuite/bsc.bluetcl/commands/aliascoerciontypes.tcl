@@ -10,7 +10,9 @@ set before [module wiretypecandidates mkAliasCoercionTypes]
 set candidates [dict create]
 foreach row $before {
     lassign $row wire types
-    dict set candidates $wire [lsort [lmap ty $types {normalizeAliasType $ty}]]
+    set mapped {}
+    foreach ty $types { lappend mapped [normalizeAliasType $ty] }
+    dict set candidates $wire [lsort $mapped]
 }
 set legacy [dict create]
 foreach row [module wiretypemap mkAliasCoercionTypes] {
