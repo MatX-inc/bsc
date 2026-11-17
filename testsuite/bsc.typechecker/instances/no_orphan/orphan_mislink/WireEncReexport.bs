@@ -1,0 +1,11 @@
+package WireEncReexport(package MsgDefs) where
+
+import MsgDefs
+
+-- WireEnc's orphan instance, in a package that re-exports MsgDefs.
+-- Re-exporting Msg and Hdr does not define them here, so this is still
+-- an orphan: a package that imports MsgDefs but not this one resolves
+-- Bits (Msg Hdr) to the derived layout instead.
+instance Bits (Msg Hdr) 33 where
+    pack m   = pack m.valid ++ pack m.payload
+    unpack b = Msg { valid = unpack b[32:32]; payload = unpack b[31:0]; }

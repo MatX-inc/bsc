@@ -28,6 +28,14 @@ compare_file OrphanInsts.bs.bsc-out
 # An instance in the package that defines its type is not an orphan
 compile_pass_no_warning NoOrphanTypeInst.bs
 
+# ... even when the package does not export the type.  Known bug: the
+# orphan check treats a type as local only if the package exports it,
+# so this is wrongly reported as an orphan, and the expected output
+# records that T0127 error.  Once fixed, the package should compile with
+# no messages.
+compile_fail_error NoOrphanHiddenTypeInst.bs T0127
+compare_file NoOrphanHiddenTypeInst.bs.bsc-out
+
 # A class exported abstractly (without its methods) still rejects orphans
 compile_pass_no_warning NoOrphanAbstract.bs
 compile_fail_error NoOrphanAbstractInst.bs T0127

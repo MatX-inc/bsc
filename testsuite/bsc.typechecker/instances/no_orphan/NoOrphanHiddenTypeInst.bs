@@ -1,0 +1,23 @@
+package NoOrphanHiddenTypeInst(nHidden) where
+
+import Vector
+
+-- Hidden is defined here but not exported.  The instance below mentions
+-- it, so it is not an orphan: any package that can name Hidden (which bsc
+-- exports abstractly because this instance mentions it) imports this one,
+-- directly or through a re-export, and so sees the instance.  (Rust would
+-- reject the equivalent impl: its orphan rule looks only at the outermost
+-- type, here Vector, apart from a few wrappers such as Box.  Rust has to be
+-- stricter because it cannot order overlapping impls.)
+struct Hidden =
+    x :: Bit 8
+  deriving (Bits)
+
+instance SplitPorts (Vector 2 Hidden) (Port (Bit 8), Port (Bit 8)) where
+    splitPorts v = (Port (select v (0 :: Integer)).x, Port (select v (1 :: Integer)).x)
+    unsplitPorts (Port a, Port b) = cons (Hidden { x = a; }) (cons (Hidden { x = b; }) nil)
+    portNames _ base = Cons (base +++ "_0") (Cons (base +++ "_1") Nil)
+
+-- Exported, unlike Hidden
+nHidden :: Integer
+nHidden = 2
