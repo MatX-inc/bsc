@@ -14,10 +14,8 @@ compile_fail_error WireEnc.bs T0127
 compile_fail_error WireEnc2.bs T0127
 
 # WireEnc's instance in a package that re-exports MsgDefs (not from the
-# issue).  Known bug: the orphan check treats a re-exported type as
-# local, so this compiles with no T0127 at all, and the expected output
-# records that.  Once fixed, it should fail with T0127 like WireEnc.
-compile_pass WireEncReexport.bs
+# issue): re-exporting Msg and Hdr does not make the instance local
+compile_fail_error WireEncReexport.bs T0127
 compare_file WireEncReexport.bs.bsc-out
 
 # Orphan SplitPorts instances

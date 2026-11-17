@@ -443,9 +443,13 @@ genDefSign s look currentPkg d@(Cinstance qt@(CQType ps t) _) =
         exported (TyStr _ _) = False
         exported (TyNum _ _) = False
         imported (TyCon i _ _) = getIdQual i /= getIdFString currentPkg
-        -- TyNum/TyStr are imported for the purposes of the "orphan check"
+        -- TyNum/TyStr count as imported, so instances mentioning them are exported
         imported (TyNum _ _) = True
         imported (TyStr _ _) = True
+        -- For the orphan check, a type is local if this package defines it,
+        -- whether or not the package exports it (TyNum/TyStr are never local)
+        local (TyCon i _ _) = getIdQual (addQual i) == getIdFString currentPkg
+        local _ = False
         fj1 = fromJustOrErr ("bad instance con: " ++ ppReadable qt)
         cls_tcon = fj1 $ leftTyCon t
         cls_id = fj1 $ leftCon t
@@ -455,7 +459,7 @@ genDefSign s look currentPkg d@(Cinstance qt@(CQType ps t) _) =
         inst_cls_args = map expandSyn (tyConArgs t)
         fd_sigs = map (map not) (funDeps cls)
         inst_heads = zipWith boolCompress fd_sigs (repeat inst_cls_args)
-        orphan_head = not . (any exported) . (concatMap allTyCons)
+        orphan_head = not . (any local) . (concatMap allTyCons)
         orphan_inst = imported (cls_tcon) && any orphan_head inst_heads
         orphan_level = orphanInstLevel cls
         -- for a class not declared orphan: its name, and whether the error

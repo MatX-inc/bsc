@@ -1,12 +1,3 @@
 checking package dependencies
 compiling NoOrphanHiddenTypeInst.bs
-Error: "NoOrphanHiddenTypeInst.bs", line 16, column 9: (T0127)
-  Exporting orphan typeclass instance Prelude.SplitPorts (Vector.Vector 2
-  NoOrphanHiddenTypeInst.Hidden) (Prelude.Port (Prelude.Bit 8), Prelude.Port
-  (Prelude.Bit 8)). The instance's typeclass as well as all of the instance's
-  source type parameters are defined in other packages. This can lead to
-  confusing and inconsistent instance resolution if the orphan instance is not
-  imported everywhere it could be used.
-  The typeclass Prelude.SplitPorts is not declared orphan, so its instances
-  must be defined in the package that defines the typeclass or one of the
-  instance's source types.
+All packages are up to date.

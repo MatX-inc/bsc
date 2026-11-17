@@ -1,3 +1,12 @@
 checking package dependencies
 compiling WireEncReexport.bs
-All packages are up to date.
+Error: "WireEncReexport.bs", line 9, column 9: (T0127)
+  Exporting orphan typeclass instance Prelude.Bits (MsgDefs.Msg MsgDefs.Hdr)
+  33. The instance's typeclass as well as all of the instance's source type
+  parameters are defined in other packages. This can lead to confusing and
+  inconsistent instance resolution if the orphan instance is not imported
+  everywhere it could be used.
+  The typeclass Prelude.Bits is not declared orphan, so its instances must be
+  defined in the package that defines the typeclass or one of the instance's
+  source types.
+  For now, this error can be demoted to a warning with -demote-errors T0127.
