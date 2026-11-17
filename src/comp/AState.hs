@@ -37,7 +37,7 @@ import PFPrint
 import VModInfo
 import ASyntax
 import ASyntaxUtil
-import ASchedule(AScheduleInfo(..), ExclusiveRulesDB(..), areRulesExclusive,
+import ASchedule(AScheduleInfo(..),
                  MethodUsesMap, MethodUsers, MethodId(..), UniqueUse(..),
                  errAction)
 import AUses(useDropCond)
@@ -77,7 +77,9 @@ type AExprSubst = [(AExpr, AExpr)]
 --  * a list of uses for each copy of the method (if the method is not
 --    multi-ported, then there's just one elem, else one elem for each port)
 --
--- The uses of a single port (MethPortBlob) is a list of pairs:
+-- The uses of a single port (MethPortBlob) pairs a Bool indicating whether
+-- multiple uses on that port require a priority mux (precomputed during
+-- scheduling) with a list of pairs:
 --  * a unique expression used for the method call
 --    (AAction uses have been converted to either AMethCall or AFunCall)
 --  * a Maybe list of the rules which used that expression
@@ -91,7 +93,7 @@ type AExprSubst = [(AExpr, AExpr)]
 
 type MethBlob = (((AId, AId), Bool), [MethPortBlob])
 
-type MethPortBlob = [(AExpr, Maybe [ARuleId])]
+type MethPortBlob = (Bool, [(AExpr, Maybe [ARuleId])])
 
 
 -- ==============================
@@ -458,14 +460,13 @@ aState' flags pps schedule_info apkg = do
 
         -- New improved resource allocation
         blobs = ratToBlobs (asi_method_uses_map schedule_info)
+                           (asi_port_use_pri schedule_info)
                            omMultMap
                            (asi_resource_alloc_table schedule_info)
         (ers, ars) = blobs
 
         -- Old resource allocation
         --(ers, ars) = getMethCalls sch ds outs rs'
-
-        exclusive_rules_db = asi_exclusive_rules_db schedule_info
 
         -- XXX redo construction of muxes for args, enables, and outputs:
         -- XXX use the fieldinfo to create the right names (and ARenameIO goes away)
@@ -478,14 +479,14 @@ aState' flags pps schedule_info apkg = do
 
         -- muxes for values (definitions)
         (emux_selss, emux_valss, emux_outss, esss) =
-            unzip4 (map (mkEmuxssExpr exclusive_rules_db value_method_ids om) ers)
+            unzip4 (map (mkEmuxssExpr value_method_ids om) ers)
 
         -- muxes for actions
         -- (we don't need a substitution for actionvalue value calls,
         --  because there is no multiplicity for action/actionvalue methods,
         --  so any value calls can be converted to use of the one port)
         (amux_selss, amux_valss, amux_outss, _) =
-            unzip4 (map (mkEmuxssAction exclusive_rules_db value_method_ids om) ars)
+            unzip4 (map (mkEmuxssAction value_method_ids om) ars)
 
         mux_sel_defs = concat emux_selss ++ concat amux_selss
         mux_val_defs = concat emux_valss ++ concat amux_valss
@@ -912,17 +913,19 @@ mkSignalInfoMethod aifaces = merged
 -- The first list ("es") is expression uses.
 -- The second list ("as") is action uses.
 
-ratToBlobs :: MethodUsesMap -> M.Map (AId, AId) Integer -> RAT -> ([MethBlob], [MethBlob])
-ratToBlobs mMap omMultMap rat =
+ratToBlobs :: MethodUsesMap -> S.Set (MethodId, Integer) ->
+              M.Map (AId, AId) Integer -> RAT -> ([MethBlob], [MethBlob])
+ratToBlobs mMap portUsePri omMultMap rat =
   let
       -- True if there are 2 or more uses of the method,
       -- which means we need to do some sort of muxing
       nonTrivial :: MethBlob -> Bool
-      nonTrivial (_, (((AMethCall _ _ _ _, _) : _) : _)) = True
+      nonTrivial (_, ((_, (AMethCall _ _ _ _, _) : _) : _)) = True
       nonTrivial _ = False
 
       -- Create the MethBlobs and partition into expr and action
-      (es, as) = partition fst $ map (mkBlob mMap omMultMap) $ ratToNestedLists rat
+      (es, as) = partition fst $
+                 map (mkBlob mMap portUsePri omMultMap) $ ratToNestedLists rat
   in
       -- filter out the expr uses which don't need muxing
       (filter nonTrivial (map snd es), map snd as)
@@ -931,9 +934,10 @@ ratToBlobs mMap omMultMap rat =
 -- Given the method use map and an element from the RAT, produce a
 -- pair (Bool,MethBlob) where the Bool is True if the method use is an
 -- expression and False if it is an action
-mkBlob :: MethodUsesMap -> M.Map (AId, AId) Integer -> (MethodId, [(UniqueUse, Integer)]) ->
+mkBlob :: MethodUsesMap -> S.Set (MethodId, Integer) ->
+          M.Map (AId, AId) Integer -> (MethodId, [(UniqueUse, Integer)]) ->
           (Bool, MethBlob)
-mkBlob mMap omMultMap (method@(MethodId obj met), usedPorts) =
+mkBlob mMap portUsePri omMultMap (method@(MethodId obj met), usedPorts) =
   let
       -- We will use information for this method from both the
       -- MethodUsesMap and the RAT, so prepare an error in case
@@ -950,12 +954,9 @@ mkBlob mMap omMultMap (method@(MethodId obj met), usedPorts) =
       -- ---------------
       -- Prepare the (per-port) info for this method from RAT
 
-      -- List of uses per port.
-      -- Create the mapping (port_num, [uses]) -- the inverse of the
-      -- mapping "usedPorts" found in RAT, which is a list of pairs
-      -- that map uses to ports.  Then strip out just the [uses].
-      portUses :: [[UniqueUse]]
-      portUses = M.elems $
+      -- List of uses per port, preserving the ascending port order of M.elems.
+      portUses :: [(Integer, [UniqueUse])]
+      portUses = M.toAscList $
                      -- use "flip" to preserve the order of uses?
                      M.fromListWith (flip (++))
                                [(port, [uUse]) | (uUse,port) <- usedPorts]
@@ -1008,14 +1009,16 @@ mkBlob mMap omMultMap (method@(MethodId obj met), usedPorts) =
 
       -- The list of converted uses per port
       -- (This intermediate step is exposed to make "u" available to "uExp".)
-      uses = map (map cvt) portUses
+      uses = [ (port, map cvt uUses) | (port, uUses) <- portUses ]
       u = case uses of
-            (((uu, _):_):_) -> uu
+            ((_, (uu, _):_):_) -> uu
             _ -> internalError "AState.mkBlob: u"
 
       -- Complete the conversion to make a list of MethPortBlob
       meth_port_blobs :: [MethPortBlob]
-      meth_port_blobs = map (mapFst exp) uses
+      meth_port_blobs =
+          [ ((method, port) `S.member` portUsePri, mapFst exp ulist)
+          | (port, ulist) <- uses ]
 
       -- The complete MethBlob structure
       meth_blob = (((obj, met), multFlag), meth_port_blobs)
@@ -1074,21 +1077,21 @@ mkBlob mMap omMultMap (method@(MethodId obj met), usedPorts) =
 --    of the new definitions
 
 mkEmuxss :: ([AExpr] -> [AExpr]) -> ([AExpr] -> AExpr) ->
-            ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob ->
+            [AId] -> OrderMap -> MethBlob ->
             ([ADef], [ADef], [ADef], AExprSubst)
-mkEmuxss tl cnd rdb value_method_ids om (((o, m), f), emrss) =
-    let genfunct = mkEmuxs tl cnd rdb value_method_ids om o m
+mkEmuxss tl cnd value_method_ids om (((o, m), f), emrss) =
+    let genfunct = mkEmuxs tl cnd value_method_ids om o m
         (sel_dss, val_dss, out_dss, sss) = unzip4 (zipWith genfunct (map (toMaybe f) [0..]) emrss)
     in  (concat sel_dss, concat val_dss, concat out_dss, concat sss)
 
 -- XXX The "const aTrue" suggests that the use is unconditional.
 -- XXX This assumption might change some if we fix Bug 37 with
 -- XXX conditional def/use analysis.
-mkEmuxssExpr :: ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob
+mkEmuxssExpr :: [AId] -> OrderMap -> MethBlob
              -> ([ADef], [ADef], [ADef], AExprSubst)
 mkEmuxssExpr = mkEmuxss id (const aTrue)
 
-mkEmuxssAction :: ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob
+mkEmuxssAction :: [AId] -> OrderMap -> MethBlob
                -> ([ADef], [ADef], [ADef], AExprSubst)
 mkEmuxssAction = mkEmuxss tail head
 
@@ -1098,10 +1101,10 @@ mkEmuxssAction = mkEmuxss tail head
 -- (that is, per copy of the method on a single state instance)
 
 mkEmuxs :: ([AExpr] -> [AExpr]) -> ([AExpr] -> AExpr) ->
-           ExclusiveRulesDB -> [AId] -> OrderMap ->
+           [AId] -> OrderMap ->
            AId -> AId -> Maybe Integer -> MethPortBlob ->
            ([ADef], [ADef], [ADef], AExprSubst)
-mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
+mkEmuxs tl cnd value_method_ids om o m ino (usePri, emrs) =
     let
         -- Break each MethPortBlob into a list of the expressions for
         -- each argument, and then transpose the entire structure to
@@ -1126,7 +1129,7 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
         -- the list of different expressions for that port, to separately
         -- mux the values for each.  Result: new defs for the mux wiring.
         def_tuples = zipWith (\(argN, portM) ->
-                                  mkEmux rdb value_method_ids om ino o m argN portM)
+                                  mkEmux usePri value_method_ids om ino o m argN portM)
                          portCoords arg_blobs
         (sel_defs, val_defs, out_defs) = concatUnzip3 def_tuples
 
@@ -1150,6 +1153,8 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
 -- This function does the actual work.  It considers the muxing of
 -- values for one argument of the method at a time.
 -- Inputs:
+--  * usePri = True when multiple uses on this port are not pairwise
+--             mutually exclusive and therefore need PrimPriMux
 --  * ino = the number of the port being arbitrated for
 --  * o = the instance name
 --  * m = the method name
@@ -1165,41 +1170,16 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
 --  * A list of new definitions for the values to be selected in the mux
 --  * The definition for the output of the mux
 --
-mkEmux :: ExclusiveRulesDB -> [AId] -> OrderMap ->
+mkEmux :: Bool -> [AId] -> OrderMap ->
           Maybe Integer -> AId -> AId -> Integer -> Maybe Integer ->
           [(AExpr, AExpr, Maybe [ARuleId])] -> ([ADef], [ADef], [ADef])
-mkEmux exclusive_rules_db value_method_ids om ino o m argN portM [(e, _, _)] =
+mkEmux _ value_method_ids om ino o m argN portM [(e, _, _)] =
     -- Only one input to the mux
     ([], [], [ ADef (argId ino o m argN portM) (aType e) e [] ])
-mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_) =
-    -- Multiple inputs
+mkEmux usePri value_method_ids om ino o m argN portM ers@((e,_,_):_) =
+    -- Multiple inputs; usePri (precomputed in ASchedule and cached on
+    -- AScheduleInfo) selects PrimPriMux vs PrimMux.
     let
-        -- ---------------
-        -- Determine if we need a PrimMux or PrimPriMux
-
-        -- should we use a PrimPriMux?
-        -- Old decision: If any rule Id is not in the order map, then it
-        --   must be a read method, and we can assume that the scheduler
-        --   has taken care to only enable one unique use at a time, so
-        --   PrimMux is sufficient.  For all other cases (rules and
-        --   action methods), use PrimPriMux.
-        -- New decision: We can do better for rules and action methods by
-        --   only using PrimPriMux when some of the rules are not disjoint.
-        --   (If exclusive_rules_db says all the rules are disjoint, no pri
-        --   mux is needed.)  Note that we even do this check for read
-        --   methods (to be safe), even though we could have continued to
-        --   use the same assumption as in the "old decision".
-        -- In both cases: We assume that predicate uses can be ignored,
-        --   by matching "(_,_,Just rs)".  If we ever support multiple
-        --   predicate uses (due to urgency) we will need to fix this.
-        usePri :: Bool
-        --usePri = and [ M.lookup r om /= Nothing |
-        --               (_, _, Just rs) <- ers, r <- rs ]
-        usePri = let rs  = concat [rs | (_, _, Just rs) <- ers]
-                     val = not (and
-                                [areRulesExclusive exclusive_rules_db r r'
-                                 | r <- rs, r' <- rs , r /= r'])
-                 in  val
 
         -- ---------------
         -- Functions to make selector Ids
@@ -1358,7 +1338,7 @@ mkEnabless :: MethBlob -> [ADef]
 mkEnabless (((o, m), f), emrss) = concat (zipWith (mkEnables o m) (map (toMaybe f) [0..]) emrss)
 
 mkEnables :: AId -> AId -> Maybe Integer -> MethPortBlob -> [ADef]
-mkEnables o m ino emrs =
+mkEnables o m ino (_, emrs) =
         let mi = mkMethId o m ino MethodEnable
             (dss, ess) = unzip (zipWith mkE emrs [1..])
             mkE :: (AExpr, Maybe [ARuleId]) -> Integer -> ([ADef], [AExpr])

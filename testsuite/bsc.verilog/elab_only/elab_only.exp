@@ -171,3 +171,47 @@ erase sysETb.v
 compile_verilog_pass ElabOnly.bsv sysETb {-semantic-ports-comment}
 compare_file mkESub.v mkESub-from-c-sem.v
 compare_file sysETb.v sysETb-from-c-sem.v
+
+# -------------------------
+# Multi-caller argument muxing from .ba: exercises cached per-port
+# priority-mux flags (both parallel muxes for exclusive callers and
+# priority muxes for sequentially-composed callers, plus value-method
+# argument muxing) in AState and getIOPropsA (-semantic-ports-comment).
+
+elab_run "compile ElabOnlyMux with -elab-only" elabmux.bsc-out \
+    {-verilog -elab-only -u ElabOnlyMux.bsv}
+files_exist { mkEMuxLut.ba mkESink.ba mkEMuxTop.ba }
+files_dont_exist { mkEMuxLut.v mkESink.v mkEMuxTop.v }
+
+elab_run "-c on ElabOnlyMux" cgenmux.bsc-out \
+    {-verilog -c mkEMuxLut -c mkESink -c mkEMuxTop}
+files_exist { mkEMuxLut.v mkESink.v mkEMuxTop.v }
+copy mkEMuxLut.v mkEMuxLut-from-c.v
+copy mkESink.v mkESink-from-c.v
+copy mkEMuxTop.v mkEMuxTop-from-c.v
+
+erase mkEMuxLut.v
+erase mkESink.v
+erase mkEMuxTop.v
+compile_verilog_pass ElabOnlyMux.bsv mkEMuxTop
+compare_file mkEMuxLut.v mkEMuxLut-from-c.v
+compare_file mkESink.v mkESink-from-c.v
+compare_file mkEMuxTop.v mkEMuxTop-from-c.v
+
+erase mkEMuxLut.v
+erase mkESink.v
+erase mkEMuxTop.v
+elab_run "-c on ElabOnlyMux with -semantic-ports-comment" cgenmuxsem.bsc-out \
+    {-verilog -semantic-ports-comment -c mkEMuxLut -c mkESink -c mkEMuxTop}
+files_exist { mkEMuxLut.v mkESink.v mkEMuxTop.v }
+copy mkEMuxLut.v mkEMuxLut-from-c-sem.v
+copy mkESink.v mkESink-from-c-sem.v
+copy mkEMuxTop.v mkEMuxTop-from-c-sem.v
+
+erase mkEMuxLut.v
+erase mkESink.v
+erase mkEMuxTop.v
+compile_verilog_pass ElabOnlyMux.bsv mkEMuxTop {-semantic-ports-comment}
+compare_file mkEMuxLut.v mkEMuxLut-from-c-sem.v
+compare_file mkESink.v mkESink-from-c-sem.v
+compare_file mkEMuxTop.v mkEMuxTop-from-c-sem.v

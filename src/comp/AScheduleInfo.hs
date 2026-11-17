@@ -10,6 +10,7 @@ module AScheduleInfo (
     SchedNode(..),
     areRulesDisjoint,
     areRulesExclusive,
+    computePortUsePri,
     defaultRuleRelationship,
     erdbDisjointSets,
     getRuleRelation,
@@ -26,7 +27,7 @@ import Prelude hiding ((<>))
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.List(intersperse)
-import Util(thd)
+import Util(thd, mapFst)
 import Eval
 
 import ErrorUtil
@@ -65,6 +66,11 @@ data AScheduleInfo = AScheduleInfo
 
       asi_resource_alloc_table :: RAT,
       asi_exclusive_rules_db   :: ExclusiveRulesDB,
+      -- Allocated (method, port) pairs whose multiple uses are not
+      -- pairwise mutually exclusive, requiring a priority mux in AState
+      -- (and modeled as such in VIOProps).  Cached so .ba codegen does
+      -- not need the full ExclusiveRulesDB.
+      asi_port_use_pri         :: S.Set (MethodId, Integer),
       asi_sched_order          :: [SchedNode],
       asi_schedule             :: ASchedule,
       asi_sched_graph          :: [(SchedNode, [SchedNode])],
@@ -94,8 +100,8 @@ instance PPrint AScheduleInfo where
             )
 
 instance NFData AScheduleInfo where
-  rnf (AScheduleInfo w m r rat er so sched graph rrdb vsi) =
-    rnf10 w m r rat er so sched graph rrdb vsi
+  rnf (AScheduleInfo w m r rat er pup so sched graph rrdb vsi) =
+    rnf11 w m r rat er pup so sched graph rrdb vsi
 
 
 -- ---------------
@@ -174,7 +180,8 @@ instance PPrint AScheduleErrInfo where
 --   (This is a superset which also takes into account rule executions
 --    that have been forced to be exclusive due to conflicts etc.)
 -- A .ba file records only the disjoint sets (DisjointRulesOnly): Bluesim
--- reads them, while the exclusive sets serve the scheduler and AState.
+-- reads them, while the exclusive sets serve only the scheduler (which
+-- caches the per-port priority-mux flags in asi_port_use_pri).
 data ExclusiveRulesDB =
     ExclusiveRulesDB (M.Map ARuleId (S.Set ARuleId, S.Set ARuleId))
   | DisjointRulesOnly (M.Map ARuleId (S.Set ARuleId))
@@ -210,6 +217,28 @@ areRulesDisjoint (DisjointRulesOnly disjoint_fmap) r1 r2 =
 erdbDisjointSets :: ExclusiveRulesDB -> M.Map ARuleId (S.Set ARuleId)
 erdbDisjointSets (ExclusiveRulesDB exclusive_map) = M.map fst exclusive_map
 erdbDisjointSets (DisjointRulesOnly disjoint_map) = disjoint_map
+
+-- Compute the set of (method, port) pairs in RAT whose multiple uses are
+-- not pairwise mutually exclusive, so AState and VIOProps know which muxes
+-- require priority arbitration without reading ExclusiveRulesDB post-.ba.
+computePortUsePri :: MethodUsesMap -> RAT -> ExclusiveRulesDB
+                  -> S.Set (MethodId, Integer)
+computePortUsePri mumap rat erdb =
+    S.fromList
+        [ (method, port)
+        | (method, usedPortsMap) <- M.toList rat
+        , let methodUses = mapFst useDropCond (M.findWithDefault [] method mumap)
+              portUses = M.toList $
+                         M.fromListWith (flip (++))
+                             [ (port, [uUse]) | (uUse, port) <- M.toList usedPortsMap ]
+        , (port, uUses@(_:_:_)) <- portUses
+        , let arm_rules = [ r
+                          | uUse <- uUses
+                          , Just ([], rs, []) <- [lookup uUse methodUses]
+                          , r <- rs ]
+        , not (and [ areRulesExclusive erdb r r'
+                   | r <- arm_rules, r' <- arm_rules, r /= r' ])
+        ]
 
 instance Show ExclusiveRulesDB where
     show (ExclusiveRulesDB exclusive_map) =

@@ -22,8 +22,7 @@ import VModInfo(VModInfo, vArgs, vFields, vClk, VName(..), VeriPortProp(..),
 import Prim
 import ASyntax
 import ASyntaxUtil( AVars(..), aType )
-import AScheduleInfo(AScheduleInfo(..), ExclusiveRulesDB,
-                     areRulesExclusive)
+import AScheduleInfo(AScheduleInfo(..))
 import AState(MethBlob, ratToBlobs, genMethodMult)
 import BackendNamingConventions(createVerilogNameMapForAVInst,
                                 xLateIdUsingFStringMap,
@@ -1700,27 +1699,28 @@ getIOPropsA _flags pps mschedinfo apkg =
         mkArmClassMaps si =
             let multMap = M.fromList (concatMap genMethodMult vs)
                 (expr_blobs, action_blobs) =
-                    ratToBlobs (asi_method_uses_map si) multMap
+                    ratToBlobs (asi_method_uses_map si)
+                               (asi_port_use_pri si)
+                               multMap
                                (asi_resource_alloc_table si)
-                edb = asi_exclusive_rules_db si
                 (ASchedule _ rev_exec_order) = asi_schedule si
                 omPos :: M.Map AId Integer
                 omPos = M.fromList (zip rev_exec_order [0..])
                 (a_cls, a_enf, a_drop) =
-                    unzip3 (map (blobArms edb omPos) action_blobs)
+                    unzip3 (map (blobArms omPos) action_blobs)
                 a_map = M.fromList (concat a_cls)
                 en_set = S.fromList (concat a_enf)
                 drop_set = S.fromList (concat a_drop)
-                e_results = map (exprBlobArms edb omPos) expr_blobs
+                e_results = map (exprBlobArms omPos) expr_blobs
                 e_map = M.fromListWith classJoin (concatMap fst e_results)
                 sel_uses = concatMap snd e_results
             in  (a_map, en_set, drop_set, e_map, sel_uses)
 
-        blobArms :: ExclusiveRulesDB -> M.Map AId Integer -> MethBlob
+        blobArms :: M.Map AId Integer -> MethBlob
                  -> ([((AId, AId, AId), ArmClass)],
                      [(AId, AId, AId)],
                      [(AId, AId, AId)])
-        blobArms edb omPos (((obj, meth), _), port_blobs) =
+        blobArms omPos (((obj, meth), _), port_blobs) =
             let meth' = unQualId meth
                 key r = (obj, meth', r)
 
@@ -1772,47 +1772,42 @@ getIOPropsA _flags pps mschedinfo apkg =
                         else if (all (== (Just 0)) vs) then Just 0
                         else Nothing
 
-                portArms :: [(AExpr, Maybe [AId])]
+                portArms :: (Bool, [(AExpr, Maybe [AId])])
                          -> ([((AId, AId, AId), ArmClass)],
                              [(AId, AId, AId)],
                              [(AId, AId, AId)])
                 -- a single use is a direct connection (see mkEmux)
-                portArms uses@[(_, mrs)] =
+                portArms (_, uses@[(_, mrs)]) =
                     ([ (key r, ArmDirect) | Just rs <- [mrs], r <- rs ],
                      enFold uses, [])
-                portArms uses =
-                    let arm_rules = concat [ rs | (_, Just rs) <- uses ]
-                        usePri = not (and [ areRulesExclusive edb r r' |
-                                                r <- arm_rules,
-                                                r' <- arm_rules,
-                                                r /= r' ])
-                    in  if usePri
-                        then
-                          -- arms split per rule, in priority order,
-                          -- as in mkEmux's "order"
-                          let arms = [ (M.findWithDefault 0 r omPos,
-                                        (key r, selVal e r)) |
-                                           (e, Just rs) <- uses, r <- rs ]
-                              cls = muxWalk
-                                        (map snd
-                                            (sortBy (\ (x,_) (y,_) ->
-                                                         compare x y)
-                                                arms))
-                          in  (cls, enFold uses, lastMuxed cls)
-                        else
-                          -- a parallel mux keeps the arms per use, in
-                          -- use order (mkEmux does not reorder them)
-                          let arms = [ ((e, rs), orSelVal e rs) |
-                                           (e, Just rs) <- uses ]
-                              ucls = muxWalk arms
-                              cls = [ (key r, c) |
-                                          ((_, rs), c) <- ucls, r <- rs ]
-                              sel_drops =
-                                  concat
-                                      (take 1 [ map key rs |
-                                                    ((_, rs), ArmMuxed)
-                                                        <- reverse ucls ])
-                          in  (cls, enFold uses, sel_drops)
+                portArms (usePri, uses) =
+                    if usePri
+                    then
+                      -- arms split per rule, in priority order,
+                      -- as in mkEmux's "order"
+                      let arms = [ (M.findWithDefault 0 r omPos,
+                                    (key r, selVal e r)) |
+                                       (e, Just rs) <- uses, r <- rs ]
+                          cls = muxWalk
+                                    (map snd
+                                        (sortBy (\ (x,_) (y,_) ->
+                                                     compare x y)
+                                            arms))
+                      in  (cls, enFold uses, lastMuxed cls)
+                    else
+                      -- a parallel mux keeps the arms per use, in
+                      -- use order (mkEmux does not reorder them)
+                      let arms = [ ((e, rs), orSelVal e rs) |
+                                       (e, Just rs) <- uses ]
+                          ucls = muxWalk arms
+                          cls = [ (key r, c) |
+                                      ((_, rs), c) <- ucls, r <- rs ]
+                          sel_drops =
+                              concat
+                                  (take 1 [ map key rs |
+                                                ((_, rs), ArmMuxed)
+                                                    <- reverse ucls ])
+                      in  (cls, enFold uses, sel_drops)
 
                 (clss, enfs, drops) = unzip3 (map portArms port_blobs)
             in  (concat clss, concat enfs, concat drops)
@@ -1823,9 +1818,9 @@ getIOPropsA _flags pps mschedinfo apkg =
         -- the surviving muxes reference.  Under a priority mux the
         -- arms are split per user (as in mkEmux's "order"), so the
         -- fates of an expression's split arms are joined.
-        exprBlobArms :: ExclusiveRulesDB -> M.Map AId Integer -> MethBlob
+        exprBlobArms :: M.Map AId Integer -> MethBlob
                      -> ([(AExpr, ArmClass)], [(AId, AUse)])
-        exprBlobArms edb omPos (_, port_blobs) =
+        exprBlobArms omPos (_, port_blobs) =
             let results = map portArms port_blobs
             in  (concatMap fst results, concatMap snd results)
           where
@@ -1846,23 +1841,19 @@ getIOPropsA _flags pps mschedinfo apkg =
                     else if (all (== Just 0) vs) then Just 0
                     else Nothing
 
-            portArms :: [(AExpr, Maybe [AId])]
+            portArms :: (Bool, [(AExpr, Maybe [AId])])
                      -> ([(AExpr, ArmClass)], [(AId, AUse)])
             -- a single use is a direct connection (see mkEmux);
             -- this includes predicate and instance uses, which the
             -- allocation always gives their own port
-            portArms [(e, _)] = ([(e, ArmDirect)], [])
-            portArms uses
+            portArms (_, [(e, _)]) = ([(e, ArmDirect)], [])
+            portArms (usePri, uses)
                 -- a multi-use port with a predicate or instance use
                 -- is not something AState will mux; leave the port
                 -- unclassified (conservative)
                 | any (isNothing . snd) uses = ([], [])
                 | otherwise =
                     let arm_rules = concat [ rs | (_, Just rs) <- uses ]
-                        usePri = not (and [ areRulesExclusive edb r r' |
-                                                r <- arm_rules,
-                                                r' <- arm_rules,
-                                                r /= r' ])
                         -- ordered = the arm order in the mux is
                         -- known, so the last surviving arm can be
                         -- recognized (its selector is absorbed into
