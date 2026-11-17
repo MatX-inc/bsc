@@ -1,0 +1,20 @@
+package EnableOrder where
+
+interface EnableOrder =
+    w1 :: UInt 8 -> Action
+    w2 :: UInt 8 -> Action
+
+-- Two methods write the same register, so its enable is the OR of the two
+-- method enables and its input a mux between the two arguments.  The order of
+-- the terms is the order of the method's uses in the scheduler's use map and
+-- resource table; elaboration meets w1's use before w2's whatever the process
+-- compiled before.  The scramblers are this module with the other method
+-- renamed, so each interns one method's names.
+{-# verilog mkEnableOrder #-}
+mkEnableOrder :: Module EnableOrder
+mkEnableOrder =
+    module
+        r :: Reg (UInt 8) <- mkReg 0
+        interface EnableOrder
+            w1 x = r := x
+            w2 x = r := x

@@ -1,0 +1,54 @@
+package KempeOrder where
+
+interface VTwoPort =
+    rd :: Bit 3 -> Bit 8
+
+vMkTwoPort :: Module VTwoPort
+vMkTwoPort =
+    module verilog "TwoPortMem" "CLK" {
+        rd[2] = "ADDR" "D_OUT";
+    } [ rd <> rd ]
+
+-- Two mutually exclusive pairs of rules read a 2-port method, giving a K_{2,2}
+-- (4-cycle) conflict graph where every use has degree 2 == rMax.  Exact
+-- core coloring 2-colors the four uses in elaboration order without G0002 or
+-- Ord Id sensitivity.
+mkKempeBipartite :: Module Empty
+mkKempeBipartite =
+    module
+        m :: VTwoPort <- vMkTwoPort
+        idx :: Reg (Bit 3) <- mkReg 0
+        p :: Reg Bool <- mkReg False
+        q :: Reg Bool <- mkReg False
+        outA1 :: Reg (Bit 8) <- mkRegU
+        outA2 :: Reg (Bit 8) <- mkRegU
+        outB1 :: Reg (Bit 8) <- mkRegU
+        outB2 :: Reg (Bit 8) <- mkRegU
+        rules
+            "rA1": when p ==> outA1 := m.rd (idx + 1)
+            "rA2": when not p ==> outA2 := m.rd (idx + 2)
+            "rB1": when q ==> outB1 := m.rd (idx + 3)
+            "rB2": when not q ==> outB2 := m.rd (idx + 4)
+
+-- Five rules whose predicates overlap in a 5-cycle (C_5) read a 2-port method.
+-- C_5 has chromatic number 3 > 2, while every neighborhood is triangle-free;
+-- GraphMap.ncc previously misclassified a vertex as 2-colorable in an Ord Id
+-- dependent order and crashed pickColor.  Sound Kempe + exact core check
+-- reports G0002 cleanly and arbitrates the first edge in rule order.
+mkKempeOddCycle :: Module Empty
+mkKempeOddCycle =
+    module
+        m :: VTwoPort <- vMkTwoPort
+        idx :: Reg (Bit 3) <- mkReg 0
+        st :: Reg (Bit 3) <- mkReg 0
+        out1 :: Reg (Bit 8) <- mkRegU
+        out2 :: Reg (Bit 8) <- mkRegU
+        out3 :: Reg (Bit 8) <- mkRegU
+        out4 :: Reg (Bit 8) <- mkRegU
+        out5 :: Reg (Bit 8) <- mkRegU
+        rules
+            "r1": when (st == 0 || st == 1) ==> out1 := m.rd (idx + 1)
+            "r2": when (st == 1 || st == 2) ==> out2 := m.rd (idx + 2)
+            "r3": when (st == 2 || st == 3) ==> out3 := m.rd (idx + 3)
+            "r4": when (st == 3 || st == 4) ==> out4 := m.rd (idx + 4)
+            "r5": when (st == 4 || st == 0) ==> out5 := m.rd (idx + 5)

@@ -67,8 +67,8 @@ module sysMutuallyExclusiveSVA(CLK,
   assign big_counter$EN = 1'b1 ;
 
   // register flagA
-  assign flagA$D_IN = !WILL_FIRE_RL_reset ;
-  assign flagA$EN = WILL_FIRE_RL_reset || big_counter == 4'd0 ;
+  assign flagA$D_IN = big_counter == 4'd0 ;
+  assign flagA$EN = big_counter == 4'd0 || WILL_FIRE_RL_reset ;
 
   // register flagB
   assign flagB$D_IN = !WILL_FIRE_RL_reset ;

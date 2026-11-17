@@ -972,7 +972,7 @@ Command: submodule full mkM
                  Q_OUT Prelude.Bool
              users
              read {} {RL_rWorld _read} {}
-             write {} {_write RL_rWorld} {}
+             write {} {RL_rWorld _write} {}
          mports {{read Q_OUT} {write D_IN} {write EN}}
          position {Test.bsv 105 15}
 ---------

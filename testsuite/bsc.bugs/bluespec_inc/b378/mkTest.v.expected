@@ -47,13 +47,13 @@ module mkTest(CLK,
   always@(the_cnd)
   begin
     case (1'b1) // synopsys parallel_case
-      the_cnd == 3'd1: the_y$D_IN = 4'd1;
-      the_cnd == 3'd0: the_y$D_IN = 4'd2;
       the_cnd == 3'd2: the_y$D_IN = 4'd4;
+      the_cnd == 3'd0: the_y$D_IN = 4'd2;
+      the_cnd == 3'd1: the_y$D_IN = 4'd1;
       default: the_y$D_IN = 4'b1010 /* unspecified value */ ;
     endcase
   end
-  assign the_y$EN = the_cnd == 3'd1 || the_cnd == 3'd0 || the_cnd == 3'd2 ;
+  assign the_y$EN = the_cnd == 3'd2 || the_cnd == 3'd0 || the_cnd == 3'd1 ;
 
   // handling of inlined registers
 
