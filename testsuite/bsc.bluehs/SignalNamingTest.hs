@@ -113,13 +113,16 @@ import SignalNaming (
     isDefTempId,
     isEnvAnchorId,
     isUnnamedTempId,
+    lookupArgNamedLit,
+    lookupCaseArmNamedLit,
     mkSignalNamingEnv,
+    selectProvenanceSignalExpr,
     signalExprStem,
     signalHash4,
     signalHash8,
     stripGeneratedSuffixes
     )
-import SourceProvenance (NamedLitInfo(..), ProvStep(..))
+import SourceProvenance (NamedLitInfo(..), ProvFact(..), ProvStep(..))
 import Simplify (simplify)
 import TypeCheck (cTypeCheck)
 import VModInfo (VModInfo)
@@ -1113,3 +1116,60 @@ main = do
         (exprName envA slotCmp2 == exprName envA slotCmp4 &&
          en_stem (exprName envA slotCmp2) == "step_1_EQ_2")
     passGroup "[7] Provenance-driven struct/vector/slot stems & carrier-width digest stability"
+
+    -- ============================================================
+    -- [8] Provenance-driven enum equality, case-arm recovery, & ambiguity fallback
+    -- ============================================================
+
+    let enumEq2 =
+            SignalPrim
+                (SignalBit 1)
+                PrimEQ
+                [ SignalDef (SignalBit 2) "fsReg_haaaa"
+                , SignalNamedLit (SignalBit 2) (NLitEnum "FlowState" "Pkg" "FsFetch" 1 4 2 1)
+                ]
+        enumTag4 =
+            SignalPrim
+                (SignalBit 1)
+                PrimEQ
+                [ SignalDef (SignalBit 4) "fsReg_hbbbb"
+                , SignalNamedLit (SignalBit 4) (NLitTag "FlowState" "Pkg" "FsFetch" 3 9 4 3 True)
+                ]
+        Just enumTest8 =
+            selectProvenanceSignalExpr
+                envA
+                (SignalBit 1)
+                (const False)
+                id
+                (const True)
+                [ PFactAccess
+                      (SignalDef (SignalBit 8) "fsReg_hcccc")
+                      [PStepVariantTest "FlowState" "Pkg" "FsFetch" 3 8 True]
+                ]
+    assert "enum ==, enum tag literal, and custom-Bits PStepVariantTest share identical stem & digest"
+        (en_stem (exprName envA enumEq2) == "fsReg_EQ_FsFetch" &&
+         exprName envA enumEq2 == exprName envA enumTag4 &&
+         exprName envA enumEq2 == exprName envA enumTest8)
+
+    let ambigFacts =
+            [ PFactAccess
+                  (SignalDef (SignalBit 2) "rawCodeReg_haaaa")
+                  [PStepVariantTest "ModeA" "Pkg" "MaRun" 1 3 True]
+            , PFactAccess
+                  (SignalDef (SignalBit 2) "rawCodeReg_haaaa")
+                  [PStepVariantTest "ModeB" "Pkg" "MbFast" 1 3 True]
+            ]
+    assert "conflicting enum PStepVariantTest facts fall back cleanly"
+        (selectProvenanceSignalExpr envA (SignalBit 1) (const False) id (const True) ambigFacts == Nothing &&
+         lookupArgNamedLit 1 ambigFacts == Nothing &&
+         lookupCaseArmNamedLit 1 2 1 ambigFacts == Nothing)
+
+    let oneHotArmFacts =
+            [ PFactAccess
+                  (SignalDef (SignalBit 8) "ohReg_haaaa")
+                  [PStepVariantTest "OneHotCmd" "Pkg" "OhRead" 3 8 True]
+            ]
+    assert "lookupCaseArmNamedLit recovers custom-Bits enum constructor from PrimEQ PStepVariantTest"
+        (lookupCaseArmNamedLit 1 8 8 oneHotArmFacts ==
+         Just (NLitEnum "OneHotCmd" "Pkg" "OhRead" 0 0 8 8))
+    passGroup "[8] Provenance-driven enum equality, case-arm recovery, & ambiguity fallback"

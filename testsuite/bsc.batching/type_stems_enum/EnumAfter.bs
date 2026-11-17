@@ -1,0 +1,138 @@
+package EnumAfter where
+
+data FlowState
+    = FsReset
+    | FsIdle
+    | FsWarm
+    | FsFetch
+    | FsStall
+    | FsExec
+    | FsDrain
+    | FsRetire
+    | FsFault
+  deriving (Bits, Eq)
+
+data OneHotCmd
+    = OhBoot
+    | OhNop
+    | OhPrefetch
+    | OhRead
+    | OhWrite
+    | OhAtomic
+    | OhSync
+    | OhFault
+  deriving (Eq)
+
+instance Bits OneHotCmd 8 where
+    pack OhBoot     = 8'b00000001
+    pack OhNop      = 8'b00000010
+    pack OhPrefetch = 8'b00000100
+    pack OhRead     = 8'b00001000
+    pack OhWrite    = 8'b00010000
+    pack OhAtomic   = 8'b00100000
+    pack OhSync     = 8'b01000000
+    pack OhFault    = 8'b10000000
+    unpack ohBits =
+        if ohBits == 8'b00000001 then OhBoot
+        else if ohBits == 8'b00000010 then OhNop
+        else if ohBits == 8'b00000100 then OhPrefetch
+        else if ohBits == 8'b00001000 then OhRead
+        else if ohBits == 8'b00010000 then OhWrite
+        else if ohBits == 8'b00100000 then OhAtomic
+        else if ohBits == 8'b01000000 then OhSync
+        else OhFault
+
+data ModeA = MaIdle | MaRun | MaHold
+  deriving (Eq)
+
+instance Bits ModeA 2 where
+    pack MaIdle = 2'b00
+    pack MaRun  = 2'b01
+    pack MaHold = 2'b10
+    unpack _b =
+        if _b == 2'b00 then MaIdle
+        else if _b == 2'b01 then MaRun
+        else MaHold
+
+data ModeB = MbSlow | MbFast | MbTurbo
+  deriving (Eq)
+
+instance Bits ModeB 2 where
+    pack MbSlow  = 2'b00
+    pack MbFast  = 2'b01
+    pack MbTurbo = 2'b11
+    unpack _b =
+        if _b == 2'b00 then MbSlow
+        else if _b == 2'b01 then MbFast
+        else MbTurbo
+
+interface EnumIfc =
+    step :: Bit 8 -> Bit 8 -> Action
+    peekFlow :: Bit 8 -> Bit 8
+    peekOneHot :: Bit 8 -> Bit 8
+    peekAmbig :: Bit 8
+
+{-# verilog mkEnumMod #-}
+mkEnumMod :: Module EnumIfc
+mkEnumMod =
+    module
+        fsReg :: Reg FlowState <- mkReg FsIdle
+        ohReg :: Reg OneHotCmd <- mkReg OhNop
+        rawCodeReg :: Reg (Bit 2) <- mkReg 0
+        accReg :: Reg (Bit 8) <- mkReg 0
+        auxReg :: Reg (Bit 8) <- mkReg 0
+
+        interface
+            step inVal altVal =
+                do
+                    fsReg :=
+                        if fsReg == FsFetch
+                        then FsExec
+                        else if inVal[0:0] == 1
+                             then FsFetch
+                             else FsIdle
+                    ohReg :=
+                        case ohReg of
+                            OhRead -> OhWrite
+                            _ -> if altVal[0:0] == 1 then OhRead else OhNop
+                    rawCodeReg := rawCodeReg + 1
+                    accReg :=
+                        (if fsReg == FsFetch then inVal else altVal) +
+                        (case ohReg of {
+                            OhRead -> inVal ^ 8'h5A;
+                            _ -> altVal
+                        })
+                    auxReg :=
+                        (if fsReg == FsFetch then altVal ^ 8'h5A else inVal) ^
+                        (case ohReg of {
+                            OhRead -> altVal + 8'h11;
+                            _ -> inVal
+                        })
+
+            peekFlow bias =
+                (case fsReg of {
+                    FsIdle  -> accReg;
+                    FsFetch -> auxReg;
+                    FsExec  -> accReg ^ auxReg;
+                    _       -> 8'hA5
+                }) + bias
+
+            peekOneHot bias =
+                (case ohReg of {
+                    OhNop   -> accReg;
+                    OhRead  -> auxReg;
+                    OhWrite -> accReg + auxReg;
+                    _       -> 8'h5A
+                }) ^ bias
+
+            peekAmbig =
+                let ambMix =
+                        (case unpack rawCodeReg of {
+                            MaRun -> accReg;
+                            _ -> auxReg
+                        }) +
+                        (case unpack rawCodeReg of {
+                            MbFast -> auxReg ^ 8'h5A;
+                            _ -> accReg
+                        })
+                in ambMix ^ (ambMix + 8'h01)

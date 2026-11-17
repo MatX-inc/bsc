@@ -327,6 +327,20 @@ aQExp top e = do
     when (before /= after) $ retainSourceTypes e e'
     return e'
 
+retainPrimCaseArmProv :: [AExpr] -> [AExpr] -> QQState ()
+retainPrimCaseArmProv (idx : _ : ces) (idx' : _ : _)
+    | sourceTypeKey idx /= sourceTypeKey idx' =
+        mapM_
+            (\(lbl, _) -> do
+                retainSourceTypes
+                    (APrim defaultAId aTBool PrimEQ [idx, lbl])
+                    (APrim defaultAId aTBool PrimEQ [idx', lbl])
+                retainSourceTypes
+                    (APrim defaultAId aTBool PrimEQ [lbl, idx])
+                    (APrim defaultAId aTBool PrimEQ [lbl, idx']))
+            (makePairs ces)
+retainPrimCaseArmProv _ _ = return ()
+
 -- top argument states if argument is the top expression on the rhs of
 -- a ADef and other things as well.
 aQExp' :: Bool -> AExpr -> QQState AExpr
@@ -404,6 +418,7 @@ aQExp' top (APrim aid t PrimSignExt [ee]) | aSize ee /= 1 = do
 aQExp' False x@(APrim aid t op es) | topOp op = rewriting $ do
     when debug $ traceM("aQExp topOp True:" ++ ppReadable x)
     es' <- mapM (aQExp False) es
+    when (op == PrimCase) $ retainPrimCaseArmProv es es'
     e <- aQExp True (APrim aid t op es')
     i <- addExpr t e
     return (ASDef t i)
@@ -482,7 +497,10 @@ aQExp' top x@(APrim aid t p es) | p == PrimMux || p == PrimPriMux = do
       (True, False) ->         rewriting (aQMux aid t p es') -- build AndOr Muxes
       (_, _ )       ->  return (APrim aid t p es')
 
-aQExp' top (APrim aid t p es)       = mapM (aQExp False) es >>= return . APrim aid t p
+aQExp' top (APrim aid t p es) = do
+    es' <- mapM (aQExp False) es
+    when (p == PrimCase) $ retainPrimCaseArmProv es es'
+    return (APrim aid t p es')
 aQExp' top (AMethCall t i m es)     = mapM (aQExp False) es >>= return . AMethCall t i m
 aQExp' top (ANoInlineFunCall t i f es)      = mapM (aQExp False) es >>= return . ANoInlineFunCall t i f
 aQExp' top (AFunCall t i f isC es)  = mapM (aQExp False) es >>= return . AFunCall t i f isC

@@ -40,6 +40,8 @@ import ASyntax (
     ASPackage(..),
     AType(..),
     AVInst(..),
+    aTBool,
+    defaultAId,
     getAPackageParamsPortsAndInouts,
     getSpecialOutputs
     )
@@ -80,6 +82,7 @@ import SignalNaming (
     isDefAnchorId,
     isDefTempId,
     lookupArgNamedLit,
+    lookupCaseArmNamedLit,
     lowerResolvedMethodRead,
     mkDefOrPort,
     mkSignalConcat,
@@ -448,6 +451,36 @@ signalAExprStructural env lookupProv stemMap nextDepth _ (APrim _ (ATBit outW) P
            _ -> SignalPrim (SignalBit outW) PrimTrunc [se]
 signalAExprStructural env lookupProv stemMap nextDepth _ (APrim _ _ PrimConcat es) =
     mkSignalConcat (map (signalAExprGo env lookupProv stemMap Nothing nextDepth) es)
+signalAExprStructural env lookupProv stemMap nextDepth facts (APrim _ ty PrimCase (idx : dflt : ces)) =
+    let sIdx = signalAExprGo env lookupProv stemMap Nothing nextDepth idx
+        sDflt = signalAExprGo env lookupProv stemMap Nothing nextDepth dflt
+        lowerCaseLabel lblPos lbl
+            | not (null facts)
+            , Just nli <- lookupArgNamedLit lblPos facts
+            , aLitMatches lbl nli =
+                SignalNamedLit (signalAType (ae_type lbl)) nli
+            | ASInt _ (ATBit w) lit <- lbl =
+                let eqR = lookupProv (APrim defaultAId aTBool PrimEQ [idx, lbl])
+                    eqL = lookupProv (APrim defaultAId aTBool PrimEQ [lbl, idx])
+                    mNli =
+                        case lookupCaseArmNamedLit 1 w (ilValue lit) eqR of
+                            Just nli -> Just nli
+                            Nothing -> lookupCaseArmNamedLit 0 w (ilValue lit) eqL
+                in case mNli of
+                       Just nli -> SignalNamedLit (SignalBit w) nli
+                       Nothing -> mkSignalInt (SignalBit w) (ilValue lit)
+            | otherwise =
+                signalAExprGo env lookupProv stemMap Nothing nextDepth lbl
+        lowerCasePairs _ [] = []
+        lowerCasePairs _ [single] =
+            [signalAExprGo env lookupProv stemMap Nothing nextDepth single]
+        lowerCasePairs k (lbl : arm : rest) =
+            let lblPos = 2 + 2 * k
+                armPos = lblPos + 1
+                sLbl = lowerCaseLabel lblPos lbl
+                sArm = lowerAArgWithFacts env lookupProv stemMap nextDepth facts (armPos, arm)
+            in sLbl : sArm : lowerCasePairs (k + 1) rest
+    in SignalPrim (signalAType ty) PrimCase (sIdx : sDflt : lowerCasePairs 0 ces)
 signalAExprStructural env lookupProv stemMap nextDepth facts (APrim _ ty p es) =
     let ses =
             map

@@ -1,0 +1,94 @@
+# Verify provenance-driven enum equality and case-arm naming stems for both
+# derived-Bits and custom-Bits enums, fallback to raw structural stems when
+# distinct enum interpretations share a CSE comparison wire, and zero wire-name
+# or digest churn when enum members are inserted and encodings widen.
+
+set naming_flags {-keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched -no-opt-aggressive-inline -no-opt-AndOr -opt-join-defs}
+
+proc write_same_pkg_variant { src_bs dst_dir } {
+    global subdir
+    set full_dir [file join $subdir $dst_dir]
+    file delete -force $full_dir
+    file mkdir $full_dir
+    set in_fh [open [file join $subdir $src_bs] r]
+    set txt [read $in_fh]
+    close $in_fh
+    regsub {^package Enum(Before|After) where} $txt {package EnumPkg where} txt2
+    set out_fh [open [file join $full_dir EnumPkg.bs] w]
+    puts -nonewline $out_fh $txt2
+    close $out_fh
+}
+
+proc extract_matching_wire_names { vfile pattern } {
+    global subdir
+    set full [file join $subdir $vfile]
+    set fh [open $full r]
+    set txt [read $fh]
+    close $fh
+    set found {}
+    foreach tok [regexp -all -inline {[A-Za-z_][A-Za-z0-9_$]*} $txt] {
+        if { [regexp $pattern $tok] } {
+            lappend found $tok
+        }
+    }
+    return [lsort -unique $found]
+}
+
+if { $vtest == 1 } {
+    write_same_pkg_variant EnumBefore.bs v_before
+    write_same_pkg_variant EnumAfter.bs v_after
+
+    compile_verilog_pass v_before/EnumPkg.bs mkEnumMod [concat $naming_flags {-bdir v_before -vdir v_before}]
+    copy v_before/mkEnumMod.v mkEnumBefore.v
+
+    compile_verilog_pass v_after/EnumPkg.bs mkEnumMod [concat $naming_flags {-bdir v_after -vdir v_after}]
+    copy v_after/mkEnumMod.v mkEnumAfter.v
+
+    # 1. User binder preservation
+    find_regexp mkEnumBefore.v {\mambMix\M}
+    find_regexp mkEnumAfter.v {\mambMix\M}
+
+    # 2. Derived-Bits and custom one-hot enum equality wires, case expressions,
+    #    and carrier boundary wires retain identical stems and _h<h4> digests
+    #    across member insertion, ordinal shifts, and Bit 3 -> Bit 4 / Bit 5 -> Bit 8
+    #    encoding growth.
+    set stable_patterns {
+        {^fsReg_h[0-9a-z]{4}$}
+        {^ohBits$}
+        {^IF_fsReg_EQ_FsFetch_.*_h[0-9a-z]{4}$}
+        {^IF_ohBits_EQ_OhRead_.*_h[0-9a-z]{4}$}
+        {^CASE_fsReg_FsIdle_.*_h[0-9a-z]{4}$}
+        {^CASE_ohBits_OhNop_.*_h[0-9a-z]{4}$}
+    }
+
+    foreach pat $stable_patterns {
+        set before_matches [extract_matching_wire_names mkEnumBefore.v $pat]
+        set after_matches [extract_matching_wire_names mkEnumAfter.v $pat]
+        if { [llength $before_matches] == 0 } {
+            fail "expected wire matching $pat in mkEnumBefore.v"
+        } else {
+            pass "found wire matching $pat in mkEnumBefore.v: $before_matches"
+        }
+        if { $before_matches eq $after_matches } {
+            pass "zero name/digest churn for $pat ($before_matches)"
+        } else {
+            fail "churn on $pat: before=$before_matches vs after=$after_matches"
+        }
+    }
+
+    # 3. Conflicting enum interpretations sharing one CSE comparison wire fall
+    #    back to raw structural naming rather than picking one type arbitrarily.
+    find_regexp mkEnumBefore.v {\mIF_rawCodeReg_EQ_1_.*_h[0-9a-z]{4}\M}
+    find_n_strings mkEnumBefore.v {MaRun} 0
+    find_n_strings mkEnumBefore.v {MbFast} 0
+
+    file delete -force [file join $subdir v_before] [file join $subdir v_after]
+}
+
+reverse_intern_same_bo EnumBefore.bs
+reverse_intern_same_verilog EnumBefore.bs mkEnumMod $naming_flags
+check_verilog_regen EnumBefore.bs mkEnumMod $naming_flags
+
+reverse_intern_same_bo EnumAfter.bs
+reverse_intern_same_verilog EnumAfter.bs mkEnumMod $naming_flags
+check_verilog_regen EnumAfter.bs mkEnumMod $naming_flags

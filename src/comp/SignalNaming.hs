@@ -65,6 +65,7 @@ module SignalNaming (
     hasStructuredProvenance,
     selectProvenanceSignalExpr,
     lookupArgNamedLit,
+    lookupCaseArmNamedLit,
 
     -- Anchor classification and hard anchor invariant
     AnchorKind(..),
@@ -1185,12 +1186,15 @@ renderProvStepStem (PStepField { ps_field = fn }) = fn
 renderProvStepStem (PStepElem { ps_elemIdx = idx })
     | idx < 0 = "neg" ++ show (negate idx)
     | otherwise = show idx
+renderProvStepStem (PStepVariantTest { ps_con = cn, ps_isEnum = True }) = "EQ_" ++ cn
 renderProvStepStem _ = ""
 
 renderNamedLitStem :: NamedLitInfo -> String
 renderNamedLitStem (NLitSlot { nli_slot = idx })
     | idx < 0 = "neg" ++ show (negate idx)
     | otherwise = show idx
+renderNamedLitStem (NLitEnum { nli_member = m }) = m
+renderNamedLitStem (NLitTag { nli_con = m, nli_isEnum = True }) = m
 renderNamedLitStem _ = ""
 
 renderPortStem :: SignalNamingEnv -> String -> String -> String
@@ -1238,10 +1242,13 @@ connectParts sep parts =
 isSupportedProvStep :: ProvStep -> Bool
 isSupportedProvStep (PStepField {}) = True
 isSupportedProvStep (PStepElem {}) = True
+isSupportedProvStep (PStepVariantTest { ps_isEnum = True }) = True
 isSupportedProvStep _ = False
 
 isSupportedNamedLit :: NamedLitInfo -> Bool
 isSupportedNamedLit (NLitSlot {}) = True
+isSupportedNamedLit (NLitEnum {}) = True
+isSupportedNamedLit (NLitTag { nli_isEnum = True }) = True
 isSupportedNamedLit _ = False
 
 hasStructuredProvenance :: SignalExpr -> Bool
@@ -1303,12 +1310,24 @@ selectProvenanceSignalExpr env ty isSelf lowerChild litMatches facts
     accessCands =
         dedupSignalCandidates
             env
-            [ SignalAccess ty (lowerChild base) steps
+            [ mkAccessSignalExpr base steps
             | PFactAccess base steps <- facts
             , not (null steps)
             , all isSupportedProvStep steps
             , not (isSelf base)
             ]
+    mkAccessSignalExpr base steps =
+        case reverse steps of
+            PStepVariantTest tb tq cn _ _ True : revInit ->
+                let initSteps = reverse revInit
+                    lhs =
+                        if null initSteps
+                        then lowerChild base
+                        else SignalAccess SignalUnknownType (lowerChild base) initSteps
+                    rhs = SignalNamedLit SignalUnknownType (NLitEnum tb tq cn 0 0 0 0)
+                in SignalPrim ty PrimEQ [lhs, rhs]
+            _ ->
+                SignalAccess ty (lowerChild base) steps
     concatCands =
         dedupSignalCandidates
             env
@@ -1318,11 +1337,8 @@ selectProvenanceSignalExpr env ty isSelf lowerChild litMatches facts
             , not (isSelf p2)
             ]
 
-lookupArgNamedLit :: Int -> [ProvFact e] -> Maybe NamedLitInfo
-lookupArgNamedLit argIdx facts =
-    case go S.empty [ nli | PFactArgLits kws <- facts, (k, nli) <- kws, k == argIdx, isSupportedNamedLit nli ] of
-        [single] -> Just single
-        _ -> Nothing
+dedupNormalizedNamedLits :: [NamedLitInfo] -> [NamedLitInfo]
+dedupNormalizedNamedLits = go S.empty
   where
     go _ [] = []
     go !seen (x : xs) =
@@ -1331,6 +1347,47 @@ lookupArgNamedLit argIdx facts =
            then go seen xs
            else x : go (S.insert nx seen) xs
 
+variantTestNamedLits :: Integer -> Integer -> [ProvFact e] -> [NamedLitInfo]
+variantTestNamedLits w val facts =
+    [ if isEn
+      then NLitEnum tb tq cn 0 0 (fromInteger w) val
+      else NLitTag tb tq cn 0 0 (fromInteger w) val False
+    | PFactAccess _ steps <- facts
+    , not (null steps)
+    , all isSupportedProvStep steps
+    , PStepVariantTest tb tq cn _ _ isEn : _ <- [reverse steps]
+    ]
+
+lookupArgNamedLit :: Int -> [ProvFact e] -> Maybe NamedLitInfo
+lookupArgNamedLit argIdx facts
+    | length (dedupNormalizedNamedLits (variantTestNamedLits 0 0 facts)) > 1 =
+        Nothing
+    | otherwise =
+        case dedupNormalizedNamedLits
+                 [ nli
+                 | PFactArgLits kws <- facts
+                 , (k, nli) <- kws
+                 , k == argIdx
+                 , isSupportedNamedLit nli
+                 ] of
+            [single] -> Just single
+            _ -> Nothing
+
+lookupCaseArmNamedLit :: Int -> Integer -> Integer -> [ProvFact e] -> Maybe NamedLitInfo
+lookupCaseArmNamedLit argIdx w val eqFacts =
+    let argLits =
+            [ nli
+            | PFactArgLits kws <- eqFacts
+            , (k, nli) <- kws
+            , k == argIdx
+            , isSupportedNamedLit nli
+            , nliMatchesBitLit w val nli
+            ]
+        testLits = variantTestNamedLits w val eqFacts
+    in case dedupNormalizedNamedLits (argLits ++ testLits) of
+           [single] -> Just single
+           _ -> Nothing
+
 -- ============================================================
 -- Shallow depth-bounded hashing and base-36 h4 / h8 suffixes
 -- ============================================================
@@ -1338,10 +1395,13 @@ lookupArgNamedLit argIdx facts =
 normalizeProvStep :: ProvStep -> ProvStep
 normalizeProvStep (PStepField tb tq fn _ _ anon) = PStepField tb tq fn 0 0 anon
 normalizeProvStep (PStepElem idx _) = PStepElem idx 0
+normalizeProvStep (PStepVariantTest tb tq cn _ _ True) = PStepVariantTest tb tq cn 0 0 True
 normalizeProvStep st = st
 
 normalizeNamedLit :: NamedLitInfo -> NamedLitInfo
 normalizeNamedLit (NLitSlot idx _ _ _) = NLitSlot idx 0 0 0
+normalizeNamedLit (NLitEnum tb tq m _ _ _ _) = NLitEnum tb tq m 0 0 0 0
+normalizeNamedLit (NLitTag tb tq m _ _ _ _ True) = NLitEnum tb tq m 0 0 0 0
 normalizeNamedLit nli = nli
 
 isSignalNamedLit :: SignalExpr -> Bool
@@ -1575,10 +1635,16 @@ feedProvStep h (PStepField tb tq fn _ _ _) =
     feedString (feedString (feedString (feedByte h 1) tb) tq) fn
 feedProvStep h (PStepElem idx _) =
     feedInt (feedByte h 2) idx
+feedProvStep h (PStepVariantTest tb tq cn _ _ True) =
+    feedString (feedString (feedString (feedByte h 3) tb) tq) cn
 feedProvStep h _ =
     feedByte h 0
 
 feedNamedLitInfo :: Word64 -> NamedLitInfo -> Word64
+feedNamedLitInfo h (NLitEnum tb tq m _ _ _ _) =
+    feedString (feedString (feedString (feedByte h 1) tb) tq) m
+feedNamedLitInfo h (NLitTag tb tq m _ _ _ _ True) =
+    feedString (feedString (feedString (feedByte h 1) tb) tq) m
 feedNamedLitInfo h (NLitSlot idx _ _ _) =
     feedInt (feedByte h 3) idx
 feedNamedLitInfo h _ =

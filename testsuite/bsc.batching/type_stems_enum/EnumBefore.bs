@@ -1,0 +1,115 @@
+package EnumBefore where
+
+data FlowState = FsIdle | FsFetch | FsExec | FsRetire | FsFault
+  deriving (Bits, Eq)
+
+data OneHotCmd = OhNop | OhRead | OhWrite | OhSync | OhFault
+  deriving (Eq)
+
+instance Bits OneHotCmd 5 where
+    pack OhNop   = 5'b00001
+    pack OhRead  = 5'b00010
+    pack OhWrite = 5'b00100
+    pack OhSync  = 5'b01000
+    pack OhFault = 5'b10000
+    unpack ohBits =
+        if ohBits == 5'b00001 then OhNop
+        else if ohBits == 5'b00010 then OhRead
+        else if ohBits == 5'b00100 then OhWrite
+        else if ohBits == 5'b01000 then OhSync
+        else OhFault
+
+data ModeA = MaIdle | MaRun | MaHold
+  deriving (Eq)
+
+instance Bits ModeA 2 where
+    pack MaIdle = 2'b00
+    pack MaRun  = 2'b01
+    pack MaHold = 2'b10
+    unpack _b =
+        if _b == 2'b00 then MaIdle
+        else if _b == 2'b01 then MaRun
+        else MaHold
+
+data ModeB = MbSlow | MbFast | MbTurbo
+  deriving (Eq)
+
+instance Bits ModeB 2 where
+    pack MbSlow  = 2'b00
+    pack MbFast  = 2'b01
+    pack MbTurbo = 2'b11
+    unpack _b =
+        if _b == 2'b00 then MbSlow
+        else if _b == 2'b01 then MbFast
+        else MbTurbo
+
+interface EnumIfc =
+    step :: Bit 8 -> Bit 8 -> Action
+    peekFlow :: Bit 8 -> Bit 8
+    peekOneHot :: Bit 8 -> Bit 8
+    peekAmbig :: Bit 8
+
+{-# verilog mkEnumMod #-}
+mkEnumMod :: Module EnumIfc
+mkEnumMod =
+    module
+        fsReg :: Reg FlowState <- mkReg FsIdle
+        ohReg :: Reg OneHotCmd <- mkReg OhNop
+        rawCodeReg :: Reg (Bit 2) <- mkReg 0
+        accReg :: Reg (Bit 8) <- mkReg 0
+        auxReg :: Reg (Bit 8) <- mkReg 0
+
+        interface
+            step inVal altVal =
+                do
+                    fsReg :=
+                        if fsReg == FsFetch
+                        then FsExec
+                        else if inVal[0:0] == 1
+                             then FsFetch
+                             else FsIdle
+                    ohReg :=
+                        case ohReg of
+                            OhRead -> OhWrite
+                            _ -> if altVal[0:0] == 1 then OhRead else OhNop
+                    rawCodeReg := rawCodeReg + 1
+                    accReg :=
+                        (if fsReg == FsFetch then inVal else altVal) +
+                        (case ohReg of {
+                            OhRead -> inVal ^ 8'h5A;
+                            _ -> altVal
+                        })
+                    auxReg :=
+                        (if fsReg == FsFetch then altVal ^ 8'h5A else inVal) ^
+                        (case ohReg of {
+                            OhRead -> altVal + 8'h11;
+                            _ -> inVal
+                        })
+
+            peekFlow bias =
+                (case fsReg of {
+                    FsIdle  -> accReg;
+                    FsFetch -> auxReg;
+                    FsExec  -> accReg ^ auxReg;
+                    _       -> 8'hA5
+                }) + bias
+
+            peekOneHot bias =
+                (case ohReg of {
+                    OhNop   -> accReg;
+                    OhRead  -> auxReg;
+                    OhWrite -> accReg + auxReg;
+                    _       -> 8'h5A
+                }) ^ bias
+
+            peekAmbig =
+                let ambMix =
+                        (case unpack rawCodeReg of {
+                            MaRun -> accReg;
+                            _ -> auxReg
+                        }) +
+                        (case unpack rawCodeReg of {
+                            MbFast -> auxReg ^ 8'h5A;
+                            _ -> accReg
+                        })
+                in ambMix ^ (ambMix + 8'h01)
