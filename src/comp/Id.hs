@@ -266,10 +266,14 @@ idCompare a b = case (compare (id_fs a) (id_fs b)) of
 
 -- to use when position matters
 idCompareWithPos :: Id -> Id -> Ordering
-idCompareWithPos a b = case (compare a b) of
-                       EQ -> compare (getIdPosition a) (getIdPosition b)
-                       LT -> LT
-                       GT -> GT
+idCompareWithPos a b =
+    case cmpIdByName a b of
+      EQ -> let pa = getIdPosition a
+                pb = getIdPosition b
+            in compare (getRelativeFilePath (getPositionFile pa), getPositionLine pa, getPositionColumn pa)
+                       (getRelativeFilePath (getPositionFile pb), getPositionLine pb, getPositionColumn pb)
+      LT -> LT
+      GT -> GT
 
 -- Orders as comparing getIdString would, without building the qualified
 -- strings: schedule maps key on hierarchical names with long shared prefixes.

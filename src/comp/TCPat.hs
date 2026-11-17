@@ -1,12 +1,13 @@
 module TCPat(tiPat, tiPats) where
 
 import Control.Monad
-import qualified Data.Map as M
 import Data.List(deleteFirstsBy)
 --import Debug.Trace
 
 import Util(concatMapM, findDup)
 import Id
+import IdMap(IdMap)
+import qualified IdMap
 import Position
 import Error(internalError, ErrMsg(..))
 import Pred
@@ -146,11 +147,11 @@ tiPats ts pats = do
     return (concat pss, concat ass, ips)
 
 -- pattern variable environment
-type PVEnv = M.Map Id Position
+type PVEnv = IdMap Position
 
 -- empty PVEnv to start with
 emptyPVEnv :: PVEnv
-emptyPVEnv = M.empty
+emptyPVEnv = IdMap.empty
 
 -- detect duplicate pattern variables; fail typechecking if any found
 --
@@ -159,11 +160,11 @@ emptyPVEnv = M.empty
 detectDuplicatePV :: PVEnv -> CPat -> TI PVEnv
 detectDuplicatePV env (CPVar var) =
     let pos = getIdPosition var
-    in  case var `M.lookup` env of
-          Nothing -> return (M.insert var pos env)
+    in  case var `IdMap.lookup` env of
+          Nothing -> return (IdMap.insert var pos env)
           Just pos' -> err (pos, EMultipleDecl (pfpString var) pos')
 detectDuplicatePV env (CPAs var pat) = detectDuplicatePV env' pat
-    where env' = M.insert var (getIdPosition var) env
+    where env' = IdMap.insert var (getIdPosition var) env
 detectDuplicatePV env (CPstruct _ _ fields) =
     foldM detectDuplicatePV env [pat | (name, pat) <- fields]
 detectDuplicatePV env (CPCon _ pats) = foldM detectDuplicatePV env pats

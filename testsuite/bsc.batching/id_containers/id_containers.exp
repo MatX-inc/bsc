@@ -1,0 +1,22 @@
+# Verify Id-keyed containers (IdOrd, IdSet, IdMap, IdMap.Strict) and live
+# adopters (TCPat pattern-variable checking, VVerilogDollar -remove-dollar
+# renaming, and BinData container encoding) produce identical .bo, .v, and
+# diagnostic outputs across standalone vs. scrambled-batch builds and under
+# -trace-intern-reverse, including under a tight GHC stack (+RTS -K16m -RTS).
+
+batching_bo_pair IdContainers.bs IdContainersRoot.bs IdContainersScramble.bs
+reverse_intern_same_bo IdContainers.bs {+RTS -K16m -RTS}
+
+batching_verilog_pair IdContainers.bs mkIdContainers IdContainersRoot.bs mkIdContainersRoot {IdContainersScramble.bs} {-remove-dollar}
+reverse_intern_same_verilog IdContainers.bs mkIdContainers {-remove-dollar +RTS -K16m -RTS}
+
+set dup_src IdContainersDupPat.bs
+set dup_out [make_bsc_output_name $dup_src]
+with_normal_intern_order {
+    compile_fail_error $dup_src T0011 1
+}
+move $dup_out dup.normal.out
+with_normal_intern_order {
+    compile_fail_error $dup_src T0011 1 {-trace-intern-reverse}
+}
+compare_file $dup_out dup.normal.out

@@ -1,12 +1,13 @@
 module VVerilogDollar (removeDollarsFromVerilog) where
 import Id
+import IdMap(IdMap)
+import qualified IdMap
 import FStringCompat
 import PreStrings (fsDollar)
 import Verilog
 import Data.Generics
 import Control.Monad(guard)
 import Control.Monad.State(State, gets, put, execState)
-import qualified Data.Map as Map
 import qualified Data.Set as Set
 import ErrorUtil (internalError)
 
@@ -32,7 +33,7 @@ get_vids vprog
          in tag)
       vprog
 
-type The_map = Map.Map Id Id
+type The_map = IdMap Id
 
 type Used_RHS = Set.Set String
 
@@ -71,7 +72,7 @@ process_v_identifier vid
                      _ -> do used_underscore_ids <- (gets
                                                        get_used_underscore_identifiers)
                              the_map <- (gets get_map)
-                             case (Map.lookup the_id the_map) of
+                             case (IdMap.lookup the_id the_map) of
                                  (Just _) -> return ()
                                  _ -> let
                                           id_possibilities :: [Id]
@@ -127,7 +128,7 @@ process_v_identifier vid
                                           first_good_id = head ((filter good_id) (id_possibilities))
                                         in
                                         put
-                                          (S (Map.insert the_id first_good_id the_map)
+                                          (S (IdMap.insert the_id first_good_id the_map)
                                              (Set.insert (getIdString first_good_id)
                                                 used_underscore_ids))
 
@@ -149,7 +150,7 @@ new_vid m v
                             _ -> VId out_string my_new_id item
 
 new_id :: The_map -> Id -> Id
-new_id m i = Map.findWithDefault i i m
+new_id m i = IdMap.findWithDefault i i m
 
 set_of_used_ids :: [VId] -> Used_RHS
 set_of_used_ids s
@@ -164,7 +165,7 @@ set_of_used_ids s
 get_map_ids :: Used_RHS -> [VId] -> The_map
 get_map_ids used s
   = get_map
-      (execState (mapM_ process_v_identifier s) (S Map.empty used))
+      (execState (mapM_ process_v_identifier s) (S IdMap.empty used))
 
 -- the list of possibilities of how to join x and y with a separator
 -- for example, x_y, x_1y, x_2y, ...
