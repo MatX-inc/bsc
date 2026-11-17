@@ -1,0 +1,4 @@
+package IdContainersDupPat where
+
+dupPat :: (UInt 8, UInt 8, UInt 8) -> UInt 8
+dupPat (zeta, alpha, zeta) = zeta + alpha

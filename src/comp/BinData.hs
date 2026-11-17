@@ -91,6 +91,10 @@ import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 import FStringCompat
 import PreIds(idDefaultClock)
 import Id
+import IdMap(IdMap)
+import qualified IdMap
+import IdSet(IdSet)
+import qualified IdSet
 import Position
 import VModInfo
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..),
@@ -1062,6 +1066,14 @@ instance (Ord a, Bin a, Bin b) => Bin (M.Map a b) where
 instance (Ord a, Bin a) => Bin (S.Set a) where
     writeBytes set = orderByEncoding id (S.toList set) >>= toBin
     readBytes      = do { ss <- fromBin; return (S.fromList ss) }
+
+instance (Bin v) => Bin (IdMap v) where
+    writeBytes m = toBin (IdMap.toListByName m)
+    readBytes    = do { ms <- fromBin; return (IdMap.fromList ms) }
+
+instance Bin IdSet where
+    writeBytes s = toBin (IdSet.toListByName s)
+    readBytes    = do { ss <- fromBin; return (IdSet.fromList ss) }
 
 -- ---------
 -- Bin Ids, Positions, etc.

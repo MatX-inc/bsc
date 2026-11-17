@@ -1,0 +1,21 @@
+-- Interns alpha/zeta and dollar-collision identifiers in reverse order before
+-- compiling IdContainers in a batched `bsc -u` invocation.
+package IdContainersScramble where
+
+{-# verilog mkIdContainersScramble #-}
+mkIdContainersScramble :: Module Empty
+mkIdContainersScramble =
+  module
+    r_alpha      :: Reg (UInt 8) <- mkReg 0
+    r_alpha_D_IN :: Reg (UInt 8) <- mkReg 0
+    r_zeta       :: Reg (UInt 8) <- mkReg 0
+    r_zeta_D_IN  :: Reg (UInt 8) <- mkReg 0
+
+    let pick :: (UInt 8, UInt 8) -> UInt 8
+        pick (alpha, zeta) = alpha + zeta
+
+    rules
+      "tick": when True ==>
+        action
+          r_alpha := pick (r_alpha_D_IN, r_zeta_D_IN)
+          r_zeta  := r_alpha

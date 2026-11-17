@@ -1,0 +1,37 @@
+package IdContainers where
+
+struct Pair8 =
+  zeta  :: UInt 8
+  alpha :: UInt 8
+ deriving (Bits, Eq)
+
+interface IdContainersIfc =
+  step :: Pair8 -> Action
+  readSum :: UInt 8
+
+{-# verilog mkIdContainers #-}
+mkIdContainers :: Module IdContainersIfc
+mkIdContainers =
+  module
+    r_zeta_D_IN  :: Reg (UInt 8) <- mkReg 0
+    r_zeta       :: Reg (UInt 8) <- mkReg 0
+    r_alpha_D_IN :: Reg (UInt 8) <- mkReg 0
+    r_alpha      :: Reg (UInt 8) <- mkReg 0
+
+    let sumPair :: (Pair8, UInt 8) -> UInt 8
+        sumPair (Pair8 { zeta = z; alpha = a }, bias) = z + a + bias
+
+    rules
+      "advance": when True ==>
+        action
+          r_zeta_D_IN  := r_zeta + 1
+          r_alpha_D_IN := r_alpha + 1
+
+    interface
+      step p =
+        case (p, 1) of
+          pair@(Pair8 { zeta = z; alpha = a }, _) ->
+            action
+              r_zeta  := z + sumPair pair
+              r_alpha := a
+      readSum = r_zeta + r_alpha + r_zeta_D_IN + r_alpha_D_IN

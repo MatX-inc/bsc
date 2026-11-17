@@ -1,0 +1,12 @@
+package IdContainersRoot where
+
+import IdContainersScramble
+import IdContainers
+
+{-# verilog mkIdContainersRoot #-}
+mkIdContainersRoot :: Module Empty
+mkIdContainersRoot =
+  module
+    _s <- mkIdContainersScramble
+    _c <- mkIdContainers
+    interface
