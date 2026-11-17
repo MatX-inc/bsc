@@ -243,7 +243,7 @@
     loopCnt.q_state : Bit#(12)
     mpx : Maybe#(WireTypes::Pixel)
     pal : Vector::Vector#(4, WireTypes::Color)
-    pal__h2947 : Vector::Vector#(4, WireTypes::Color)
+    pal__h2863 : Vector::Vector#(4, WireTypes::Color)
     pixelBypass : Maybe#(WireTypes::Pixel)
     pulse : Bool
     pulseCount : UInt#(8)
@@ -750,7 +750,7 @@ RESULT: PASS
     loopCnt.q_state : Bit#(12)
     mpx : Maybe#(WireTypes::Pixel)
     pal : Vector::Vector#(4, WireTypes::Color)
-    pal__h2947 : Vector::Vector#(4, WireTypes::Color)
+    pal__h2863 : Vector::Vector#(4, WireTypes::Color)
     pixelBypass : Maybe#(WireTypes::Pixel)
     pulse : Bool
     pulseCount : UInt#(8)

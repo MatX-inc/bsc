@@ -1,0 +1,16 @@
+package ImplicitConditionOrderScramble where
+
+import FIFO
+
+-- The probe's five instance names declared in reverse order so a batch parses
+-- this package first and interns p2 before p1.
+{-# verilog mkImplicitConditionOrderScramble #-}
+mkImplicitConditionOrderScramble :: Module Empty
+mkImplicitConditionOrderScramble =
+    module
+        sideQ :: FIFO (Bit 8) <- mkFIFO
+        outQ :: FIFO (Bit 8) <- mkFIFO
+        inQ :: FIFO (Bit 8) <- mkFIFO
+        p2 :: FIFO (Bit 8) <- mkFIFO
+        p1 :: FIFO (Bit 8) <- mkFIFO
+        interface {}

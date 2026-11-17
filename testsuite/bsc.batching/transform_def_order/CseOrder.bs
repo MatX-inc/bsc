@@ -1,0 +1,22 @@
+package CseOrder where
+
+interface CseOrder =
+    put :: Bit 8 -> Bit 8 -> Bit 8 -> Bit 8 -> Action {-# arg_names = [aa, ab, zz, zy] #-}
+
+-- Two sums of method arguments, each used twice, so eqPtrs and ITransform's
+-- CSE map emit local defs in first-sighting order rather than Ord IExpr /
+-- Ord Id on the leaf argument names.
+{-# verilog mkCseOrder #-}
+mkCseOrder :: Module CseOrder
+mkCseOrder =
+    module
+        r1 :: Reg (Bit 8) <- mkReg 0
+        r2 :: Reg (Bit 8) <- mkReg 0
+        r3 :: Reg (Bit 8) <- mkReg 0
+        r4 :: Reg (Bit 8) <- mkReg 0
+        interface
+            put aa ab zz zy = do
+                r1 := aa + ab
+                r2 := (aa + ab) ^ 0x5a
+                r3 := zz + zy
+                r4 := (zz + zy) ^ 0x5a

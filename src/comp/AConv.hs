@@ -27,7 +27,7 @@ import ASyntax
 import ASyntaxUtil
 import GenWrapUtils(isGenId, dropGenSuffixId)
 import Prim
-import Data.List(sortOn, genericLength, nub)
+import Data.List(genericLength, nub, sortOn)
 import Data.Maybe(fromMaybe)
 import VModInfo(lookupOutputClockWires, lookupOutputResetWire,
                 lookupIfcInoutWire, vArgs, VArgInfo(..))
@@ -61,20 +61,15 @@ isLocalAId i = isBadId i || isFromRHSId i
 -----
 -- Conversion monad.
 
-type CSEMap = M.Map AExpr (AId, AType, AExpr)
+type CSEMap = M.Map AExpr (Int, AId, AType, AExpr)
 
-type IEDefMap = M.Map Id (AExpr, [DefProp])
+type IEDefMap = M.Map Id (Int, AExpr, [DefProp])
 data AState = AState {
         errHandle :: ErrorHandle,
         varNo :: !Int, -- for new variable names
+        cseNo :: !Int, -- first-sighting serial for CSE entries
+        defNo :: !Int, -- first-sighting serial for accumulated definitions
         cseMap :: CSEMap, -- for CSE
-        -- Creation sequence of every def in cseMap and ieDefMap.  aDo walks
-        -- the module's rules, instance arguments, and methods in the order
-        -- the IModule lists them and converts a local def the first time it
-        -- is referenced, so this sequence records elaboration order rather
-        -- than Ord Id (string-intern) map order.
-        seqNo :: !Int,
-        defSeq :: M.Map Id Int,
         stVarMap :: IdMap, -- I-expr names to A-expr names
         ieDefMap :: IEDefMap, -- accumulated definitions
         flags :: Flags, -- to hold the flags on the Monad
@@ -90,16 +85,16 @@ aInitState errh svm flags =
     AState {
              errHandle = errh,
              varNo = 1,
+             cseNo = 0,
+             defNo = 0,
              cseMap = M.empty,
-             seqNo = 0,
-             defSeq = M.empty,
              stVarMap = svm,
              ieDefMap = M.empty,
              flags = flags,
              wmsgs = []
            }
 
-getMap :: M (M.Map AExpr (AId, AType, AExpr))
+getMap :: M CSEMap
 getMap = liftM cseMap (get)
 
 -- generate an identifier from an expression and add a unique suffix:
@@ -121,9 +116,13 @@ newAIdFromAExpr p expr = do
 addMap :: AExpr -> AId -> AType -> M ()
 addMap e i t = do
         s <- get
-        put (s { cseMap = M.insert e (i, t, e) (cseMap s),
-                 seqNo = seqNo s + 1,
-                 defSeq = M.insert i (seqNo s) (defSeq s) })
+        case M.lookup e (cseMap s) of
+          Just (ord, _, _, _) ->
+              put (s { cseMap = M.insert e (ord, i, t, e) (cseMap s) })
+          Nothing ->
+              let n = cseNo s
+                  n' = n + 1
+              in n' `seq` put (s { cseNo = n', cseMap = M.insert e (n, i, t, e) (cseMap s) })
 
 transId :: Id -> M Id
 transId i = do s <- get
@@ -135,9 +134,13 @@ getDA = liftM ieDefMap (get)
 addDA :: Id -> AExpr -> [DefProp] -> M ()
 addDA i e p = do s <- get
                  -- traceM $ "addDa adding " ++ ppReadable (i,p)
-                 put (s { ieDefMap = M.insert i (e,p) (ieDefMap s),
-                          seqNo = seqNo s + 1,
-                          defSeq = M.insertWith (\ _ old -> old) i (seqNo s) (defSeq s) })
+                 case M.lookup i (ieDefMap s) of
+                   Just (ord, _, _) ->
+                       put (s { ieDefMap = M.insert i (ord, e, p) (ieDefMap s) })
+                   Nothing ->
+                       let n = defNo s
+                           n' = n + 1
+                       in n' `seq` put (s { defNo = n', ieDefMap = M.insert i (n, e, p) (ieDefMap s) })
 
 addWarning :: WMsg -> M ()
 addWarning w = do s <- get
@@ -263,18 +266,20 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ idefs rs ifc ffc
                            (imod_expr_types imod)
         metadataState <- get
         put runtimeState
-        let stateDefs s = [ADef i t e [] | (_, (i,t,e)) <- M.toList (cseMap s)] ++
+        let orderedCse m =
+                [ (i, t, e)
+                  | (_, i, t, e) <- sortOn (\(ord, _, _, _) -> ord) (M.elems m) ]
+            orderedDefs m =
+                [ (i, e, props)
+                  | (i, (_, e, props)) <- sortOn (\(_, (ord, _, _)) -> ord) (M.toList m) ]
+            stateDefs s = [ADef i t e [] | (i, t, e) <- orderedCse (cseMap s)] ++
                           [ADef i (aType e) e props |
-                           (i,(e,props)) <- M.toList (ieDefMap s),
+                           (i, e, props) <- orderedDefs (ieDefMap s),
                            defPropsHasNoCSE props]
             exprTypes = inlineDroppedExprTypes (stateDefs metadataState)
                                               (stateDefs runtimeState) exprTypes0
         defMap <- getDA
         cseMap <- getMap
-        seqMap <- gets defSeq
-        let seqOf i = M.findWithDefault maxBound i seqMap
-            inCreationOrder :: [(Id, a)] -> [(Id, a)]
-            inCreationOrder = sortOn (seqOf . fst)
         -- traceM $ "defMap = " ++ ppReadable defMap
         -- traceM $ "cseMap = " ++ ppReadable cseMap
 
@@ -282,16 +287,20 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ idefs rs ifc ffc
         -- But prevent non-CSE defs from becoming CSE'd into other expressions.
         -- Similar to what is being done in ITransform, in iTransFixupDefNames.
         --
-        let -- because we use "aSubst" to perform the substitution,
+        let defsInOrder = orderedDefs defMap
+            cseInOrder = orderedCse cseMap
+            -- because we use "aSubst" to perform the substitution,
             -- we are doing an Id-to-Expr subst (not Id-to-Id) so we need to
-            -- know the type in order to create the ASDef expr
+            -- know the type in order to create the ASDef expr.
+            -- Feed reverse defsInOrder so combineFn prepends in O(1) and yields
+            -- def_ips in exact first-sighting order.
             cse_ids_map :: M.Map AId (AType, [(AId, [DefProp])])
             cse_ids_map =
                 let combineFn (t1, ips1) (_, ips2) = (t1, ips1 ++ ips2)
-                in  M.fromListWith  combineFn
+                in  M.fromListWith combineFn
                         [ (cse_name, (ty, [(def_name, props)]))
-                          | (def_name, ((ASDef ty cse_name), props))
-                                <- inCreationOrder (M.toList defMap) ]
+                          | (def_name, ASDef ty cse_name, props)
+                                <- reverse defsInOrder ]
 
             rename_map :: M.Map AId (AType, AId)
             rename_map =
@@ -326,13 +335,13 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ idefs rs ifc ffc
             local_defs =
                 let defs_from_cse =
                         -- XXX props are lost on CSE'd defs
-                        [ (i, ADef (rename_id i) t (aSubst subst_map e) [])
-                          | (_, (i, t, e)) <- M.toList cseMap ]
+                        [ ADef (rename_id i) t (aSubst subst_map e) []
+                          | (i, t, e) <- cseInOrder ]
                     non_cse_defs =
-                        [ (i, ADef i (ae_type e) (aSubst subst_map e) props)
-                          | (i, (e, props)) <- M.toList defMap,
+                        [ ADef i (ae_type e) (aSubst subst_map e) props
+                          | (i, e, props) <- defsInOrder,
                             defPropsHasNoCSE props ]
-                in  map snd (inCreationOrder (defs_from_cse ++ non_cse_defs))
+                in  defs_from_cse ++ non_cse_defs
 
         reset_list <- mapM (\ir -> do ar <- aReset ir
                                       return (getResetId ir, ar))
@@ -777,7 +786,7 @@ aEDef i e ps = do
         da <- getDA
         -- traceM $ "aEDef " ++ ppReadable (i,e,ps)
         case M.lookup i da of
-         Just (a, _) -> do
+         Just (_, a, _) -> do
            return a
          Nothing -> do
             -- traceM $ "not found"
@@ -1064,7 +1073,7 @@ find :: AExpr -> AType -> Position -> M (AId, AType, AExpr)
 find e t pos = do
         m <- getMap
         case M.lookup e m of
-         Just ite -> return ite
+         Just (_, i, t', e') -> return (i, t', e')
          Nothing -> do
                 i <- newAIdFromAExpr pos e
                 addMap e i t

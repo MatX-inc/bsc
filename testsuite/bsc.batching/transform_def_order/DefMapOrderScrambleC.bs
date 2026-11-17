@@ -1,0 +1,19 @@
+package DefMapOrderScrambleC where
+
+import FIFO
+
+{-# verilog mkDefMapOrderScrambleC #-}
+mkDefMapOrderScrambleC :: Module Empty
+mkDefMapOrderScrambleC =
+    module
+        fx :: FIFO (Bit 8) <- mkFIFO
+        fy :: FIFO (Bit 8) <- mkFIFO
+        fc :: FIFO (Bit 8) <- mkFIFO
+        s :: Reg (Bit 2) <- mkReg 0
+        x :: Reg (Bit 8) <- mkReg 0
+        rules
+            "rone": when True ==>
+                case s of
+                    0 -> fx.enq x
+                    1 -> fy.enq x
+                    _ -> fc.enq x

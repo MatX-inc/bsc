@@ -1177,7 +1177,7 @@ data AExpr
             ae_objid :: AId,
             ae_clkid :: AId
         }
-        deriving (Ord, Show)
+        deriving (Show)
 
 instance NFData AExpr where
     rnf (APrim oid typ prim args) = rnf4 oid typ prim args
@@ -1256,6 +1256,72 @@ instance Eq AExpr where
         (t == t') && (oid == oid') && (cid == cid')
 
     aexpr == aexpr' = False
+
+-- Ord AExpr must ignore the exact same annotation fields as Eq AExpr
+-- (ae_objid on APrim/ASInt/ASReal/ASStr and ae_type on ASClock/ASReset/ASInout)
+-- so Map/Set lookups never miss equal expressions or split CSE buckets by
+-- source-location carrier Id.
+instance Ord AExpr where
+    compare (APrim _ t op aexprs) (APrim _ t' op' aexprs') =
+        compare t t' `mappend` compare op op' `mappend` compare aexprs aexprs'
+    compare (AMethCall t aid mid aexprs) (AMethCall t' aid' mid' aexprs') =
+        compare t t' `mappend` compare mid mid' `mappend` compare aexprs aexprs' `mappend` compare aid aid'
+    compare (AMethValue t aid mid) (AMethValue t' aid' mid') =
+        compare t t' `mappend` compare mid mid' `mappend` compare aid aid'
+    compare (ATuple t aexprs) (ATuple t' aexprs') =
+        compare t t' `mappend` compare aexprs aexprs'
+    compare (ATupleSel t aexpr index) (ATupleSel t' aexpr' index') =
+        compare t t' `mappend` compare index index' `mappend` compare aexpr aexpr'
+    compare (ANoInlineFunCall t aid af aexprs) (ANoInlineFunCall t' aid' af' aexprs') =
+        compare t t' `mappend` compare af af' `mappend` compare aexprs aexprs' `mappend` compare aid aid'
+    compare (AFunCall t aid af isC aexprs) (AFunCall t' aid' af' isC' aexprs') =
+        compare t t' `mappend` compare af af' `mappend` compare isC isC' `mappend` compare aexprs aexprs' `mappend` compare aid aid'
+    compare (ATaskValue t aid af isC n) (ATaskValue t' aid' af' isC' n') =
+        compare t t' `mappend` compare aid aid' `mappend` compare af af' `mappend` compare isC isC' `mappend` compare n n'
+    compare (ASPort t aid) (ASPort t' aid') =
+        compare t t' `mappend` compare aid aid'
+    compare (ASParam t aid) (ASParam t' aid') =
+        compare t t' `mappend` compare aid aid'
+    compare (ASDef t aid) (ASDef t' aid') =
+        compare t t' `mappend` compare aid aid'
+    compare (ASInt _ t il) (ASInt _ t' il') =
+        compare t t' `mappend` compare il il'
+    compare (ASReal _ t r) (ASReal _ t' r') =
+        compare t t' `mappend` compare r r'
+    compare (ASStr _ t str) (ASStr _ t' str') =
+        compare t t' `mappend` compare str str'
+    compare (ASAny t me) (ASAny t' me') =
+        compare t t' `mappend` compare me me'
+    compare (ASClock _ c) (ASClock _ c') =
+        compare c c'
+    compare (ASReset _ e) (ASReset _ e') =
+        compare e e'
+    compare (ASInout _ e) (ASInout _ e') =
+        compare e e'
+    compare (AMGate t oid cid) (AMGate t' oid' cid') =
+        compare t t' `mappend` compare oid oid' `mappend` compare cid cid'
+    compare e1 e2 = compare (aExprTag e1) (aExprTag e2)
+      where
+        aExprTag :: AExpr -> Int
+        aExprTag (APrim {})            = 0
+        aExprTag (AMethCall {})        = 1
+        aExprTag (AMethValue {})       = 2
+        aExprTag (ATuple {})           = 3
+        aExprTag (ATupleSel {})        = 4
+        aExprTag (ANoInlineFunCall {}) = 5
+        aExprTag (AFunCall {})         = 6
+        aExprTag (ATaskValue {})       = 7
+        aExprTag (ASPort {})           = 8
+        aExprTag (ASParam {})          = 9
+        aExprTag (ASDef {})            = 10
+        aExprTag (ASInt {})            = 11
+        aExprTag (ASReal {})           = 12
+        aExprTag (ASStr {})            = 13
+        aExprTag (ASAny {})            = 14
+        aExprTag (ASClock {})          = 15
+        aExprTag (ASReset {})          = 16
+        aExprTag (ASInout {})          = 17
+        aExprTag (AMGate {})           = 18
 
 instance HasPosition AExpr where
     getPosition APrim{ ae_objid = p }       = getPosition p

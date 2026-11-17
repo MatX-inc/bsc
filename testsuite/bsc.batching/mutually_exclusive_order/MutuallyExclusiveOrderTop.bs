@@ -1,0 +1,13 @@
+package MutuallyExclusiveOrderTop where
+
+import MutuallyExclusiveOrderScramble
+import MutuallyExclusiveOrder
+
+-- Batch order: the scrambler, then the probe.
+{-# verilog mkMutuallyExclusiveOrderTop #-}
+mkMutuallyExclusiveOrderTop :: Module Empty
+mkMutuallyExclusiveOrderTop =
+    module
+        _ :: Empty <- mkMutuallyExclusiveOrderScramble
+        _ :: Empty <- sysMutuallyExclusiveOrder
+        interface {}

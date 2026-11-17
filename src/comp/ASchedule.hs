@@ -2741,8 +2741,17 @@ extractMEPairsSP sps =
         mkAllPairs (SPSchedule _) = []
         mkAllPairs (SPMutuallyExclusive ids) = mkMEPairs ids
         mkAllPairs (SPConflictFree ids) = []
+        -- A pair keeps the attribute's own order (the group named earlier
+        -- first): its first group hosts the check and is named first in
+        -- the message, so orienting it with ordPair (Ord Id, intern order)
+        -- let that depend on what the process had compiled before.
+        dedupME _ [] = []
+        dedupME seen (p : ps)
+            | S.member key seen = dedupME seen ps
+            | otherwise = p : dedupME (S.insert key seen) ps
+          where key = ordPair p
     in
-        nub (map ordPair (concatMap mkAllPairs sps))
+        dedupME S.empty (concatMap mkAllPairs sps)
 
 extractCFPairsSP :: [ASchedulePragma] -> [(ARuleId,ARuleId)]
 extractCFPairsSP sps =
