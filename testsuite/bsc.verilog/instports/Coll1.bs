@@ -1,0 +1,27 @@
+package Coll1 where
+
+-- No collision: method `foo' has a Verilog output PORT named "sub_1",
+-- which is only the internal spelling of copy 1 of the 2-ported `sub'.
+-- The port map keys are method spellings (sub_1, sub_2, foo), so the
+-- Verilog port name "sub_1" is free to coincide with one of them.
+interface VColl1 =
+    sub :: Bit 4 -> Bit 8
+    foo :: Bit 8
+
+vMkColl1 :: Module VColl1
+vMkColl1 =
+    module verilog "VColl1" "CLK" {
+        sub[2] = "ADDR" "D_OUT";
+        foo    = "sub_1";
+    } [ sub <> sub, foo <> foo, sub <> foo ]
+
+{-# verilog sysColl1 #-}
+sysColl1 :: Module Empty
+sysColl1 =
+    module
+        m :: VColl1 <- vMkColl1
+        r :: Reg (Bit 8) <- mkReg 0
+        r2 :: Reg (Bit 8) <- mkReg 0
+        rules
+            "useSub": when True ==> r := m.sub (r[3:0]) + m.sub (r2[3:0])
+            "useFoo": when True ==> r2 := m.foo

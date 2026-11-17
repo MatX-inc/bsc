@@ -148,7 +148,6 @@ import AConv(aConv)
 import IDropRules(iDropRules)
 import ARankMethCalls(aRankMethCalls)
 import AState(aState)
-import ARenameIO(aRenameIO)
 import ASchedule(AScheduleInfo(..), AScheduleErrInfo(..), aSchedule)
 import RSchedule(ratInUseOrder)
 import AAddScheduleDefs(aAddScheduleDefs)
@@ -1710,12 +1709,12 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        ff_map <- buildForeignFunctionMap errh abis
        t <- dump errh flags time0 DFforeignMap dumpnames ff_map
 
-       -- Generate muxes etc.
+        -- Generate muxes etc.
        start flags DFastate
        asmod0 <- aState errh flags pprops scheduleInfo atsPackage
        let asmod = if genABin flags
                    then anchorASPackage (propagateConditionalTypes
-                                         (propagateArgumentMuxTypes asmod0))
+                                         (propagateArgumentMuxTypes flags asmod0))
                    else asmod0
        -- after aState, method calls should no longer exist
        asMethCheck flags asmod "astate"
@@ -1736,28 +1735,21 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Inline CReg modules (replacing with Reg modules)
        start flags DFcreg
        let asmodNoCReg
-               | removeCReg flags = aInlineCReg asmodNoWires
+               | removeCReg flags = aInlineCReg flags asmodNoWires
                | otherwise = asmodNoWires
        asCheck flags asmodNoCReg "ainlinecreg"
        t <- dump errh flags t DFcreg dumpnames asmodNoCReg
        stats flags DFrwire asmodNoCReg
 
-       -- Rename submodule ports from the method-notation to the actual
-       -- Verilog port names
-       start flags DFrenameio
-       -- Inlining exposes selections; renaming can join duplicate outputs.
-       -- Close their candidate sets before unused definitions disappear.
-       let armod0 = aRenameIO flags asmodNoCReg
-           armod = if genABin flags
-                   then anchorASPackage (propagateConditionalTypes armod0)
-                   else armod0
-       asCheck flags armod "renameio"
-       t <- dump errh flags t DFrenameio dumpnames armod
-       stats flags DFrenameio armod
+       -- Wire and CReg inlining expose selections; close candidate sets
+       -- before unused definitions disappear.
+       let asmodPreDrop = if genABin flags
+                          then anchorASPackage (propagateConditionalTypes asmodNoCReg)
+                          else asmodNoCReg
 
        -- drop unused defs
        start flags DFadropdefs
-       let adropmod = aDropDefs armod
+       let adropmod = aDropDefs asmodPreDrop
        asCheck flags adropmod "adropdefs"
        t <- dump errh flags t DFadropdefs dumpnames adropmod
        stats flags DFadropdefs adropmod
