@@ -45,25 +45,25 @@ y :: ABSTRACT:  Prelude.VReg = RegN
 			       port types=D_IN -> Prelude.Bit 32
 					  Q_OUT -> Prelude.Bit 32
 -- AP local definitions
-x___d1 :: Bit 32;
-x___d1  = x.read;
--- IdProp x___d1[IdP_from_rhs]
-x_BITS_29_TO_0___h95 :: Bit 30;
-x_BITS_29_TO_0___h95  = extract x___d1 32'd29 32'd0;
--- IdProp x_BITS_29_TO_0___h95[IdP_keep]
-x_BITS_29_TO_0_CONCAT_0___d3 :: Bit 32;
-x_BITS_29_TO_0_CONCAT_0___d3  = x_BITS_29_TO_0___h95 ++ 2'd0;
--- IdProp x_BITS_29_TO_0_CONCAT_0___d3[IdP_from_rhs]
-x_BITS_28_TO_0___h103 :: Bit 29;
-x_BITS_28_TO_0___h103  = extract x___d1 32'd28 32'd0;
--- IdProp x_BITS_28_TO_0___h103[IdP_keep]
-x_BITS_28_TO_0_CONCAT_0___d5 :: Bit 32;
-x_BITS_28_TO_0_CONCAT_0___d5  = x_BITS_28_TO_0___h103 ++ 3'd0;
--- IdProp x_BITS_28_TO_0_CONCAT_0___d5[IdP_from_rhs]
+x_hlts9 :: Bit 32;
+x_hlts9  = x.read;
+-- IdProp x_hlts9[IdP_from_rhs]
+x_BITS_29_TO_0_h2ari :: Bit 30;
+x_BITS_29_TO_0_h2ari  = extract x_hlts9 32'd29 32'd0;
+-- IdProp x_BITS_29_TO_0_h2ari[IdPInferredName,IdP_keep]
+x_BITS_29_TO_0_CONCAT_0_hu2h5 :: Bit 32;
+x_BITS_29_TO_0_CONCAT_0_hu2h5  = x_BITS_29_TO_0_h2ari ++ 2'd0;
+-- IdProp x_BITS_29_TO_0_CONCAT_0_hu2h5[IdP_from_rhs]
+x_BITS_28_TO_0_hbk6z :: Bit 29;
+x_BITS_28_TO_0_hbk6z  = extract x_hlts9 32'd28 32'd0;
+-- IdProp x_BITS_28_TO_0_hbk6z[IdPInferredName,IdP_keep]
+x_BITS_28_TO_0_CONCAT_0_hki0m :: Bit 32;
+x_BITS_28_TO_0_CONCAT_0_hki0m  = x_BITS_28_TO_0_hbk6z ++ 3'd0;
+-- IdProp x_BITS_28_TO_0_CONCAT_0_hki0m[IdP_from_rhs]
 -- AP rules
 rule RL_unnamed "":
  when 1'd1
-  ==> { x.write x_BITS_29_TO_0_CONCAT_0___d3; y.write x_BITS_28_TO_0_CONCAT_0___d5; }
+  ==> { x.write x_BITS_29_TO_0_CONCAT_0_hu2h5; y.write x_BITS_28_TO_0_CONCAT_0_hki0m; }
 []
 clock domain = Just (0), resets = [0]
 -- AP scheduling pragmas

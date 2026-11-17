@@ -42,20 +42,20 @@ rg :: ABSTRACT:  PreludeBSV._PreludeBSV.VRWire103 = RWire
 							       WHAS -> Prelude.Bool
 							       WVAL -> Prelude.Bit 8
 -- AP local definitions
-rg_whas____d1 :: Bit 1;
-rg_whas____d1  = rg.whas;
--- IdProp rg_whas____d1[IdP_from_rhs]
-rg_wget____d2 :: Bit 8;
-rg_wget____d2  = rg.wget;
--- IdProp rg_wget____d2[IdP_from_rhs]
-rg_whas_CONCAT_rg_wget___d3 :: Bit 9;
-rg_whas_CONCAT_rg_wget___d3  = rg_whas____d1 ++ rg_wget____d2;
--- IdProp rg_whas_CONCAT_rg_wget___d3[IdP_from_rhs]
+rg_whas_hn2qb :: Bit 1;
+rg_whas_hn2qb  = rg.whas;
+-- IdProp rg_whas_hn2qb[IdP_from_rhs]
+rg_wget_h18zn :: Bit 8;
+rg_wget_h18zn  = rg.wget;
+-- IdProp rg_wget_h18zn[IdP_from_rhs]
+rg_whas_CONCAT_rg_wget_hl26x :: Bit 9;
+rg_whas_CONCAT_rg_wget_hl26x  = rg_whas_hn2qb ++ rg_wget_h18zn;
+-- IdProp rg_whas_CONCAT_rg_wget_hl26x[IdP_from_rhs]
 -- AP rules
 rule RL_r "r":
  when 1'd1
-  ==> { Prelude.$display rg_whas_CONCAT_rg_wget___d3;
-	Prelude.$display rg_whas_CONCAT_rg_wget___d3; }
+  ==> { Prelude.$display rg_whas_CONCAT_rg_wget_hl26x;
+	Prelude.$display rg_whas_CONCAT_rg_wget_hl26x; }
 []
 clock domain = Just (0), resets = [0]
 -- AP scheduling pragmas

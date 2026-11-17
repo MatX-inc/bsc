@@ -15,29 +15,29 @@ test_c_veri_bsv IfElseCase_Inline
 if { $vtest == 1 } {
     find_regexp sysIfElseCase_Func.v {
     case \(r_idx\)
-      2\'d0\: CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC__q[0-9]+ \= 8\'d0\;
+      2\'d0\: CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC_h[0-9a-z]+ \= 8\'d0\;
       2\'d1\:
-	  CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC__q[0-9]+ \=
+	  CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC_h[0-9a-z]+ \=
 	      r_vec\[15\:8\]\;
       2\'d2\:
-	  CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC__q[0-9]+ \=
+	  CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC_h[0-9a-z]+ \=
 	      r_vec\[23\:16\]\;
       2\'d3\:
-	  CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC__q[0-9]+ \=
+	  CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC_h[0-9a-z]+ \=
 	      r_vec\[31\:24\]\;
     endcase}
 
     find_regexp sysIfElseCase_Inline.v {
     case \(r_idx\)
-      2\'d0\: CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC__q[0-9]+ \= 8\'d0\;
+      2\'d0\: CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC_h[0-9a-z]+ \= 8\'d0\;
       2\'d1\:
-	  CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC__q[0-9]+ \=
+	  CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC_h[0-9a-z]+ \=
 	      r_vec\[15\:8\]\;
       2\'d2\:
-	  CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC__q[0-9]+ \=
+	  CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC_h[0-9a-z]+ \=
 	      r_vec\[23\:16\]\;
       2\'d3\:
-	  CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC__q[0-9]+ \=
+	  CASE_r_idx_0_0_1_r_vec_BITS_15_TO_8_2_r_vec_BI_ETC_h[0-9a-z]+ \=
 	      r_vec\[31\:24\]\;
     endcase}
 }
@@ -47,33 +47,33 @@ if { $vtest == 1 } {
 # are being properly reduced.)
 if { $ctest == 1 } {
     find_regexp sysIfElseCase_Func.cxx {
-  switch \(DEF_idx__h[0-9]+\) \{
+  switch \(DEF_idx\) \{
   case \(tUInt8\)0u\:
-    DEF_IF_r_idx_EQ_0_THEN_0_ELSE_IF_r_idx_EQ_0_THEN_r_ETC___d[0-9]+ \= \(tUInt8\)0u\;
+    DEF_IF_idx_EQ_0_THEN_0_ELSE_tmp_h[0-9a-z]+ \= \(tUInt8\)0u\;
     break\;
   case \(tUInt8\)1u\:
-    DEF_IF_r_idx_EQ_0_THEN_0_ELSE_IF_r_idx_EQ_0_THEN_r_ETC___d[0-9]+ \= DEF_r_vec_BITS_15_TO_8___h[0-9]+\;
+    DEF_IF_idx_EQ_0_THEN_0_ELSE_tmp_h[0-9a-z]+ \= DEF_r_vec_BITS_15_TO_8_h[0-9a-z]+\;
     break\;
   case \(tUInt8\)2u\:
-    DEF_IF_r_idx_EQ_0_THEN_0_ELSE_IF_r_idx_EQ_0_THEN_r_ETC___d[0-9]+ \= DEF_r_vec_BITS_23_TO_16___h[0-9]+\;
+    DEF_IF_idx_EQ_0_THEN_0_ELSE_tmp_h[0-9a-z]+ \= DEF_r_vec_BITS_23_TO_16_h[0-9a-z]+\;
     break\;
   default\:
-    DEF_IF_r_idx_EQ_0_THEN_0_ELSE_IF_r_idx_EQ_0_THEN_r_ETC___d[0-9]+ \= DEF_r_vec_BITS_31_TO_24___h[0-9]+\;
+    DEF_IF_idx_EQ_0_THEN_0_ELSE_tmp_h[0-9a-z]+ \= DEF_r_vec_BITS_31_TO_24_h[0-9a-z]+\;
   \}}
 
     find_regexp sysIfElseCase_Inline.cxx {
-  switch \(DEF_r_idx___d[0-9]+\) \{
+  switch \(DEF_r_idx_h[0-9a-z]+\) \{
   case \(tUInt8\)0u\:
-    DEF_IF_r_idx_EQ_0_THEN_0_ELSE_IF_r_idx_EQ_1_THEN_r_ETC___d[0-9]+ \= \(tUInt8\)0u\;
+    DEF_IF_r_idx_EQ_0_THEN_0_ELSE_IF_r_idx_EQ_1_THEN_t_ETC_h[0-9a-z]+ \= \(tUInt8\)0u\;
     break\;
   case \(tUInt8\)1u\:
-    DEF_IF_r_idx_EQ_0_THEN_0_ELSE_IF_r_idx_EQ_1_THEN_r_ETC___d[0-9]+ \= DEF_tmp__h[0-9]+\;
+    DEF_IF_r_idx_EQ_0_THEN_0_ELSE_IF_r_idx_EQ_1_THEN_t_ETC_h[0-9a-z]+ \= DEF_tmp_h[0-9a-z]+\;
     break\;
   case \(tUInt8\)2u\:
-    DEF_IF_r_idx_EQ_0_THEN_0_ELSE_IF_r_idx_EQ_1_THEN_r_ETC___d[0-9]+ \= DEF_tmp__h[0-9]+\;
+    DEF_IF_r_idx_EQ_0_THEN_0_ELSE_IF_r_idx_EQ_1_THEN_t_ETC_h[0-9a-z]+ \= DEF_tmp_h[0-9a-z]+\;
     break\;
   default\:
-    DEF_IF_r_idx_EQ_0_THEN_0_ELSE_IF_r_idx_EQ_1_THEN_r_ETC___d[0-9]+ \= DEF_tmp__h[0-9]+\;
+    DEF_IF_r_idx_EQ_0_THEN_0_ELSE_IF_r_idx_EQ_1_THEN_t_ETC_h[0-9a-z]+ \= DEF_tmp_h[0-9a-z]+\;
   \}}
 }
 
@@ -110,15 +110,16 @@ if { $vtest == 1 } {
     find_regexp sysDupResult.v {
     case \(r_idx\)
       3\'d0\, 3\'d2\, 3\'d6\:
-	  CASE_r_idx_0_r_vec_BITS_7_TO_0_1_r_vec_BITS_15_ETC__q[0-9]+ \= r_vec\[7\:0\]\;
+	  CASE_r_idx_0_r_vec_BITS_7_TO_0_1_r_vec_BITS_15_ETC_h[0-9a-z]+ \=
+	      r_vec\[7\:0\]\;
       3\'d1\:
-	  CASE_r_idx_0_r_vec_BITS_7_TO_0_1_r_vec_BITS_15_ETC__q[0-9]+ \=
+	  CASE_r_idx_0_r_vec_BITS_7_TO_0_1_r_vec_BITS_15_ETC_h[0-9a-z]+ \=
 	      r_vec\[15\:8\]\;
       3\'d3\, 3\'d4\:
-	  CASE_r_idx_0_r_vec_BITS_7_TO_0_1_r_vec_BITS_15_ETC__q[0-9]+ \=
+	  CASE_r_idx_0_r_vec_BITS_7_TO_0_1_r_vec_BITS_15_ETC_h[0-9a-z]+ \=
 	      r_vec\[23\:16\]\;
       3\'d5\, 3\'d7\:
-	  CASE_r_idx_0_r_vec_BITS_7_TO_0_1_r_vec_BITS_15_ETC__q[0-9]+ \=
+	  CASE_r_idx_0_r_vec_BITS_7_TO_0_1_r_vec_BITS_15_ETC_h[0-9a-z]+ \=
 	      r_vec\[31\:24\]\;
     endcase}
 }
@@ -127,21 +128,21 @@ if { $vtest == 1 } {
 # (The arm for index 5 has been merged with the default.)
 if { $ctest == 1 } {
     find_regexp sysDupResult.cxx {
-  switch \(DEF_r_idx___d[0-9]+\) \{
+  switch \(DEF_r_idx_h[0-9a-z]+\) \{
   case \(tUInt8\)0u\:
   case \(tUInt8\)2u\:
   case \(tUInt8\)6u\:
-    DEF_IF_r_idx_EQ_0_THEN_r_vec_BITS_7_TO_0_ELSE_IF_r_ETC___d[0-9]+ \= DEF_tmp__h[0-9]+\;
+    DEF_IF_r_idx_EQ_0_THEN_tmp_ELSE_IF_r_idx_EQ_1_THEN_ETC_h[0-9a-z]+ \= DEF_tmp_h[0-9a-z]+\;
     break\;
   case \(tUInt8\)1u\:
-    DEF_IF_r_idx_EQ_0_THEN_r_vec_BITS_7_TO_0_ELSE_IF_r_ETC___d[0-9]+ \= DEF_tmp__h[0-9]+\;
+    DEF_IF_r_idx_EQ_0_THEN_tmp_ELSE_IF_r_idx_EQ_1_THEN_ETC_h[0-9a-z]+ \= DEF_tmp_h[0-9a-z]+\;
     break\;
   case \(tUInt8\)3u\:
   case \(tUInt8\)4u\:
-    DEF_IF_r_idx_EQ_0_THEN_r_vec_BITS_7_TO_0_ELSE_IF_r_ETC___d[0-9]+ \= DEF_tmp__h[0-9]+\;
+    DEF_IF_r_idx_EQ_0_THEN_tmp_ELSE_IF_r_idx_EQ_1_THEN_ETC_h[0-9a-z]+ \= DEF_tmp_h[0-9a-z]+\;
     break\;
   default\:
-    DEF_IF_r_idx_EQ_0_THEN_r_vec_BITS_7_TO_0_ELSE_IF_r_ETC___d[0-9]+ \= DEF_tmp__h[0-9]+\;
+    DEF_IF_r_idx_EQ_0_THEN_tmp_ELSE_IF_r_idx_EQ_1_THEN_ETC_h[0-9a-z]+ \= DEF_tmp_h[0-9a-z]+\;
   \}}
 }
 

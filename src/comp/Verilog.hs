@@ -437,7 +437,12 @@ instance Ord VMItem where
          compare (VMStmt {}) (VMDecl _)              = GT
          compare (VMStmt {}) (VMInst _ _ _ _)        = GT
          compare (VMStmt {}) (VMAssign _ _)          = GT
-         compare (VMStmt {}) (VMStmt {})             = EQ
+         compare (VMStmt tf1 b1) (VMStmt tf2 b2)    =
+             case (combStmtKey tf1 b1, combStmtKey tf2 b2) of
+                 (Just v1, Just v2) -> compare v1 v2
+                 (Just _, Nothing)  -> LT
+                 (Nothing, Just _)  -> GT
+                 (Nothing, Nothing) -> EQ
          compare (VMStmt {}) _                       = LT
 
          compare (VMFunction _) (VMFunction _)      = EQ
@@ -452,6 +457,46 @@ instance Ord VMItem where
 
          compare (VMGroup _ _) (VMGroup _ _)        = EQ
          compare (VMGroup _ _) _                    = GT
+
+combStmtKey :: Bool -> VStmt -> Maybe VId
+combStmtKey True _ = Nothing
+combStmtKey False (Valways (VAt ev s))
+    | isCombEventExpr ev = firstCombLValId s
+  where
+    isCombEventExpr :: VEventExpr -> Bool
+    isCombEventExpr (VEE _) = True
+    isCombEventExpr (VEEOr e1 e2) = isCombEventExpr e1 && isCombEventExpr e2
+    isCombEventExpr _ = False
+
+    lvalBaseId :: VLValue -> Maybe VId
+    lvalBaseId (VLId v) = Just v
+    lvalBaseId (VLSub lv _) = lvalBaseId lv
+    lvalBaseId (VLConcat (x : _)) = lvalBaseId x
+    lvalBaseId (VLConcat []) = Nothing
+
+    firstCombLValId :: VStmt -> Maybe VId
+    firstCombLValId (VAssign lv _) = lvalBaseId lv
+    firstCombLValId (VSeq ss) = firstFromList firstCombLValId ss
+    firstCombLValId (Vcase { vs_case_arms = arms }) = firstFromList armLValId arms
+    firstCombLValId (Vcasex { vs_case_arms = arms }) = firstFromList armLValId arms
+    firstCombLValId (Vif _ st) = firstCombLValId st
+    firstCombLValId (Vifelse _ s1 s2) =
+        case firstCombLValId s1 of
+            Just v -> Just v
+            Nothing -> firstCombLValId s2
+    firstCombLValId _ = Nothing
+
+    armLValId :: VCaseArm -> Maybe VId
+    armLValId (VCaseArm _ st) = firstCombLValId st
+    armLValId (VDefault st) = firstCombLValId st
+
+    firstFromList :: (a -> Maybe VId) -> [a] -> Maybe VId
+    firstFromList _ [] = Nothing
+    firstFromList f (x : xs) =
+        case f x of
+            Just v -> Just v
+            Nothing -> firstFromList f xs
+combStmtKey False _ = Nothing
 
 
 instance PPrint VMItem where

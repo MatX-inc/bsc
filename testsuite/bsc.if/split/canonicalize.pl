@@ -20,7 +20,7 @@ while(<>) {
     $seen_interface = 1;
     last;
   }
-  s/v(\d+)__\w+/v$1/g;
+  s/v(\d+)_(?:_\w+|h[0-9a-z]+)/v$1/g;
   s/PrimBNot\s*/NOT/g;
   s/PrimBAnd/ /g;
   s/[()]/ /g;

@@ -5,15 +5,15 @@
 compile_verilog_pass LibraryNames.bs
 if { $vtest == 1 } {
     # the user's total names a + b, not max's parameter x
-    find_regexp sysUserName.v {assign total__h\d+ = a \+ b ;}
-    find_regexp_fail sysUserName.v {x__h\d+}
+    find_regexp sysUserName.v {assign total = a \+ b ;}
+    find_regexp_fail sysUserName.v {assign x[_ ]}
     # nothing else names the arguments of max
-    find_regexp sysLibraryName.v {assign x__h\d+ = a \+ b ;}
-    find_regexp sysLibraryName.v {assign y__h\d+ = a - b ;}
+    find_regexp sysLibraryName.v {assign x = a \+ b ;}
+    find_regexp sysLibraryName.v {assign y = a - b ;}
     # the parameters of (^) keep fold's reduction tree
-    find_regexp sysFoldTree.v {assign o = x__h\d+ \^ y__h\d+ ;}
-    find_regexp sysFoldTree.v {assign x__h\d+ = rs_0 \^ rs_1 ;}
-    find_regexp sysFoldTree.v {assign y__h\d+ = rs_2 \^ rs_3 ;}
+    find_regexp sysFoldTree.v {assign o = x \^ y ;}
+    find_regexp sysFoldTree.v {assign x = rs_0 \^ rs_1 ;}
+    find_regexp sysFoldTree.v {assign y = rs_2 \^ rs_3 ;}
 }
 
 compile_object_pass LibraryNames.bs
@@ -21,10 +21,11 @@ link_objects_pass {} sysUserName
 link_objects_pass {} sysLibraryName
 link_objects_pass {} sysFoldTree
 if { $ctest == 1 } {
-    find_regexp sysUserName.cxx {DEF_total__h\d+ = 65535u & \(DEF_a___d\d+ \+ DEF_b___d\d+\);}
-    find_regexp_fail sysUserName.cxx {DEF_x__h\d+}
-    find_regexp sysLibraryName.cxx {DEF_x__h\d+ = 65535u & \(DEF_a___d\d+ \+ DEF_b___d\d+\);}
-    find_regexp sysLibraryName.cxx {DEF_y__h\d+ = 65535u & \(DEF_a___d\d+ - DEF_b___d\d+\);}
-    find_regexp sysFoldTree.cxx {DEF_x__h\d+ = DEF_x__h\d+ \^ DEF_y__h\d+;}
-    find_regexp sysFoldTree.cxx {PORT_o = DEF_x__h\d+ \^ DEF_y__h\d+;}
+    find_regexp sysUserName.cxx {DEF_total = 65535u & \(DEF_a_h[0-9a-z]+ \+ DEF_b_h[0-9a-z]+\);}
+    find_regexp_fail sysUserName.cxx {DEF_x(_h[0-9a-z]+)?[ =;]}
+    find_regexp sysLibraryName.cxx {DEF_x = 65535u & \(DEF_a_h[0-9a-z]+ \+ DEF_b_h[0-9a-z]+\);}
+    find_regexp sysLibraryName.cxx {DEF_y = 65535u & \(DEF_a_h[0-9a-z]+ - DEF_b_h[0-9a-z]+\);}
+    find_regexp sysFoldTree.cxx {DEF_x = DEF_rs_0_h[0-9a-z]+ \^ INST_rs_1\.METH_read\(\);}
+    find_regexp sysFoldTree.cxx {DEF_y = INST_rs_2\.METH_read\(\) \^ INST_rs_3\.METH_read\(\);}
+    find_regexp sysFoldTree.cxx {PORT_o = DEF_x \^ DEF_y;}
 }

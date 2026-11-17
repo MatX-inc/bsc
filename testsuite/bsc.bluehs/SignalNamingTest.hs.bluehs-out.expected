@@ -1,0 +1,16 @@
+PASS: [1a] PrimSelect / PrimExtract / index-truncation cross-stage equivalence
+PASS: [1b] Dynamic PrimExtract index truncation (32-bit -> log2(8) = 3-bit)
+PASS: [1c] Full-width slice, PrimTrunc, and PrimZeroExt normalization
+PASS: [1d] PrimRange, PrimIntegerToBit/PrimStringToInteger, and if-wrapper stripping
+PASS: [1e] Nested PrimConcat flattening and 0-bit operand removal
+PASS: [1f] Right-nested PrimPair/ATuple, tuple selection, and PrimUnit arg dropping
+PASS: [1g] Submodule, Reg Q_OUT, RWire, and CReg port resolution across IExpr/APackage/ASPackage
+PASS: [2a] stripGeneratedSuffixes and PD-marker placement/truncation
+PASS: [2b] Shallow hash stays invariant across leaf suffix changes and preserves multi-port indices
+PASS: [3a] Clean user binders, IdPInferredName _h4 disambiguation, and base-36 h4 default
+PASS: [3b] Symmetric h4 -> h8 upgrade on (stem, h4) collision and _2 ordinal on (stem, h8) collision
+PASS: [3c] Incremental SignalNameTable allocation and collision handling
+PASS: [4a] Hard anchor invariant across all 8 AnchorKinds (including bad/fromRHS flags)
+PASS: [4b] Anchor collision detection and local user-binder port-shadowing disambiguation
+PASS: [5] End-to-end SignalNamingMod.bs IModule, APackage, and ASPackage environment & port parity
+PASS: [6] 200 deterministic PRNG matched-triple (IExpr, APackage AExpr, ASPackage AExpr) ExprName parity checks

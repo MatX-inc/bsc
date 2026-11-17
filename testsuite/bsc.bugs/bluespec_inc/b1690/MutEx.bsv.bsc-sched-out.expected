@@ -13,7 +13,7 @@ order: [RL_r1, RL_r2, RL_done]
  (flag_1.read, [(flag_1.read, 1)]),
  (flag_1.write, [(flag_1.write 1'd0, 1)]),
  (x.read, [(x.read, 1)]),
- (x.write, [(x.write NOT_x___d3, 1)])]
+ (x.write, [(x.write NOT_x_ha6ul, 1)])]
 
 -----
 

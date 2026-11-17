@@ -1,0 +1,12 @@
+package SignalNamingBatchTop where
+
+import SignalNamingScramble
+import SignalNamingBefore
+
+{-# verilog mkSignalNamingBatchTop #-}
+mkSignalNamingBatchTop :: Module Empty
+mkSignalNamingBatchTop =
+    module
+        _s <- mkSignalNamingScramble
+        _dut <- mkPropChurn
+        interface

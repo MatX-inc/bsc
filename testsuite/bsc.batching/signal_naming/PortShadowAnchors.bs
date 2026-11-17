@@ -1,0 +1,44 @@
+package PortShadowAnchors where
+
+interface OutIfc =
+    step :: Bit 16 -> Action
+    out :: Bit 16
+
+mkInlinedLeaf :: Bit 16 -> Module OutIfc
+mkInlinedLeaf initVal =
+  module
+    r :: Reg (Bit 16) <- mkReg initVal
+    interface OutIfc
+      step x = r := (r ^ x) + 1
+      out = (r ^ 16'h00ff) + 3
+
+-- Single local binder sharing the top-level output method name `out`:
+-- must disambiguate rather than colliding with the output port in APaths.
+{-# verilog mkSinglePortShadow #-}
+mkSinglePortShadow :: Module OutIfc
+mkSinglePortShadow =
+  module
+    a :: Reg (Bit 16) <- mkReg 0
+    b :: Reg (Bit 16) <- mkReg 1
+    let out :: Bit 16
+        out = (a + b) ^ 16'h1234
+    interface OutIfc
+      step x = action
+        a := x
+        b := out
+      out = out + 1
+
+-- Two inlined submodules each defining method `out` inside an enclosing
+-- module whose own interface method is also `out`: neither inlined binder
+-- is promoted to ItemAnchor, so they disambiguate without AnchorCollision.
+{-# verilog mkDualInlinedPortShadow #-}
+mkDualInlinedPortShadow :: Module OutIfc
+mkDualInlinedPortShadow =
+  module
+    s1 :: OutIfc <- mkInlinedLeaf 10
+    s2 :: OutIfc <- mkInlinedLeaf 20
+    interface OutIfc
+      step x = action
+        s1.step x
+        s2.step (x + 1)
+      out = s1.out ^ s2.out

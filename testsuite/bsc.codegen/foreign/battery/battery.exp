@@ -75,7 +75,7 @@ test_c_veri_bsv_multi_options TestAggressiveConditions mkTestAggressiveCondition
 if { $ctest || $vtest } {
 find_regexp mkTestAggressiveConditions-ats.txt {
 rule RL_r1 "r1":
- when f_r1_n1_i_notFull_AND_f_r1_n2_i_notFull_AND_f__ETC___d[0-9]+}
+ when f_r1_n1_FULL_N_AND_f_r1_n2_FULL_N_AND_f_r1_w1_ETC_h[0-9a-z]+}
 }
 
 # -----

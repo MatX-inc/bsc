@@ -27,14 +27,14 @@ BEGIN
      #) ;
   
   rule_RL_r1 (state0 : STATE) : [ BOOLEAN, STATE ] =
-    LET def_s1__h348 : Bit{1}!T = CTX_RegN{1}!meth_read(state0.inst_s1)
-    IN LET def_f2_i_notFull____d3 : Bit{1}!T = CTX_FIFO2{17}!meth_i_notFull(state0.inst_f2)
-    IN LET def_f1_i_notFull____d4 : Bit{1}!T = CTX_FIFO2{17}!meth_i_notFull(state0.inst_f1)
-    IN LET def_f3_i_notFull____d1 : Bit{1}!T = CTX_FIFO2{17}!meth_i_notFull(state0.inst_f3)
-    IN LET def_IF_s1_THEN_f2_i_notFull_ELSE_f1_i_notFull___d5 : Bit{1}!T =
-	     IF Prim!bitToBool(def_s1__h348) THEN def_f2_i_notFull____d3 ELSE def_f1_i_notFull____d4 ENDIF
-    IN LET def_f3_i_notFull_AND_IF_s1_THEN_f2_i_notFull_ELSE__ETC___d6 : BOOLEAN =
-	     Prim!bitToBool(def_f3_i_notFull____d1) AND Prim!bitToBool(def_IF_s1_THEN_f2_i_notFull_ELSE_f1_i_notFull___d5)
+    LET def_s1_hvncv : Bit{1}!T = CTX_RegN{1}!meth_read(state0.inst_s1)
+    IN LET def_f1_FULL_N_h6e4f : Bit{1}!T = CTX_FIFO2{17}!meth_i_notFull(state0.inst_f1)
+    IN LET def_f2_FULL_N_hiqhp : Bit{1}!T = CTX_FIFO2{17}!meth_i_notFull(state0.inst_f2)
+    IN LET def_IF_s1_THEN_f2_FULL_N_ELSE_f1_FULL_N_hz5yr : Bit{1}!T =
+	     IF Prim!bitToBool(def_s1_hvncv) THEN def_f2_FULL_N_hiqhp ELSE def_f1_FULL_N_h6e4f ENDIF
+    IN LET def_f3_FULL_N_hqmfv : Bit{1}!T = CTX_FIFO2{17}!meth_i_notFull(state0.inst_f3)
+    IN LET def_f3_FULL_N_AND_IF_s1_THEN_f2_FULL_N_ELSE_f1_FULL_N_hj234 : BOOLEAN =
+	     Prim!bitToBool(def_f3_FULL_N_hqmfv) AND Prim!bitToBool(def_IF_s1_THEN_f2_FULL_N_ELSE_f1_FULL_N_hz5yr)
     IN LET act1 : [ CTX_RegN{17}!STATE, Unit!T ] =
 	     CTX_RegN{17}!meth_write(Bit{17}!mkConst(5), state0.inst_a)
     IN LET state1 : STATE = state0 WITH .inst_a := act1.1
@@ -50,11 +50,11 @@ BEGIN
     IN LET act5 : [ CTX_FIFO2{17}!STATE, Unit!T ] =
 	     CTX_FIFO2{17}!meth_enq(Bit{17}!mkConst(12), state4.inst_f1)
     IN LET state5 : STATE = state4 WITH .inst_f1 := act5.1
-    IN LET state6 : STATE = IF Prim!bitToBool(def_s1__h348) THEN state3 ELSE state5 ENDIF
+    IN LET state6 : STATE = IF Prim!bitToBool(def_s1_hvncv) THEN state3 ELSE state5 ENDIF
     IN LET act7 : [ CTX_FIFO2{17}!STATE, Unit!T ] =
 	     CTX_FIFO2{17}!meth_enq(Bit{17}!mkConst(22), state6.inst_f3)
     IN LET state7 : STATE = state6 WITH .inst_f3 := act7.1
-    IN ( def_f3_i_notFull_AND_IF_s1_THEN_f2_i_notFull_ELSE__ETC___d6, state7 ) ;
+    IN ( def_f3_FULL_N_AND_IF_s1_THEN_f2_FULL_N_ELSE_f1_FULL_N_hj234, state7 ) ;
   
 END
 

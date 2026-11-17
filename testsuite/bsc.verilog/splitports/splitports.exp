@@ -188,11 +188,11 @@ if { $vtest == 1 } {
     find_regexp module_triple.v {output \[7 : 0\] triple_fst;}
     find_regexp module_triple.v {output \[8 : 0\] triple_snd;}
     # each result field is its own wire, driven directly by its output port
-    find_regexp sysNoinlineSplitTuple3.v {\.triple_fst\(triple__f1_1\)}
-    find_regexp sysNoinlineSplitTuple3.v {\.triple_snd\(triple__f1_2\)}
+    find_regexp sysNoinlineSplitTuple3.v {\.triple_fst\(triple_h[0-9a-z]+_1\)}
+    find_regexp sysNoinlineSplitTuple3.v {\.triple_snd\(triple_h[0-9a-z]+_2\)}
     # the inner Int 8 is read directly out of the snd element wire (a single
     # index on that wire, not a slice of a slice)
-    find_regexp sysNoinlineSplitTuple3.v {triple__f1_2\[8:1\]}
+    find_regexp sysNoinlineSplitTuple3.v {triple_h[0-9a-z]+_2\[8:1\]}
     find_regexp_fail sysNoinlineSplitTuple3.v {\]\[}
 }
 
@@ -236,8 +236,8 @@ if { $vtest == 1 } {
 # (regression: aIds had no ATupleSel case and this internal-errored).
 test_c_veri SplitTupleSensitivity
 if { $vtest == 1 } {
-    find_regexp sysSplitTupleSensitivity.v {pick__f1_1 or pick__f1_2}
-    find_regexp_fail sysSplitTupleSensitivity.v {or pick__f1[ )]}
+    find_regexp sysSplitTupleSensitivity.v {pick_h[0-9a-z]+_1 or pick_h[0-9a-z]+_2}
+    find_regexp_fail sysSplitTupleSensitivity.v {or pick_h[0-9a-z]+[ )]}
 }
 
 # SplitVector: splits a vector into n groups of ports, splitting each element

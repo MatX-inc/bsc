@@ -88,6 +88,8 @@ import ITransform(iTransExpr)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
+import qualified SignalNaming as SN
+import qualified ISignalNaming as ISN
 
 -----------------------------------------------------------------------------
 -- Trace Flags
@@ -272,9 +274,6 @@ gateClockInputs = elem "-hack-gate-clock-inputs" progArgs
 gateDefaultClock :: Bool
 gateDefaultClock = elem "-hack-gate-default-clock" progArgs
 
-iExpandPref :: String
-iExpandPref = "__h"
-
 -----------------------------------------------------------------------------
 
 -- iExpand
@@ -336,6 +335,15 @@ iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
       -- function for translating old pointers to new ones
       ptran p = IM.findWithDefault p p ptr_map
 
+      wi = WireInfo (go_vclockinfo go) (go_vresetinfo go) varginfo
+      namingEnv = ISN.mkSignalNamingEnvFromParts flags iks args wi insts ifc rules []
+
+      userHeapName :: NameInfo -> NameInfo
+      userHeapName mn =
+          case legalizeNameInfo mn of
+              Just n | not (isBadId n) || SN.isDefAnchorId namingEnv n -> Just n
+              _ -> Nothing
+
       -- from a heap pointer, get the expression and its name info
       --   Note that wire info in dropped.  In the MCD merge (rev 6456),
       --   Ravi considered a new IEDef type that would contain the wires
@@ -343,36 +351,91 @@ iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
       heapOf :: Int -> (HExpr, NameInfo)
       heapOf p = case (IM.lookup p iheap) of
                     Just (HNF { hc_pexpr = P _ e, hc_name = name })
-                         -> (e, legalizeNameInfo name)
+                         -> (e, userHeapName name)
                     hres -> internalError ("heapOf " ++ ppReadable (p, hres))
+
+      simpleExpr (ICon _ _) = True
+      simpleExpr _ = False
+
+      dummyTempId :: Id
+      dummyTempId = setBadId $ mkId noPosition fsUnderscore
+
+      effectiveHeapName :: Maybe Id -> SN.SignalExpr -> Maybe Id
+      effectiveHeapName (Just name) se
+          | isLibraryId name && SN.isDirectNamedSignalExpr se = Nothing
+          | otherwise = Just name
+      effectiveHeapName Nothing _ = Nothing
+
+      provDef :: HeapPointer -> (HExpr, Maybe (Maybe Id, SN.SignalExpr))
+      provDef p =
+          let (e, expr_name) = heapOf p
+              t = iGetTypeNorm norm e
+              e_prov = hToDef prov_m e
+          in if simpleExpr e || isActionType t || isPairType t
+             then (e_prov, Nothing)
+             else let se_p = ISN.signalIExpr namingEnv e_prov
+                      eff_name = effectiveHeapName expr_name se_p
+                      prov_i =
+                          case eff_name of
+                              Just name | isAnchorId name || SN.isDefAnchorId namingEnv name ->
+                                  setKeepId name
+                              Just name ->
+                                  setKeepId $
+                                  setIdBaseString name (SN.provisionalBinderBase name)
+                              Nothing ->
+                                  setBadId $
+                                  mkId noPosition (mkFString (SN.signalExprStem namingEnv se_p))
+                  in (ICon prov_i (ICValue t e_prov), Just (eff_name, se_p))
+
+      prov_info = [ (p, provDef p) | p <- cse_ptrs ]
+      prov_expr_map = IM.fromList [ (p, e) | (p, (e, _)) <- prov_info ]
+      prov_name_map = IM.fromList [ (p, mName) | (p, (_, Just (mName, _))) <- prov_info ]
+      provGet p = fromJustOrErr "iExpand.provGet" (IM.lookup p prov_expr_map)
+      prov_m = IM.fromList [ (p, provGet (ptran p)) | p <- ptrs0 ]
+
+      nameItems =
+          [ case mName of
+                Just name | isAnchorId name || SN.isDefAnchorId namingEnv name ->
+                    SN.ItemAnchor p name
+                Just name ->
+                    SN.ItemUserBinder p name (Just se_p)
+                Nothing ->
+                    SN.ItemTemp p dummyTempId se_p
+          | (p, (_, Just (mName, se_p))) <- prov_info
+          ]
+      assignedNameMap =
+          case SN.assignModuleNames namingEnv nameItems of
+              Left (SN.AnchorCollision nm k1 k2) ->
+                  internalError
+                      ("iExpand: anchor collision on " ++
+                       nm ++ " (" ++ show k1 ++ " vs " ++ show k2 ++ ")")
+              Right pairs -> IM.fromList pairs
 
       pDef :: HeapPointer -> (HExpr, Maybe HDef)
       pDef p0 =
           let -- translate the old pointer to the new pointer
               p = ptran p0
               -- get the expression and its name info
-              (e, expr_name) = heapOf p
+              (e, _) = heapOf p
               -- the type for the new IDef being created
               t = iGetTypeNorm norm e
+              finalStr = fromJustOrErr "iExpand.assignedNameMap" (IM.lookup p assignedNameMap)
+              eff_name = IM.findWithDefault Nothing p prov_name_map
               -- the name for the new IDef being created
-              i = case expr_name of
+              i = case eff_name of
                     Just name ->
                         setKeepId $
-                        mkIdPost name (mkFString (iExpandPref ++ show p))
-                    _ ->
+                        setIdBaseString name finalStr
+                    Nothing ->
                         setBadId $
-                        mkId noPosition (mkFString (iExpandPref ++ show p))
+                        mkId noPosition (mkFString finalStr)
               -- update the body of the IDef that we're creating
               -- (this is recursive, since "m" is built with "pDef")
               e' = hToDef m e
-              -- whether the expression is "simple" and therefore doesn't
-              -- need to be lifted to an IDef
-              simple (ICon _ _) = True
-              simple _ = False
           in
               -- return the expression that should replace the heap pointer,
               -- and maybe a Def, if the expression is a def reference
-              if simple e || isActionType t || isPairType t then
+              if simpleExpr e || isActionType t || isPairType t then
                   -- inline the expression, no def is created for this heap ptr
                   (e', Nothing)
               else
@@ -427,7 +490,6 @@ iExpand errh flags symt alldefs is_noinlined_func pps def@(IDef mi _ _ _) = do
 
       mpdefs = generateMethodPreds ( methodConditions flags ) rules_cleanup
       defs = defs1 ++ mpdefs
-      wi = WireInfo (go_vclockinfo go) (go_vresetinfo go) varginfo
       comments_map = go_comments_map go
       mbe = if (go_backend_specific go)
             then Just $ fromJustOrErr "iExpand: backend" (backend flags)

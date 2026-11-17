@@ -18,7 +18,7 @@ if { $ctest == 1 } {
     # backend, and only then if the user has specified that it's OK
     # for the Verilog and Bluesim backends to diverge).
     #
-    find_regexp mkTop.cxx {2047u \& \(\(\(\(\(tUInt32\)\(\(tUInt8\)0u\)\) << 3u\) \| \(\(\(tUInt32\)\(DEF_cond__h\d+\)\) << 2u\)\) \| \(tUInt32\)\(DEF_AVMeth_s_m\)\);}
+    find_regexp mkTop.cxx {2047u \& \(\(\(\(\(tUInt32\)\(\(tUInt8\)0u\)\) << 3u\) \| \(\(\(tUInt32\)\(DEF_cond_h[0-9a-z]+\)\) << 2u\)\) \| \(tUInt32\)\(DEF_AVMeth_s_m\)\);}
 }
 
 # Also test that BSC fully initializes DEF_AVMeth_s_m
@@ -26,21 +26,21 @@ if { $ctest == 1 } {
 #
 if { $ctest == 1 } {
     move mkTop.cxx mkTop.A.cxx
-    find_regexp mkTop.A.cxx {if \(DEF_cond__h\d+\)\n +DEF_AVMeth_s_m = INST_s.METH_m\(\);\n +else\n +DEF_AVMeth_s_m = \(tUInt8\)2u;}
+    find_regexp mkTop.A.cxx {if \(DEF_cond_h[0-9a-z]+\)\n +DEF_AVMeth_s_m = INST_s.METH_m\(\);\n +else\n +DEF_AVMeth_s_m = \(tUInt8\)2u;}
 
     # workaround BSC's failure to recompile due to flags
     erase mkTop.o
     # Test with 0
     link_objects_pass {} mkTop {-unspecified-to 0}
     move mkTop.cxx mkTop.0.cxx
-    find_regexp mkTop.0.cxx {if \(DEF_cond__h\d+\)\n +DEF_AVMeth_s_m = INST_s.METH_m\(\);\n +else\n +DEF_AVMeth_s_m = \(tUInt8\)0u;}
+    find_regexp mkTop.0.cxx {if \(DEF_cond_h[0-9a-z]+\)\n +DEF_AVMeth_s_m = INST_s.METH_m\(\);\n +else\n +DEF_AVMeth_s_m = \(tUInt8\)0u;}
 
     # workaround BSC's failure to recompile due to flags
     erase mkTop.o
     # Test with 1
     link_objects_pass {} mkTop {-unspecified-to 1}
     move mkTop.cxx mkTop.1.cxx
-    find_regexp mkTop.1.cxx {if \(DEF_cond__h\d+\)\n +DEF_AVMeth_s_m = INST_s.METH_m\(\);\n +else\n +DEF_AVMeth_s_m = \(tUInt8\)3u;}
+    find_regexp mkTop.1.cxx {if \(DEF_cond_h[0-9a-z]+\)\n +DEF_AVMeth_s_m = INST_s.METH_m\(\);\n +else\n +DEF_AVMeth_s_m = \(tUInt8\)3u;}
 
     # XXX Could test wide data (and other sizes)
 }

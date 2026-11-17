@@ -1,0 +1,19 @@
+package SignalNamingScramble where
+
+{-# verilog mkSignalNamingScramble #-}
+mkSignalNamingScramble :: Module Empty
+mkSignalNamingScramble =
+    module
+        zz1 :: Reg (Bit 16) <- mkReg 0
+        aa1 :: Reg (Bit 16) <- mkReg 0
+        mm1 :: Reg (Bit 2) <- mkReg 0
+
+        rules
+            "rl_scramble": when True ==> action
+                let muxZeta = zz1 + aa1
+                let muxAlpha = zz1 ^ aa1
+                let cleanLeft = muxZeta & muxAlpha
+                zz1 := cleanLeft + zeroExtend mm1
+                aa1 := muxAlpha
+                mm1 := mm1 + 1
+        interface

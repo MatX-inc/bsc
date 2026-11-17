@@ -33,7 +33,7 @@ import Data.List(genericLength, nub, sortOn)
 import Data.Maybe(fromMaybe)
 import VModInfo(lookupOutputClockWires, lookupOutputResetWire,
                 lookupIfcInoutWire, vArgs, VArgInfo(..))
-import SignalNaming
+import ASignalNaming(signalNameFromAExprDefault, applyAPackageTempNames)
 import InstNodes(mkInstTree)
 
 -- import Wires
@@ -107,7 +107,7 @@ newAIdFromAExpr :: Position -> AExpr -> M AId
 newAIdFromAExpr p expr = do
         s <- get
         let n = varNo s
-            new_name = signalNameFromAExpr expr ++ "_" ++ aconvPref ++ itos n
+            new_name = signalNameFromAExprDefault expr ++ "_" ++ aconvPref ++ itos n
             new_id = setFromRHSId $ mkId p (mkFString new_name)
             new_id' = if (isSignCast expr)
                       then setSignedId new_id
@@ -347,7 +347,8 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ idefs rs ifc ffc
                                                return (d, acs))
                               clks
 
-        return  (APackage { apkg_name = unQualId (dropGenSuffixId mi),
+        return $ applyAPackageTempNames flags
+                 (APackage { apkg_name = unQualId (dropGenSuffixId mi),
                             apkg_is_wrapped = fmod,
                             apkg_backend = be,
                             apkg_size_params = [ i | (i, k) <- iks ],

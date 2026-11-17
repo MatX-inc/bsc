@@ -9,7 +9,7 @@ reverse_intern_same_verilog $src $mod
 batching_verilog_pair $src $mod ImplicitConditionOrderTop.bs mkImplicitConditionOrderTop {ImplicitConditionOrderScramble.bs}
 
 foreach v [list $mod.normal.v $mod.oneshot.v $mod.v] {
-    find_regexp $v {inQ\$EMPTY_N &&\n\s+p1_RDY_pop_AND_p2_RDY_pop_AND_outQ_i_notFull_A_ETC___d8 &&\n\s+enable &&\n\s+count < 8'd200 ;$}
-    find_regexp $v {p1_RDY_pop_AND_p2_RDY_pop_AND_outQ_i_notFull_A_ETC___d8 =\n\s+p1\$RDY_pop && p2\$RDY_pop && outQ\$FULL_N && sideQ\$FULL_N ;$}
+    find_regexp $v {inQ\$EMPTY_N &&\n\s+p1_RDY_pop_AND_p2_RDY_pop_AND_outQ_FULL_N_AND_ETC_hxntw &&\n\s+enable &&\n\s+count < 8'd200 ;$}
+    find_regexp $v {p1_RDY_pop_AND_p2_RDY_pop_AND_outQ_FULL_N_AND_ETC_hxntw =\n\s+p1\$RDY_pop && p2\$RDY_pop && outQ\$FULL_N && sideQ\$FULL_N ;$}
     find_regexp $v {assign RDY_peek = outQ\$EMPTY_N && sideQ\$EMPTY_N ;$}
 }

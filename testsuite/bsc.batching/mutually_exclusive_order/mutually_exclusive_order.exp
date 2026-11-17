@@ -8,7 +8,7 @@ reverse_intern_same_verilog $src $mod {-keep-fires}
 batching_verilog_pair $src $mod MutuallyExclusiveOrderTop.bs mkMutuallyExclusiveOrderTop {MutuallyExclusiveOrderScramble.bs} {-keep-fires}
 
 foreach v [list $mod.normal.v $mod.oneshot.v $mod.v] {
-    find_regexp $v {// rule __me_check_0$}
+    find_regexp $v {// rule __me_check_namedFirst$}
     find_regexp $v {if \(goNamedFirst && goDeclaredFirst\)}
     find_regexp $v {line 18, column 20: \(R0001\)}
     find_regexp $v {ME sets \[RL_namedFirst\] and}

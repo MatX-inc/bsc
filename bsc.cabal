@@ -140,6 +140,7 @@ library
     ARemoveAssumps
     ASchedule
     AScheduleInfo
+    ASignalNaming
     ASourceTypes
     AState
     ASyntax
@@ -236,6 +237,7 @@ library
     IOMutVar
     IOUtil
     IPrims
+    ISignalNaming
     ISimpDicts
     ISimplify
     ISplitIf
