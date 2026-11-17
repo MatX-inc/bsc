@@ -70,9 +70,11 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Position
 import Id
+import DefProp(defPropsHasNoCSE)
 import FStringCompat
 import Data.List(partition, sortOn)
 import qualified Data.List as L
+import Data.Ord(Down(..))
 import Util
 import PPrint
 import PVPrint
@@ -644,14 +646,20 @@ initUCState :: [ADef] -> [AExpr] -> UCState
 initUCState defs keys = UCState {
                      nextNo = 1,
                      new_defs = [],
-                     -- is throwing away props incorrect?
-                     cseMap = M.fromList [(e, (i,t)) | ADef i t e _props <- defs ],
+                     cseMap = M.map snd $
+                              M.fromListWith pickBest
+                                [ (e, ((idQuality (Just i), Down ord), (i, t)))
+                                | (ord, ADef i t e props) <- zip [0 :: Int ..] defs
+                                , not (defPropsHasNoCSE props) ],
                      defMap = M.fromList [(i, e) | ADef i _ e _props <- defs ],
                      defUseMap = M.empty,
                      keyRanks = mkKeyRanks keys,
                      useOrder = M.empty,
                      nextUse = 0
                    }
+  where pickBest new@(kNew, _) old@(kOld, _)
+          | kNew > kOld = new
+          | otherwise   = old
 
 -- record a method use the first time the walk meets it
 noteUse :: UniqueUse -> UCM ()

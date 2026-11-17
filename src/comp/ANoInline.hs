@@ -3,7 +3,8 @@ module ANoInline (aNoInline) where
 import Util(itos)
 import Position(noPosition)
 import Flags(Flags)
-import Id(mkId, getIdBaseString)
+import Id(mkId, getIdBaseString, idQuality)
+import DefProp(defPropsHasNoCSE)
 import FStringCompat(mkFString)
 import Control.Monad.State
 import qualified Data.Map as M
@@ -42,11 +43,16 @@ type NIStateMonad a = State NIState a
 -- Monad Util
 -- Adds a processed def
 addDef :: ADef -> NIStateMonad ()
-addDef newdef@(ADef i t e _) = do
+addDef newdef@(ADef i t e p) = do
            state <- get
            olddefs <- gets nis_defs
            rlm <- gets nis_rlookup
-           let rlm1 = M.insert (e,t) i rlm
+           let keepBest new old
+                 | idQuality (Just new) > idQuality (Just old) = new
+                 | otherwise                                   = old
+               rlm1 = if defPropsHasNoCSE p
+                      then rlm
+                      else M.insertWith keepBest (e, t) i rlm
            put (state { nis_defs = (newdef:olddefs), nis_rlookup = rlm1 })
 
 -- Generates a new Id from the expression to give to it

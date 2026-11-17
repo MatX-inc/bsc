@@ -1,0 +1,105 @@
+package CseSurvivor where
+
+interface Out8 =
+  o :: Bit 8
+
+interface SharedIfc =
+  m1 :: Bit 8
+  m2 :: Bit 8
+
+interface VReg8 =
+  write :: Bit 8 -> PrimAction
+  read  :: Bit 8
+
+vMkReg8 :: Bit 8 -> Module VReg8
+vMkReg8 initVal =
+  module verilog "RegN" (("width", 8), ("init", initVal)) "CLK" "RST" {
+    read = "Q_OUT"{reg};
+    write = "D_IN"{reg} "EN";
+  } [ read <> read, read < write, write << write ]
+
+-- User let binder passed to a submodule instantiation Param (noCSE) and also
+-- used in both a rule and an interface value method.
+{-# verilog mkParamSurvivor { parameter cfg } #-}
+mkParamSurvivor :: Bit 8 -> Module Out8
+mkParamSurvivor cfg = module
+  let userStride :: Bit 8
+      userStride = (cfg ^ 8'h5A) + 8'd3
+  r :: VReg8 <- vMkReg8 userStride
+  rules
+    "step": when True ==>
+      fromPrimAction (r.write (r.read + (userStride ^ (userStride << 1))))
+  interface
+    o = (r.read ^ userStride) + (r.read & userStride)
+
+-- User let binder passed to a submodule Param (converted first in AConv) and
+-- used only in the interface (converted after state instantiations in AConv).
+{-# verilog mkParamIfcOnly { parameter cfg } #-}
+mkParamIfcOnly :: Bit 8 -> Module Out8
+mkParamIfcOnly cfg = module
+  let userMask :: Bit 8
+      userMask = (cfg ^ 8'h3C) + 8'd5
+  r :: VReg8 <- vMkReg8 userMask
+  rules
+    "tick": when True ==>
+      fromPrimAction (r.write (r.read + 8'd1))
+  interface
+    o = (r.read ^ userMask) + (r.read | userMask)
+
+-- Unconditional rule writes bypass MUX_*__SEL_ aliases; WILL_FIRE_RL_* wins
+-- and no dead MUX_*__SEL_ alias survives.
+{-# verilog mkMuxFireSurvivor #-}
+mkMuxFireSurvivor :: Module Out8
+mkMuxFireSurvivor = module
+  r :: Reg (Bit 8) <- mkReg 0
+  let rLow :: Rules
+      rLow = rules { "step_low": when (r < 8'd10) ==> r := r + 8'd1 }
+      rMid :: Rules
+      rMid = rules { "step_mid": when (r < 8'd20) ==> r := r + 8'd2 }
+      rHigh :: Rules
+      rHigh = rules { "step_high": when (r < 8'd30) ==> r := r + 8'd3 }
+  addRules (rLow `preempts` (rMid `preempts` rHigh))
+  interface
+    o = r
+
+-- Distinct RDY_ and CAN_FIRE_RL_ anchors sharing non-trivial RHSes survive,
+-- and equal-rank user binders break ties by first-sighting order rather than
+-- Ord Id.
+{-# verilog mkSharedAnchors #-}
+mkSharedAnchors :: Module SharedIfc
+mkSharedAnchors = module
+  a :: Reg (Bit 8) <- mkReg 3
+  b :: Reg (Bit 8) <- mkReg 4
+  c :: Reg (Bit 8) <- mkReg 0
+  d :: Reg (Bit 8) <- mkReg 0
+  rules
+    "r_first": when ((a & 8'd1) == 8'd0) ==>
+      let zetaVal :: Bit 8
+          zetaVal = (a + b) ^ 8'h33
+      in  a := zetaVal + (zetaVal << 1)
+    "r_second": when ((a & 8'd1) == 8'd1) ==>
+      let alphaVal :: Bit 8
+          alphaVal = (a + b) ^ 8'h33
+      in  b := alphaVal ^ (alphaVal >> 1)
+    "fire_z_first": when ((a ^ b) > 8'd6) ==> c := c + 8'd1
+    "fire_a_second": when ((a ^ b) > 8'd6) ==> d := d + 8'd1
+  interface
+    m1 = a when ((a + b) > 8'd5)
+    m2 = b when ((a + b) > 8'd5)
+
+-- An unnamed subexpression evaluated before an identical user-bound let
+-- expression must still yield to the Tier-3 user binder in IExpand.eqPtrs.
+{-# verilog mkUnnamedVsUserSurvivor #-}
+mkUnnamedVsUserSurvivor :: Module Out8
+mkUnnamedVsUserSurvivor = module
+  a :: Reg (Bit 8) <- mkReg 5
+  b :: Reg (Bit 8) <- mkReg 9
+  rules
+    "unnamed_first": when ((a & 8'd1) == 8'd0) ==>
+      a := ((a + b) ^ 8'h5C) + 8'd1
+    "named_second": when ((a & 8'd1) == 8'd1) ==>
+      let userXor :: Bit 8
+          userXor = (a + b) ^ 8'h5C
+      in  b := userXor + (userXor << 1)
+  interface
+    o = a ^ b

@@ -21,6 +21,7 @@ import Prelude hiding ((<>))
 import Control.Monad(foldM, forM)
 import Control.Monad.State.Strict(State, runState, gets, get, put)
 import Data.List((\\), sortOn)
+import Data.Ord(Down(..))
 import qualified Data.Map.Strict as M
 
 import IntegerUtil(mask, integerAnd)
@@ -1495,8 +1496,8 @@ data TState a = TState {
 
         -- A map of package defs.  When ICValue is encountered, the def is
         -- looked up in this map and the assigned expression is inlined.
-        -- The defprops are kept to be used in the fixup step that happens
-        -- between processing defs and processing the rest of the module.
+        -- The defprops and first-sighting ordinal are kept for the fixup
+        -- step between processing defs and processing the rest of the module.
         def_map :: M.Map Id (Int, IType, IExpr a, [DefProp]),
 
         -- A CSE map, from an expr "e" to a tuple of info for the canonical
@@ -1536,6 +1537,9 @@ runT errh flags no prefix xforms =
                       [ IDef i t e props
                         | (i, (_, t, e, props)) <- sortOn (\(_, (ord, _, _, _)) -> ord) (M.toList (def_map ts))
                         , defPropsHasNoCSE props
+                          || (isAnchorId i && case e of
+                                                ICon ref_i (ICValue {}) -> ref_i /= i
+                                                _ -> False)
                       ]
                   defs = defs_from_cse ++ non_cse_defs
               in  (x, defs)
@@ -1801,14 +1805,17 @@ iTransFixupDefNames flags = do
       old_defmap = def_map transform_state
       old_csemap = cse_map transform_state
 
-      -- For each CSE name, track the highest-quality CSE-able def that
-      -- replaced it, breaking ties by earliest sighting serial (negate ord)
-      -- rather than Ord Id.
-      cse_ids_map :: M.Map Id ((Int, Int), Id)
+      -- For each CSE name, pick the highest-ranked CSE-able def by the
+      -- 5-level quality rank (Id.idQuality), breaking equal-rank ties by
+      -- first-sighting order (Down ord, never Ord Id).  DefP_NoCSE defs
+      -- are excluded; missing keys map to the cse_name identity via
+      -- iTransRenameId's findWithDefault.
+      bestByRank a@(k1, _) b@(k2, _) = if k1 >= k2 then a else b
+      cse_ids_map :: M.Map Id ((Int, Down Int), Id)
       cse_ids_map =
-          M.fromListWith max $
+          M.fromListWith bestByRank
                [ ( cse_name
-                 , ((idQuality (Just def_name), negate ord), def_name) )
+                 , ((idQuality (Just def_name), Down ord), def_name) )
                  | (def_name, (ord, _, ICon cse_name _value@(ICValue {}), props))
                        <- M.toList old_defmap
                  , not (defPropsHasNoCSE props) ]

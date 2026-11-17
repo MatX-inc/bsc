@@ -3,6 +3,7 @@ module InlineWires(aInlineWires) where
 import ASyntax
 import ASyntaxUtil
 import Data.List(partition)
+import Id(IdProp(IdP_enable), addIdProp, hasIdProp)
 import PFPrint
 import IntLit(IntLit(..))
 import qualified Data.Map as M
@@ -93,16 +94,20 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
         si_ips = aspsi_inlined_ports si
         si' = si { aspsi_inlined_ports = rwire_signal_info ++ si_ips }
 
-        -- XXX this traverses the package once for every inlines wire
-        -- for performance the sub should be aggregated into a map
-        -- perform the substitutions
-        -- to rename input port defs with the output names
-        renameADef s d@(ADef { adef_objid = i }) =
-            case (lookup i s) of
+        -- perform the substitutions to rename input port defs with the
+        -- output names, preserving IdP_enable on <inst>$whas so AOpt.joinDefs
+        -- keeps its non-winner enable role rather than letting $whas clobber
+        -- a user binder or rule firing signal
+        name_subst = M.fromList (concatMap (\(a,b,c,d,e,f) -> d) rwire_tuples)
+        renameADef d@(ADef { adef_objid = i }) =
+            case M.lookup i name_subst of
                 Nothing    -> d
-                Just new_i -> d { adef_objid = new_i }
-        name_subst = concatMap (\(a,b,c,d,e,f) -> d) rwire_tuples
-        defs' = map (renameADef name_subst) defs
+                Just new_i ->
+                    let new_i' = if hasIdProp i IdP_enable
+                                 then addIdProp new_i IdP_enable
+                                 else new_i
+                    in  d { adef_objid = new_i' }
+        defs' = map renameADef defs
 
         -- any new definitions
         -- (to constants, when the input port was dangling)

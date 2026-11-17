@@ -2,6 +2,7 @@ module ATaskSplice(aTaskSplice) where
 import ASyntax
 import ASyntaxUtil
 import Id
+import Data.Ord(Down(..))
 import qualified Data.Map as M
 import ErrorUtil(internalError)
 
@@ -11,7 +12,14 @@ type SpliceMap = M.Map Integer (Id,AType)
 
 aTaskSplice :: APackage -> APackage
 aTaskSplice apkg = mapAActions (spliceAction spliceMap) apkg
-  where spliceMap = M.fromList [ (n, (id, t)) | ADef id t (ATaskValue { ae_cookie = n }) _ <- defs ]
+  where spliceMap = M.map snd $
+                    M.fromListWith pickBest
+                      [ (n, ((idQuality (Just i), Down ord), (i, t)))
+                      | (ord, ADef i t (ATaskValue { ae_cookie = n }) _)
+                          <- zip [0 :: Int ..] defs ]
+        pickBest new@(kNew, _) old@(kOld, _)
+          | kNew > kOld = new
+          | otherwise   = old
         defs = (apkg_local_defs apkg) ++
                (concatMap av_ret_def (apkg_interface apkg))
         av_ret_def act@(AIActionValue {}) = [aif_value act]

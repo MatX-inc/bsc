@@ -1,0 +1,19 @@
+package TopZ where
+
+import ScrambleZ
+import CseSurvivor
+import WhasSurvivor
+
+{-# verilog mkTopZ #-}
+mkTopZ :: Module Empty
+mkTopZ = module
+  s :: SharedIfc <- mkSharedAnchors
+  p :: Out8 <- mkParamSurvivor 8'h11
+  q :: Out8 <- mkParamIfcOnly 8'h22
+  m :: Out8 <- mkMuxFireSurvivor
+  u :: Out8 <- mkUnnamedVsUserSurvivor
+  w :: WhasOut8 <- mkWhasSurvivor
+  let (k, _) = zetaPreIntern (s.m1 ^ p.o ^ q.o ^ m.o ^ u.o ^ w.o)
+  sink :: Reg (Bit 8) <- mkReg 0
+  rules
+    "observe": when True ==> sink := k ^ s.m2

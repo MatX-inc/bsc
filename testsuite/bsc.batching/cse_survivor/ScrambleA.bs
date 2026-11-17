@@ -1,0 +1,14 @@
+package ScrambleA where
+
+-- Pre-intern competing survivor candidates in alpha-first order before
+-- CseSurvivor is compiled in a `bsc -u` batch.
+alphaPreIntern :: Bit 8 -> (Bit 8, Bool)
+alphaPreIntern x =
+  let alphaVal = x + 8'd1
+      rdy_m2_probe = x == 8'd0
+      rw_whas_probe = x == 8'd1
+      rw_wget_probe = x + 8'd2
+      zetaVal = x + 8'd3
+      rdy_m1_probe = x == 8'd2
+  in  (alphaVal ^ rw_wget_probe ^ zetaVal,
+       rdy_m2_probe || rw_whas_probe || rdy_m1_probe)
