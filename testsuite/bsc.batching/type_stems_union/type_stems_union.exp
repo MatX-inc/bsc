@@ -1,0 +1,105 @@
+# Verify provenance-driven tagged-union tag, variant-test, unique-payload,
+# shared-payload, and case-arm naming stems for both derived-Bits and
+# custom-Bits tagged unions, fallback to raw structural stems when distinct
+# union types share a CSE wire, and zero wire-name or digest churn when
+# variants are inserted and sibling payloads and tag widths grow.
+
+set naming_flags {-keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched -no-opt-aggressive-inline -no-opt-AndOr -opt-join-defs}
+
+proc write_same_pkg_variant { src_bs dst_dir } {
+    global subdir
+    set full_dir [file join $subdir $dst_dir]
+    file delete -force $full_dir
+    file mkdir $full_dir
+    set in_fh [open [file join $subdir $src_bs] r]
+    set txt [read $in_fh]
+    close $in_fh
+    regsub {^package Union(Before|After) where} $txt {package UnionPkg where} txt2
+    set out_fh [open [file join $full_dir UnionPkg.bs] w]
+    puts -nonewline $out_fh $txt2
+    close $out_fh
+}
+
+proc extract_matching_wire_names { vfile pattern } {
+    global subdir
+    set full [file join $subdir $vfile]
+    set fh [open $full r]
+    set txt [read $fh]
+    close $fh
+    set found {}
+    foreach tok [regexp -all -inline {[A-Za-z_][A-Za-z0-9_$]*} $txt] {
+        if { [regexp $pattern $tok] } {
+            lappend found $tok
+        }
+    }
+    return [lsort -unique $found]
+}
+
+if { $vtest == 1 } {
+    write_same_pkg_variant UnionBefore.bs v_before
+    write_same_pkg_variant UnionAfter.bs v_after
+
+    compile_verilog_pass v_before/UnionPkg.bs mkUnionMod [concat $naming_flags {-bdir v_before -vdir v_before}]
+    copy v_before/mkUnionMod.v mkUnionBefore.v
+
+    compile_verilog_pass v_after/UnionPkg.bs mkUnionMod [concat $naming_flags {-bdir v_after -vdir v_after}]
+    copy v_after/mkUnionMod.v mkUnionAfter.v
+
+    # 1. Explicit user binders are preserved cleanly.
+    find_regexp mkUnionBefore.v {\mambUnionMix\M}
+    find_regexp mkUnionAfter.v {\mambUnionMix\M}
+
+    # 2. Derived-Bits and custom-Bits tagged-union tag slices, boolean variant
+    #    tests (<base>_is_<Variant>), shared payload slices (<base>_payload),
+    #    unique constructor payload slices (<base>_<Variant>), and multi-arm
+    #    read-side CASE_<base>_tag_<Variant>_... wires keep identical stems and
+    #    _h<h4> digests when variants are inserted (5 -> 9 constructors,
+    #    Bit 3 -> Bit 4 tags) and sibling payloads widen (Bit 15 -> Bit 24 and
+    #    Bit 13 -> Bit 20 carriers).
+    set stable_patterns {
+        {^msgReg_h[0-9a-z]{4}$}
+        {^msgReg_MsgCtrl_h([0-9a-z]{4}|[0-9a-z]{8})$}
+        {^IF_flagReg_THEN_msgReg_payload_ELSE_accReg_h[0-9a-z]{4}$}
+        {^IF_msgReg_is_MsgCtrl_.*_h[0-9a-z]{4}$}
+        {^IF_msgReg_is_MsgHit_.*_h[0-9a-z]{4}$}
+        {^IF_msgReg_is_MsgMiss_.*_h[0-9a-z]{4}$}
+        {^IF_msgReg_is_MsgIdle_.*_h[0-9a-z]{4}$}
+        {^CASE_msgReg_tag_MsgIdle_10_.*_h[0-9a-z]{4}$}
+        {^cpReg_tag_h[0-9a-z]{4}$}
+        {^cpReg_CpCtrl_h([0-9a-z]{4}|[0-9a-z]{8})$}
+        {^IF_flagReg_THEN_cpReg_payload_ELSE_accReg_h[0-9a-z]{4}$}
+        {^IF_cpReg_is_CpCtrl_.*_h[0-9a-z]{4}$}
+        {^IF_cpReg_is_CpRecv_.*_h[0-9a-z]{4}$}
+        {^IF_cpReg_is_CpIdle_.*_h[0-9a-z]{4}$}
+        {^CASE_cpReg_tag_CpIdle_12_.*_h[0-9a-z]{4}$}
+    }
+
+    foreach pat $stable_patterns {
+        set before_matches [extract_matching_wire_names mkUnionBefore.v $pat]
+        set after_matches [extract_matching_wire_names mkUnionAfter.v $pat]
+        if { [llength $before_matches] == 0 } {
+            fail "expected wire matching $pat in mkUnionBefore.v"
+        } else {
+            pass "found wire matching $pat in mkUnionBefore.v: $before_matches"
+        }
+        if { $before_matches eq $after_matches } {
+            pass "zero name/digest churn for $pat ($before_matches)"
+        } else {
+            fail "churn on $pat: before=$before_matches vs after=$after_matches"
+        }
+    }
+
+    # 3. Also test unnamed inline boolean variant tests (<base>_is_<Variant>).
+    find_n_strings mkUnionBefore.v {UaByte} 0
+    find_n_strings mkUnionBefore.v {UbCode} 0
+
+    file delete -force [file join $subdir v_before] [file join $subdir v_after]
+}
+
+reverse_intern_same_bo UnionBefore.bs
+reverse_intern_same_verilog UnionBefore.bs mkUnionMod $naming_flags
+check_verilog_regen UnionBefore.bs mkUnionMod $naming_flags
+
+reverse_intern_same_bo UnionAfter.bs
+reverse_intern_same_verilog UnionAfter.bs mkUnionMod $naming_flags
+check_verilog_regen UnionAfter.bs mkUnionMod $naming_flags

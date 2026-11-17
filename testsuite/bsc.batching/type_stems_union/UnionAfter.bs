@@ -1,0 +1,170 @@
+package UnionAfter where
+
+data FrameMsg
+    = MsgPre
+    | MsgIdle
+    | MsgWarmup
+    | MsgHit (Bit 8)
+    | MsgMiss (Bit 8)
+    | MsgRetry (Bit 8)
+    | MsgCtrl (Bit 10)
+    | MsgWide (Bit 20)
+    | MsgDrain
+  deriving (Bits, Eq)
+
+data CustomPkt
+    = CpPre
+    | CpIdle
+    | CpPrime
+    | CpSend (Bit 8)
+    | CpRecv (Bit 8)
+    | CpRetry (Bit 8)
+    | CpCtrl (Bit 10)
+    | CpWide (Bit 16)
+    | CpFault
+  deriving (Eq)
+
+instance Bits CustomPkt 20 where
+    pack CpPre       = 4'd0 ++ 16'd0
+    pack CpIdle      = 4'd1 ++ 16'd0
+    pack CpPrime     = 4'd2 ++ 16'd0
+    pack (CpSend x)  = 4'd3 ++ 8'd0 ++ x
+    pack (CpRecv y)  = 4'd4 ++ 8'd0 ++ y
+    pack (CpRetry z) = 4'd5 ++ 8'd0 ++ z
+    pack (CpCtrl c)  = 4'd6 ++ 6'd0 ++ c
+    pack (CpWide w)  = 4'd7 ++ w
+    pack CpFault     = 4'd8 ++ 16'd0
+    unpack _b =
+        if _b[19:16] == 4'd0 then CpPre
+        else if _b[19:16] == 4'd1 then CpIdle
+        else if _b[19:16] == 4'd2 then CpPrime
+        else if _b[19:16] == 4'd3 then CpSend _b[7:0]
+        else if _b[19:16] == 4'd4 then CpRecv _b[7:0]
+        else if _b[19:16] == 4'd5 then CpRetry _b[7:0]
+        else if _b[19:16] == 4'd6 then CpCtrl _b[9:0]
+        else if _b[19:16] == 4'd7 then CpWide _b[15:0]
+        else CpFault
+
+data AltUnionA = UaNone | UaByte (Bit 8) | UaHalt
+  deriving (Eq)
+
+instance Bits AltUnionA 10 where
+    pack UaNone     = 2'b00 ++ 8'd0
+    pack (UaByte x) = 2'b01 ++ x
+    pack UaHalt     = 2'b10 ++ 8'd0
+    unpack _b =
+        if _b[9:8] == 2'b00 then UaNone
+        else if _b[9:8] == 2'b01 then UaByte _b[7:0]
+        else UaHalt
+
+data AltUnionB = UbEmpty | UbCode (Bit 8) | UbStop
+  deriving (Eq)
+
+instance Bits AltUnionB 10 where
+    pack UbEmpty    = 2'b00 ++ 8'd0
+    pack (UbCode x) = 2'b01 ++ x
+    pack UbStop     = 2'b11 ++ 8'd0
+    unpack _b =
+        if _b[9:8] == 2'b00 then UbEmpty
+        else if _b[9:8] == 2'b01 then UbCode _b[7:0]
+        else UbStop
+
+interface UnionIfc =
+    step :: Bit 8 -> Bit 10 -> Action
+    peekFrame :: Bit 8 -> Bit 8
+    peekCustom :: Bit 8 -> Bit 8
+    peekCtrl :: Bit 10 -> Bit 10
+    peekAmbig :: Bit 8
+
+{-# verilog mkUnionMod #-}
+mkUnionMod :: Module UnionIfc
+mkUnionMod =
+    module
+        msgReg :: Reg FrameMsg <- mkReg MsgIdle
+        cpReg :: Reg CustomPkt <- mkReg CpIdle
+        rawUnionReg :: Reg (Bit 10) <- mkReg 0
+        flagReg :: Reg Bool <- mkReg False
+        accReg :: Reg (Bit 8) <- mkReg 0
+        auxReg :: Reg (Bit 8) <- mkReg 0
+
+        interface
+            step inByte inCtrl =
+                do
+                    flagReg := not flagReg
+                    msgReg :=
+                        case msgReg of
+                            MsgIdle   -> MsgHit inByte
+                            MsgHit x  -> MsgMiss (x + 1)
+                            MsgMiss y -> MsgCtrl ((2'b01 ++ y) ^ inCtrl)
+                            MsgCtrl c -> MsgHit c[7:0]
+                            _         -> MsgIdle
+                    cpReg :=
+                        case cpReg of
+                            CpIdle   -> CpSend inByte
+                            CpSend x -> CpRecv (x ^ 8'h3C)
+                            CpRecv y -> CpCtrl ((2'b10 ++ y) + inCtrl)
+                            CpCtrl c -> CpSend c[7:0]
+                            _        -> CpIdle
+                    rawUnionReg := rawUnionReg + 1
+                    accReg :=
+                        (case msgReg of { MsgHit _ -> inByte; _ -> auxReg }) +
+                        (case msgReg of { MsgMiss _ -> inByte ^ 8'h0F; _ -> auxReg }) +
+                        (case cpReg of { CpRecv _ -> inByte ^ 8'h5A; _ -> accReg })
+                    auxReg :=
+                        (case msgReg of { MsgHit _ -> accReg ^ 8'h11; _ -> inByte }) ^
+                        (case msgReg of { MsgMiss _ -> accReg + 8'h33; _ -> inByte }) ^
+                        (case cpReg of { CpRecv _ -> auxReg + 8'h22; _ -> inByte })
+
+            peekFrame bias =
+                (case msgReg of {
+                    MsgIdle   -> accReg;
+                    MsgHit x  -> (if flagReg then x else accReg) ^ 8'h11;
+                    MsgMiss y -> (if flagReg then y else accReg) ^ 8'h22;
+                    MsgCtrl c -> c[7:0] ^ c[9:2];
+                    _         -> 8'hA5
+                }) +
+                (case msgReg of {
+                    MsgIdle   -> 8'd10;
+                    MsgHit _  -> 8'd20;
+                    MsgMiss _ -> 8'd30;
+                    MsgCtrl _ -> 8'd20;
+                    _         -> 8'd40
+                }) + bias
+
+            peekCustom bias =
+                (case cpReg of {
+                    CpIdle   -> accReg;
+                    CpSend x -> (if flagReg then x else accReg) ^ 8'h33;
+                    CpRecv y -> (if flagReg then y else accReg) ^ 8'h44;
+                    CpCtrl c -> c[7:0] + c[9:2];
+                    _        -> 8'h5A
+                }) ^
+                (case cpReg of {
+                    CpIdle   -> 8'd12;
+                    CpSend _ -> 8'd24;
+                    CpRecv _ -> 8'd36;
+                    CpCtrl _ -> 8'd24;
+                    _        -> 8'd48
+                }) ^ bias
+
+            peekCtrl mask10 =
+                (case msgReg of {
+                    MsgCtrl c -> (if flagReg then c else 10'd0) ^ mask10;
+                    _         -> mask10
+                }) +
+                (case cpReg of {
+                    CpCtrl c -> (if flagReg then c else 10'd0) + mask10;
+                    _        -> mask10
+                })
+
+            peekAmbig =
+                let ambUnionMix =
+                        (case unpack rawUnionReg of {
+                            UaByte x -> x + accReg;
+                            _ -> auxReg
+                        }) +
+                        (case unpack rawUnionReg of {
+                            UbCode y -> y ^ auxReg;
+                            _ -> accReg
+                        })
+                in ambUnionMix ^ (ambUnionMix + 8'h01)

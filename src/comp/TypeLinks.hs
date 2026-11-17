@@ -488,7 +488,7 @@ data RawArray = forall a. RawArray (ILazyArray a)
 
 data SemRec
   = SemCopy !Int !Int
-  | SemCoerce !Char String IType !Int (Maybe RawExpr) !Int (Maybe RawExpr)
+  | SemCoerce !Char String IType IType !Int (Maybe RawExpr) !Int (Maybe RawExpr)
   | SemOp !Bool RawExpr [IType] (Maybe RawExpr) RawExpr (Maybe RawExpr) RawExpr
   | SemOutPayload RawExpr [IType] RawExpr (Maybe RawExpr)
   | SemOrd IType (Maybe RawExpr) RawExpr RawExpr !Int
@@ -1512,7 +1512,7 @@ tlCopyFile l how dst src = safely l $
 tlCoerce :: TLog -> Char -> String -> IType -> IType ->
             (Int, Maybe (IExpr a)) -> (Int, Maybe (IExpr a)) -> IO ()
 tlCoerce l dir how ta tn (bp, be) (vp, ve) = do
-  safely l $ semPush l (SemCoerce dir how ta bp (RawExpr <$> be) vp (RawExpr <$> ve))
+  safely l $ semPush l (SemCoerce dir how ta tn bp (RawExpr <$> be) vp (RawExpr <$> ve))
   when (tlFileOn l) $ safely l $ do
     tt@(TidT tid _) <- tidOfT l (Just ta)
     w <- numOf l tn

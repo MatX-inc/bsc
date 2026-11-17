@@ -50,7 +50,9 @@ import FStringCompat(mkFString)
 import Id
 import ASyntax
 import ASyntaxUtil
+import ASignalNaming(refreshASPackageTempIds)
 import ASourceTypes(anchorASPackage, anchorSourceTypes, anchorSourceProvenance)
+import SignalNaming(stripGeneratedSuffixes)
 import AExpand(aExpand, xaSRemoveUnused, xaXExpand, expandAPackage)
 import BoolExp
 import Prim
@@ -201,11 +203,14 @@ aOptWithTypes errh flags pkg0 = do
         portAnchors = S.fromList (map fst (aspkg_outputs pkg5) ++
                                   map fst (aspkg_inouts pkg5))
         inlinedPorts = S.fromList (aspkg_inlined_ports pkg5)
-        ds3 = joinDefs optjoin origDefOrder portAnchors inlinedPorts ds2
+        (ds3, refreshedTempIds) =
+            joinDefs optjoin origDefOrder portAnchors inlinedPorts ds2
     when debug $
       traceM ("trace defs, post joinDefs (ds3): " ++ ppReadable ds3)
     let pkg5A = (anchorASPackage pkg5) { aspkg_values = ds2 }
-        pkg6 = (anchorASPackage pkg5A) { aspkg_values = ds3 }
+        pkg6 =
+            refreshASPackageTempIds flags refreshedTempIds $
+                (anchorASPackage pkg5A) { aspkg_values = ds3 }
 
     --
     -- We may want to turn off optsch here, since this undoes the effect of joinDefs
@@ -462,9 +467,9 @@ aOptInstArg bflgs _ = aExp bflgs
 -- firing signals or user binders; NoCSE defs (-keep-method-conds) are never
 -- merged in either direction; and any other def sharing the RHS (including a
 -- second distinct anchor) is rewritten into an explicit alias ADef.
-joinDefs :: Bool -> M.Map AId Int -> S.Set AId -> S.Set AId -> [ADef] -> [ADef]
-joinDefs False _ _ _ ds = ds
-joinDefs True origDefOrder portAnchors inlinedPorts dsx = map rewrite dsx
+joinDefs :: Bool -> M.Map AId Int -> S.Set AId -> S.Set AId -> [ADef] -> ([ADef], S.Set AId)
+joinDefs False _ _ _ ds = (ds, S.empty)
+joinDefs True origDefOrder portAnchors inlinedPorts dsx = (map rewrite dsx, refreshedIds)
   where shapeOK (ASInt _ _ _)  = False
         shapeOK (ASDef _ _)    = False
         shapeOK (ASStr _ _ _)  = False
@@ -487,18 +492,39 @@ joinDefs True origDefOrder portAnchors inlinedPorts dsx = map rewrite dsx
              Down (M.findWithDefault maxBound ie origDefOrder),
              Down seqNo)
 
-        bestByRank a@(k1, _) b@(k2, _) = if k1 >= k2 then a else b
+        tempStem ie = stripGeneratedSuffixes (getIdBaseString ie)
 
-        reps :: M.Map AExpr ((Int, Down Int, Down Int), ADef)
-        reps = MS.fromListWith bestByRank
-                   [ (adef_expr d, (defRank seqNo (adef_objid d), d))
+        mergeEntry (rNew, dNew, allZeroNew, stemsNew) (rOld, dOld, allZeroOld, stemsOld) =
+            let (!rWin, !dWin) = if rNew >= rOld then (rNew, dNew) else (rOld, dOld)
+                !allZero = allZeroNew && allZeroOld
+                !stems = S.union stemsNew stemsOld
+            in (rWin, dWin, allZero, stems)
+
+        reps :: M.Map AExpr ((Int, Down Int, Down Int), ADef, Bool, S.Set String)
+        reps = MS.fromListWith mergeEntry
+                   [ let q = defQuality (adef_objid d)
+                     in ( adef_expr d
+                        , ( defRank seqNo (adef_objid d)
+                          , d
+                          , q == 0
+                          , S.singleton (tempStem (adef_objid d))
+                          )
+                        )
                    | (seqNo, d) <- zip [0..] dsx
                    , repCandidate d ]
+
+        refreshedIds :: S.Set AId
+        refreshedIds =
+            S.fromList
+                [ adef_objid d
+                | (_, d, True, stems) <- M.elems reps
+                , S.size stems > 1
+                ]
 
         rewrite d@(ADef ie _ e props)
             | shapeOK e
             , not (defPropsHasNoCSE props)
-            , Just (_, ADef i t _ p) <- M.lookup e reps
+            , Just (_, ADef i t _ p, _, _) <- M.lookup e reps
             , i /= ie
             = ADef ie t (ASDef t i) p
             | otherwise

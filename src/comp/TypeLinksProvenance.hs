@@ -347,6 +347,15 @@ bitWidth :: IType -> Int
 bitWidth (ITAp (ITCon i _ _) (ITNum n)) | i == idBit = fromInteger n
 bitWidth _ = -1
 
+iTypeKey :: IType -> [String]
+iTypeKey = flip go []
+  where
+    go (ITCon i _ _) acc = getIdQualString i : getIdBaseString i : acc
+    go (ITNum n) acc = show n : acc
+    go (ITStr s) acc = show s : acc
+    go (ITAp f a) acc = "(" : go f (go a (")" : acc))
+    go _ acc = "?" : acc
+
 flatAp :: IExpr a -> (IExpr a, [IType], [IExpr a])
 flatAp (IAps f ts es) =
     let (h, ts0, es0) = flatAp f
@@ -456,6 +465,8 @@ harvestTypeLinksProvenance l norm hasBits ptran hasUserBinder canonCells rootExp
 
       -- Mutable graph tables during harvesting
       let canonSet = IM.fromList [ (c, ()) | (c, _) <- canonCells ]
+          canonCellMap = IM.fromList canonCells
+      typeWidthsRef <- newIORef (M.empty :: M.Map [String] Integer)
       arrTabRef <- newIORef (IM.empty :: IM.IntMap [(AnySN, NodeKey)])
       nextArrRef <- newIORef (0 :: Int)
       exprTabRef <- newIORef (IM.empty :: IM.IntMap [(AnySN, Int)])
@@ -624,15 +635,19 @@ harvestTypeLinksProvenance l norm hasBits ptran hasUserBinder canonCells rootExp
                       IM.insertWith (++) dst [src] .
                       IM.insertWith (++) src [dst]
 
-          SemCoerce dir _ _ bp mbe vp _
-            | dir == 'u', vp >= 0 -> do
-                mc <- bitsCarrierTarget bp mbe
-                case mc of
-                  Just ct ->
-                      modifyIORef' unpackSeedsRef $
-                          IM.insertWith (flip (++)) vp [Origin ct []]
-                  Nothing -> return ()
-            | otherwise -> return ()
+          SemCoerce dir _ ta tn bp mbe vp _ -> do
+              case norm tn of
+                ITNum w | w >= 0 ->
+                    modifyIORef' typeWidthsRef $
+                        M.insert (iTypeKey (norm ta)) w
+                _ -> return ()
+              when (dir == 'u' && vp >= 0) $ do
+                  mc <- bitsCarrierTarget bp mbe
+                  case mc of
+                    Just ct ->
+                        modifyIORef' unpackSeedsRef $
+                            IM.insertWith (flip (++)) vp [Origin ct []]
+                    Nothing -> return ()
 
           SemArrHeld p _ rawArr -> do
               _ <- getArrNode rawArr (Just p)
@@ -673,24 +688,168 @@ harvestTypeLinksProvenance l norm hasBits ptran hasUserBinder canonCells rootExp
                                   if m <= 1
                                     then recordStep mown v mpart res []
                                     else case dataConName st k of
-                                           Just (tb, tq, cn, nc, _) ->
-                                               recordStep mown v mpart res
-                                                   [PStepVariantPayload tb tq cn k nc]
+                                           Just (tb, tq, cn, nc, _) -> do
+                                               let step = PStepVariantPayload tb tq cn k nc
+                                               recordStep mown v mpart res [step]
+                                               recordExtractedPayloadLeaf mown v res step
                                            Nothing -> return ()
                               (ICIs { conTagInfo = cti }, Just (st, _)) -> do
                                   k <- fromInteger <$> evaluate (conNo cti)
                                   m <- evaluate (numCon cti)
                                   when (m > 1) $
                                       case dataConName st k of
-                                        Just (tb, tq, cn, nc, isEn) ->
+                                        Just (tb, tq, cn, nc, isEn) -> do
                                             recordStep mown v mpart res
                                                 [PStepVariantTest tb tq cn k nc isEn]
+                                            when (not isEn) $
+                                                recordExtractedTagStep st tb tq nc mown v res
                                         Nothing -> return ()
                               _ -> return ()
                             return (Just ())
                         _ -> return Nothing
                   return ()
             where
+              isIntLitRaw (RawExpr e0) =
+                  (do e <- evaluate e0
+                      case e of
+                        ICon _ (ICInt {}) -> return True
+                        IRefT _ p _ _
+                          | Just re <- IM.lookup (ptran p) canonCellMap ->
+                              isIntLitRaw re
+                        _ -> return False)
+                  `catch` \(_ :: SomeException) -> return False
+
+              isSlicedRaw (RawExpr e0) =
+                  (do e <- evaluate e0
+                      case e of
+                        IRefT _ p _ _
+                          | Just re <- IM.lookup (ptran p) canonCellMap ->
+                              isSlicedRaw re
+                        _ -> case flatAp e of
+                               (ICon _ (ICPrim { primOp = op }), _, _) ->
+                                   return (op == PrimSelect || op == PrimExtract || op == PrimTrunc)
+                               _ -> return False)
+                  `catch` \(_ :: SomeException) -> return False
+
+              derefRaw :: Int -> RawExpr -> IO RawExpr
+              derefRaw depth re0@(RawExpr e0)
+                | depth <= 0 = return re0
+                | otherwise = do
+                    e <- evaluate e0
+                    case e of
+                      IRefT _ p _ _
+                        | Just re <- IM.lookup (ptran p) canonCellMap ->
+                            derefRaw (depth - 1) re
+                      _ -> return (RawExpr e)
+
+              rawTargetIdKey :: RawExpr -> IO (Either Int Int)
+              rawTargetIdKey re = do
+                  mp <- rawCellOf re
+                  case mp of
+                    Just p -> return (Left (ptran p))
+                    Nothing -> do
+                        RTExpr eid _ <- mkRTExpr re
+                        return (Right eid)
+
+              uniqueRawByKey :: [RawExpr] -> IO (Maybe RawExpr)
+              uniqueRawByKey [] = return Nothing
+              uniqueRawByKey rs = do
+                  keyed <- mapM (\r -> (\k -> (k, r)) <$> rawTargetIdKey r) rs
+                  let uniqKeys = S.fromList (map fst keyed)
+                  case (S.size uniqKeys, keyed) of
+                    (1, (_, r0) : _) -> return (Just r0)
+                    _ -> return Nothing
+
+              collectTagOps :: Int -> Maybe Integer -> RawExpr -> IO [RawExpr]
+              collectTagOps depth muW re0
+                | depth <= 0 = return []
+                | otherwise = do
+                    RawExpr d0 <- derefRaw 4 re0
+                    e <- evaluate d0
+                    case flatAp e of
+                      (ICon _ (ICPrim { primOp = PrimEQ }), [ITNum tagW], [a1, a2])
+                        | tagW > 0 -> do
+                            c1 <- isIntLitRaw (RawExpr a1)
+                            c2 <- isIntLitRaw (RawExpr a2)
+                            let mTagOp =
+                                    case (c1, c2) of
+                                      (False, True) -> Just (RawExpr a1)
+                                      (True, False) -> Just (RawExpr a2)
+                                      _ -> Nothing
+                            case mTagOp of
+                              Nothing -> return []
+                              Just tagOp -> do
+                                  okNarrow <-
+                                      case muW of
+                                        Just uW -> return (tagW < uW)
+                                        Nothing -> isSlicedRaw tagOp
+                                  return [ tagOp | okNarrow ]
+                      (ICon _ (ICPrim { primOp = PrimBNot }), _, [a1]) ->
+                          collectTagOps (depth - 1) muW (RawExpr a1)
+                      (ICon _ (ICPrim { primOp = op }), _, [a1, a2])
+                        | op == PrimBAnd || op == PrimBOr -> do
+                            l1 <- collectTagOps (depth - 1) muW (RawExpr a1)
+                            l2 <- collectTagOps (depth - 1) muW (RawExpr a2)
+                            return (l1 ++ l2)
+                      (ICon _ (ICPrim { primOp = PrimIf }), _, [c, tBr, fBr]) -> do
+                          lc <- collectTagOps (depth - 1) muW (RawExpr c)
+                          lt <- collectTagOps (depth - 1) muW (RawExpr tBr)
+                          lf <- collectTagOps (depth - 1) muW (RawExpr fBr)
+                          return (lc ++ lt ++ lf)
+                      _ -> return []
+
+              recordExtractedTagStep st tb tq nc mown' v' resRaw = do
+                  _ <- tryMaybe $ do
+                      tws <- readIORef typeWidthsRef
+                      let muW = M.lookup (iTypeKey (norm st)) tws
+                      tagOps <- collectTagOps 24 muW resRaw
+                      mUnique <- uniqueRawByKey tagOps
+                      case mUnique of
+                        Just tagOp ->
+                            recordStep mown' v' Nothing tagOp [PStepVariantTag tb tq nc]
+                        Nothing -> return ()
+                      return (Just ())
+                  return ()
+
+              collectPayloadLeaves :: Int -> RawExpr -> IO (Bool, [RawExpr])
+              collectPayloadLeaves depth raw
+                | depth <= 0 = return (False, [raw])
+                | otherwise = do
+                    RawExpr b0 <- derefRaw 1 raw
+                    eBody <- evaluate b0
+                    case eBody of
+                      ICon _ (ICUndet {}) -> return (True, [])
+                      _ ->
+                          case flatAp eBody of
+                            (ICon _ (ICPrim { primOp = PrimIf }), _, [_, tBr, fBr]) -> do
+                                (uT, lT) <- collectPayloadLeaves (depth - 1) (RawExpr tBr)
+                                (uF, lF) <- collectPayloadLeaves (depth - 1) (RawExpr fBr)
+                                if uT || uF
+                                  then return (True, lT ++ lF)
+                                  else return (False, [raw])
+                            (ICon _ (ICPrim { primOp = PrimCase }), _, _ : dflt : ces) -> do
+                                let pairArms (_ : arm : rest) = RawExpr arm : pairArms rest
+                                    pairArms _ = []
+                                results <- mapM (collectPayloadLeaves (depth - 1)) (RawExpr dflt : pairArms ces)
+                                if any fst results
+                                  then return (True, concatMap snd results)
+                                  else return (False, [raw])
+                            _ -> return (False, [raw])
+
+              recordExtractedPayloadLeaf mown' v' resRaw step = do
+                  _ <- tryMaybe $ do
+                      (sawUndet, leaves) <- collectPayloadLeaves 24 resRaw
+                      when sawUndet $ do
+                          mUnique <- uniqueRawByKey leaves
+                          case mUnique of
+                            Just leafOp -> do
+                                isConst <- isConstOrUndet leafOp
+                                when (not isConst) $
+                                    recordStep mown' v' Nothing leafOp [step]
+                            Nothing -> return ()
+                      return (Just ())
+                  return ()
+
               recordStep mown' v' mpart' res' steps = do
                   srcE <- exprNodeOrCarrier mown' v'
                   mPartCell <- maybe (return Nothing) rawCellOf mpart'
