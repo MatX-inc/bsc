@@ -52,10 +52,19 @@ module SignalNaming (
 
     -- Shallow depth-bounded hashing and base-36 formatting
     shallowSignalExpr,
+    eraseCarrierBitWidth,
     hashSignalExprFull,
     hashSignalExprShallow,
     signalHash4,
     signalHash8,
+
+    -- Evaluator provenance selection helpers
+    isSupportedProvStep,
+    isSupportedNamedLit,
+    nliMatchesBitLit,
+    hasStructuredProvenance,
+    selectProvenanceSignalExpr,
+    lookupArgNamedLit,
 
     -- Anchor classification and hard anchor invariant
     AnchorKind(..),
@@ -111,6 +120,7 @@ import Log2 (log2)
 import PPrint (PPrint(..), text)
 import PreIds (idClock, idPreludeRead, idReset)
 import Prim (PrimOp(..))
+import SourceProvenance (NamedLitInfo(..), ProvFact(..), ProvStep(..))
 import VModInfo (
     VArgInfo(..),
     VClockInfo(..),
@@ -188,6 +198,8 @@ data SignalExpr
     | SignalInout !SignalType !SignalExpr
     | SignalHeapRef !SignalType !Int
     | SignalLam !String !SignalType !SignalExpr
+    | SignalAccess !SignalType !SignalExpr ![ProvStep]
+    | SignalNamedLit !SignalType !NamedLitInfo
     | SignalOther !SignalType !String ![SignalExpr]
     deriving (Eq, Ord, Show)
 
@@ -216,6 +228,8 @@ instance NFData SignalExpr where
     rnf (SignalInout ty wire) = rnf ty `seq` rnf wire
     rnf (SignalHeapRef ty ptr) = rnf ty `seq` rnf ptr
     rnf (SignalLam v vt body) = rnf v `seq` rnf vt `seq` rnf body
+    rnf (SignalAccess ty base steps) = rnf ty `seq` rnf base `seq` rnf steps
+    rnf (SignalNamedLit ty nli) = rnf ty `seq` rnf nli
     rnf (SignalOther ty tag args) = rnf ty `seq` rnf tag `seq` rnf args
 
 instance PPrint SignalExpr where
@@ -254,6 +268,8 @@ signalExprType (SignalReset _) = SignalAbstract (getIdString idReset) []
 signalExprType (SignalInout ty _) = ty
 signalExprType (SignalHeapRef ty _) = ty
 signalExprType (SignalLam _ _ body) = signalExprType body
+signalExprType (SignalAccess ty _ _) = ty
+signalExprType (SignalNamedLit ty _) = ty
 signalExprType (SignalOther ty _ _) = ty
 
 -- ============================================================
@@ -1152,10 +1168,30 @@ signalExprStemRaw env (SignalReset wire) = signalExprStemRaw env wire
 signalExprStemRaw env (SignalInout _ wire) = signalExprStemRaw env wire
 signalExprStemRaw _ (SignalHeapRef _ _) = ""
 signalExprStemRaw env (SignalLam _ _ body) = signalExprStemRaw env body
+signalExprStemRaw env (SignalAccess _ base steps) =
+    L.foldl'
+        (\acc st -> connectParts "_" [acc, renderProvStepStem st])
+        (signalExprStemRaw env base)
+        steps
+signalExprStemRaw _ (SignalNamedLit _ nli) =
+    renderNamedLitStem nli
 signalExprStemRaw env (SignalOther _ tag args)
     | null args = stripGeneratedSuffixes tag
     | otherwise =
         connectParts "_" (stripGeneratedSuffixes tag : map (signalExprStemRaw env) args)
+
+renderProvStepStem :: ProvStep -> String
+renderProvStepStem (PStepField { ps_field = fn }) = fn
+renderProvStepStem (PStepElem { ps_elemIdx = idx })
+    | idx < 0 = "neg" ++ show (negate idx)
+    | otherwise = show idx
+renderProvStepStem _ = ""
+
+renderNamedLitStem :: NamedLitInfo -> String
+renderNamedLitStem (NLitSlot { nli_slot = idx })
+    | idx < 0 = "neg" ++ show (negate idx)
+    | otherwise = show idx
+renderNamedLitStem _ = ""
 
 renderPortStem :: SignalNamingEnv -> String -> String -> String
 renderPortStem env portStr fallbackInst =
@@ -1196,14 +1232,171 @@ connectParts sep parts =
     in L.intercalate sep cleaned
 
 -- ============================================================
+-- Evaluator provenance filtering and selection
+-- ============================================================
+
+isSupportedProvStep :: ProvStep -> Bool
+isSupportedProvStep (PStepField {}) = True
+isSupportedProvStep (PStepElem {}) = True
+isSupportedProvStep _ = False
+
+isSupportedNamedLit :: NamedLitInfo -> Bool
+isSupportedNamedLit (NLitSlot {}) = True
+isSupportedNamedLit _ = False
+
+hasStructuredProvenance :: SignalExpr -> Bool
+hasStructuredProvenance (SignalAccess {}) = True
+hasStructuredProvenance (SignalNamedLit {}) = True
+hasStructuredProvenance (SignalPrim _ _ args) = any hasStructuredProvenance args
+hasStructuredProvenance (SignalMethCall _ _ _ _ args) = any hasStructuredProvenance args
+hasStructuredProvenance (SignalTupleVal _ es) = any hasStructuredProvenance es
+hasStructuredProvenance (SignalTupleSel _ inner _) = hasStructuredProvenance inner
+hasStructuredProvenance (SignalNoInlineCall _ _ _ _ _ args) = any hasStructuredProvenance args
+hasStructuredProvenance (SignalFunCall _ _ _ args) = any hasStructuredProvenance args
+hasStructuredProvenance (SignalLam _ _ body) = hasStructuredProvenance body
+hasStructuredProvenance (SignalOther _ _ args) = any hasStructuredProvenance args
+hasStructuredProvenance _ = False
+
+nliMatchesBitLit :: Integer -> Integer -> NamedLitInfo -> Bool
+nliMatchesBitLit w v nli =
+    let (nw, nv) =
+            case nli of
+                NLitEnum { nli_width = w0, nli_val = v0 } -> (toInteger w0, v0)
+                NLitTag { nli_width = w0, nli_val = v0 } -> (toInteger w0, v0)
+                NLitSlot { nli_width = w0, nli_val = v0 } -> (toInteger w0, v0)
+    in w == nw && safeMask w v == safeMask w nv
+
+dedupSignalCandidates :: SignalNamingEnv -> [SignalExpr] -> [SignalExpr]
+dedupSignalCandidates env = go S.empty
+  where
+    go _ [] = []
+    go !seen (c : cs) =
+        let k = (signalExprStemRaw env c, shallowSignalExpr c)
+        in if S.member k seen
+           then go seen cs
+           else c : go (S.insert k seen) cs
+
+selectProvenanceSignalExpr ::
+    SignalNamingEnv ->
+    SignalType ->
+    (e -> Bool) ->
+    (e -> SignalExpr) ->
+    (NamedLitInfo -> Bool) ->
+    [ProvFact e] ->
+    Maybe SignalExpr
+selectProvenanceSignalExpr env ty isSelf lowerChild litMatches facts
+    | [litSe] <- litCands = Just litSe
+    | not (null litCands) = Nothing
+    | [accSe] <- accessCands = Just accSe
+    | not (null accessCands) = Nothing
+    | [catSe] <- concatCands = Just catSe
+    | otherwise = Nothing
+  where
+    litCands =
+        dedupSignalCandidates
+            env
+            [ SignalNamedLit ty nli
+            | PFactLit nli <- facts
+            , isSupportedNamedLit nli
+            , litMatches nli
+            ]
+    accessCands =
+        dedupSignalCandidates
+            env
+            [ SignalAccess ty (lowerChild base) steps
+            | PFactAccess base steps <- facts
+            , not (null steps)
+            , all isSupportedProvStep steps
+            , not (isSelf base)
+            ]
+    concatCands =
+        dedupSignalCandidates
+            env
+            [ mkSignalConcat [lowerChild p1, lowerChild p2]
+            | PFactConcat [p1, p2] <- facts
+            , not (isSelf p1)
+            , not (isSelf p2)
+            ]
+
+lookupArgNamedLit :: Int -> [ProvFact e] -> Maybe NamedLitInfo
+lookupArgNamedLit argIdx facts =
+    case go S.empty [ nli | PFactArgLits kws <- facts, (k, nli) <- kws, k == argIdx, isSupportedNamedLit nli ] of
+        [single] -> Just single
+        _ -> Nothing
+  where
+    go _ [] = []
+    go !seen (x : xs) =
+        let nx = normalizeNamedLit x
+        in if S.member nx seen
+           then go seen xs
+           else x : go (S.insert nx seen) xs
+
+-- ============================================================
 -- Shallow depth-bounded hashing and base-36 h4 / h8 suffixes
 -- ============================================================
 
+normalizeProvStep :: ProvStep -> ProvStep
+normalizeProvStep (PStepField tb tq fn _ _ anon) = PStepField tb tq fn 0 0 anon
+normalizeProvStep (PStepElem idx _) = PStepElem idx 0
+normalizeProvStep st = st
+
+normalizeNamedLit :: NamedLitInfo -> NamedLitInfo
+normalizeNamedLit (NLitSlot idx _ _ _) = NLitSlot idx 0 0 0
+normalizeNamedLit nli = nli
+
+isSignalNamedLit :: SignalExpr -> Bool
+isSignalNamedLit (SignalNamedLit {}) = True
+isSignalNamedLit _ = False
+
+hasNamedCaseLabel :: [SignalExpr] -> Bool
+hasNamedCaseLabel (lbl : _ : rest) = isSignalNamedLit lbl || hasNamedCaseLabel rest
+hasNamedCaseLabel _ = False
+
+-- Erase packed carrier bit-width on leaf/mux bases so widening a sibling struct
+-- field or resizing a vector leaves projections and named-literal comparisons
+-- with identical shallow digests.
+eraseCarrierBitWidth :: SignalExpr -> SignalExpr
+eraseCarrierBitWidth (SignalPort (SignalBit _) nm) =
+    SignalPort SignalUnknownType nm
+eraseCarrierBitWidth (SignalParam (SignalBit _) nm) =
+    SignalParam SignalUnknownType nm
+eraseCarrierBitWidth (SignalDef (SignalBit _) nm) =
+    SignalDef SignalUnknownType (stripGeneratedSuffixes nm)
+eraseCarrierBitWidth (SignalMethCall (SignalBit _) inst port mIdx args) =
+    SignalMethCall SignalUnknownType inst port mIdx (map shallowSignalExpr args)
+eraseCarrierBitWidth (SignalPrim (SignalBit _) PrimIf [c, t, e]) =
+    SignalPrim
+        SignalUnknownType
+        PrimIf
+        [shallowSignalExpr c, eraseCarrierBitWidth t, eraseCarrierBitWidth e]
+eraseCarrierBitWidth (SignalAccess (SignalBit _) base steps) =
+    SignalAccess SignalUnknownType (eraseCarrierBitWidth base) (map normalizeProvStep steps)
+eraseCarrierBitWidth other = shallowSignalExpr other
+
+eraseFixedEntityBitWidth :: SignalType -> SignalType
+eraseFixedEntityBitWidth (SignalBit _) = SignalUnknownType
+eraseFixedEntityBitWidth ty = ty
+
 shallowSignalExpr :: SignalExpr -> SignalExpr
+shallowSignalExpr (SignalPrim ty op [a, b])
+    | op == PrimEQ || op == PrimEQ3 =
+        case (isSignalNamedLit a, isSignalNamedLit b) of
+            (False, True) ->
+                SignalPrim ty op [eraseCarrierBitWidth a, shallowSignalExpr b]
+            (True, False) ->
+                SignalPrim ty op [shallowSignalExpr a, eraseCarrierBitWidth b]
+            _ ->
+                SignalPrim ty op [shallowSignalExpr a, shallowSignalExpr b]
+shallowSignalExpr (SignalPrim ty PrimCase (idx : dflt : ces))
+    | hasNamedCaseLabel ces =
+        SignalPrim
+            ty
+            PrimCase
+            (eraseCarrierBitWidth idx : shallowSignalExpr dflt : map shallowSignalExpr ces)
 shallowSignalExpr (SignalPrim ty op args) =
     SignalPrim ty op (map shallowSignalExpr args)
 shallowSignalExpr (SignalMethCall ty inst port mIdx args) =
-    SignalMethCall ty inst port mIdx (map shallowSignalExpr args)
+    SignalMethCall (eraseFixedEntityBitWidth ty) inst port mIdx (map shallowSignalExpr args)
 shallowSignalExpr (SignalTupleVal ty elems) =
     SignalTupleVal ty (map shallowSignalExpr elems)
 shallowSignalExpr (SignalTupleSel ty inner idx1) =
@@ -1213,8 +1406,10 @@ shallowSignalExpr (SignalNoInlineCall ty obj fn params ports args) =
 shallowSignalExpr (SignalFunCall ty fn isCFlag args) =
     SignalFunCall ty fn isCFlag (map shallowSignalExpr args)
 shallowSignalExpr e@(SignalTaskValue {}) = e
-shallowSignalExpr e@(SignalPort {}) = e
-shallowSignalExpr e@(SignalParam {}) = e
+shallowSignalExpr (SignalPort ty nm) =
+    SignalPort (eraseFixedEntityBitWidth ty) nm
+shallowSignalExpr (SignalParam ty nm) =
+    SignalParam (eraseFixedEntityBitWidth ty) nm
 shallowSignalExpr (SignalDef ty nm) =
     SignalDef ty (stripGeneratedSuffixes nm)
 shallowSignalExpr e@(SignalInt {}) = e
@@ -1232,6 +1427,10 @@ shallowSignalExpr (SignalHeapRef ty _) =
     SignalDef ty ""
 shallowSignalExpr (SignalLam v vt body) =
     SignalLam (stripGeneratedSuffixes v) vt (shallowSignalExpr body)
+shallowSignalExpr (SignalAccess ty base steps) =
+    SignalAccess ty (eraseCarrierBitWidth base) (map normalizeProvStep steps)
+shallowSignalExpr (SignalNamedLit _ nli) =
+    SignalNamedLit SignalUnknownType (normalizeNamedLit nli)
 shallowSignalExpr (SignalOther ty tag args) =
     SignalOther ty (stripGeneratedSuffixes tag) (map shallowSignalExpr args)
 
@@ -1366,6 +1565,24 @@ feedSignalExpr h0 (SignalLam v vt body) =
     feedSignalExpr (feedSignalType (feedString (feedByte h0 19) v) vt) body
 feedSignalExpr h0 (SignalOther ty tag args) =
     feedList feedSignalExpr (feedString (feedSignalType (feedByte h0 20) ty) tag) args
+feedSignalExpr h0 (SignalAccess ty base steps) =
+    feedList feedProvStep (feedSignalExpr (feedSignalType (feedByte h0 21) ty) base) steps
+feedSignalExpr h0 (SignalNamedLit ty nli) =
+    feedNamedLitInfo (feedSignalType (feedByte h0 22) ty) nli
+
+feedProvStep :: Word64 -> ProvStep -> Word64
+feedProvStep h (PStepField tb tq fn _ _ _) =
+    feedString (feedString (feedString (feedByte h 1) tb) tq) fn
+feedProvStep h (PStepElem idx _) =
+    feedInt (feedByte h 2) idx
+feedProvStep h _ =
+    feedByte h 0
+
+feedNamedLitInfo :: Word64 -> NamedLitInfo -> Word64
+feedNamedLitInfo h (NLitSlot idx _ _ _) =
+    feedInt (feedByte h 3) idx
+feedNamedLitInfo h _ =
+    feedByte h 0
 
 avalanche64 :: Word64 -> Word64
 avalanche64 z0 =
@@ -1505,6 +1722,7 @@ isDirectNamedSignalExpr (SignalPort {}) = True
 isDirectNamedSignalExpr (SignalParam {}) = True
 isDirectNamedSignalExpr (SignalDef {}) = True
 isDirectNamedSignalExpr (SignalMethCall _ _ _ _ []) = True
+isDirectNamedSignalExpr (SignalAccess _ base _) = isDirectNamedSignalExpr base
 isDirectNamedSignalExpr _ = False
 
 provisionalBinderBase :: Id -> String

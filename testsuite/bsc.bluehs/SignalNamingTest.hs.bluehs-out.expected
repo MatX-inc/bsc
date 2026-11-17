@@ -14,3 +14,4 @@ PASS: [4a] Hard anchor invariant across all 8 AnchorKinds (including bad/fromRHS
 PASS: [4b] Anchor collision detection and local user-binder port-shadowing disambiguation
 PASS: [5] End-to-end SignalNamingMod.bs IModule, APackage, and ASPackage environment & port parity
 PASS: [6] 200 deterministic PRNG matched-triple (IExpr, APackage AExpr, ASPackage AExpr) ExprName parity checks
+PASS: [7] Provenance-driven struct/vector/slot stems & carrier-width digest stability

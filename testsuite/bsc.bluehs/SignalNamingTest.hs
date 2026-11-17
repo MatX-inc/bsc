@@ -102,9 +102,11 @@ import SignalNaming (
     assignModuleNames,
     classifyAnchorId,
     emptySignalNamingEnv,
+    exprName,
     exprNameH4,
     exprNameH8,
     formatExprTempName,
+    hasStructuredProvenance,
     hashSignalExprShallow,
     initSignalNameTable,
     isDefAnchorId,
@@ -117,6 +119,7 @@ import SignalNaming (
     signalHash8,
     stripGeneratedSuffixes
     )
+import SourceProvenance (NamedLitInfo(..), ProvStep(..))
 import Simplify (simplify)
 import TypeCheck (cTypeCheck)
 import VModInfo (VModInfo)
@@ -1050,3 +1053,63 @@ main = do
         assert ("matched triple seed " ++ show seed ++ " APackage vs ASPackage: " ++ show (enA, enAS))
             (enA == enAS)
     passGroup "[6] 200 deterministic PRNG matched-triple (IExpr, APackage AExpr, ASPackage AExpr) ExprName parity checks"
+
+    -- ============================================================
+    -- [7] Evaluator provenance stems & carrier-width digest stability
+    -- ============================================================
+
+    let stepOuter = PStepField "FrameHdr" "Pkg" "fhMeta" 1 3 False
+        stepInner = PStepField "InnerMeta" "Pkg" "imCode" 0 2 False
+        accNarrow =
+            SignalAccess
+                (SignalBit 8)
+                (SignalDef (SignalBit 28) "hdrReg_hdbii")
+                [stepOuter, stepInner]
+        accWide =
+            SignalAccess
+                (SignalBit 8)
+                (SignalDef (SignalBit 44) "hdrReg_hzzzz")
+                [ PStepField "FrameHdr" "Pkg" "fhMeta" 1 5 False
+                , PStepField "InnerMeta" "Pkg" "imCode" 0 4 False
+                ]
+        enNarrow = exprName envA accNarrow
+        enWide = exprName envA accWide
+    assert "nested struct projection stem"
+        (en_stem enNarrow == "hdrReg_fhMeta_imCode")
+    assert "nested struct projection ExprName stable across carrier widening & field-count growth"
+        (enNarrow == enWide)
+    assert "hasStructuredProvenance detects SignalAccess"
+        (hasStructuredProvenance accNarrow)
+
+    let elemVec4 =
+            SignalAccess
+                (SignalBit 8)
+                (SignalMethCall (SignalBit 32) "regA" "regA$Q_OUT" Nothing [])
+                [PStepElem 2 4]
+        elemVec8 =
+            SignalAccess
+                (SignalBit 8)
+                (SignalMethCall (SignalBit 64) "regA" "regA$Q_OUT" Nothing [])
+                [PStepElem 2 8]
+    assert "vector element projection stem & digest stable across vector resize"
+        (exprName envA elemVec4 == exprName envA elemVec8 &&
+         en_stem (exprName envA elemVec4) == "regA_2")
+
+    let slotCmp2 =
+            SignalPrim
+                (SignalBit 1)
+                PrimEQ
+                [ SignalPort (SignalBit 2) "step_1"
+                , SignalNamedLit (SignalBit 2) (NLitSlot 2 4 2 2)
+                ]
+        slotCmp4 =
+            SignalPrim
+                (SignalBit 1)
+                PrimEQ
+                [ SignalPort (SignalBit 4) "step_1"
+                , SignalNamedLit (SignalBit 4) (NLitSlot 2 16 4 2)
+                ]
+    assert "NLitSlot comparison stem & digest stable across index-width growth"
+        (exprName envA slotCmp2 == exprName envA slotCmp4 &&
+         en_stem (exprName envA slotCmp2) == "step_1_EQ_2")
+    passGroup "[7] Provenance-driven struct/vector/slot stems & carrier-width digest stability"
