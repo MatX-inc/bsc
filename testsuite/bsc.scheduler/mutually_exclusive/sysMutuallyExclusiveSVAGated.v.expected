@@ -43,7 +43,7 @@ module sysMutuallyExclusiveSVAGated(CLK,
   wire g$CLK_GATE_OUT, g$CLK_OUT, g$COND, g$COND_EN;
 
   // inputs to muxes for submodule ports
-  wire [3 : 0] MUX_r$write_1__VAL_1, MUX_r$write_1__VAL_2;
+  wire [3 : 0] MUX_r$write_1__VAL_RL_a, MUX_r$write_1__VAL_RL_b;
 
   // submodule g
   GatedClock #(.init(1'd1)) g(.CLK(CLK),
@@ -57,11 +57,12 @@ module sysMutuallyExclusiveSVAGated(CLK,
 			      .CLK_GATE_OUT(g$CLK_GATE_OUT));
 
   // inputs to muxes for submodule ports
-  assign MUX_r$write_1__VAL_1 = r + 4'd1 ;
-  assign MUX_r$write_1__VAL_2 = r + 4'd3 ;
+  assign MUX_r$write_1__VAL_RL_a = r + 4'd1 ;
+  assign MUX_r$write_1__VAL_RL_b = r + 4'd3 ;
 
   // register r
-  assign r$D_IN = (!r[0]) ? MUX_r$write_1__VAL_1 : MUX_r$write_1__VAL_2 ;
+  assign r$D_IN =
+	     (!r[0]) ? MUX_r$write_1__VAL_RL_a : MUX_r$write_1__VAL_RL_b ;
   assign r$EN = !r[0] || !s[0] ;
 
   // register s

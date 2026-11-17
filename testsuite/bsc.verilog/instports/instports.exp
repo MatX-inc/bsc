@@ -94,8 +94,8 @@ if { $vtest == 1 } {
     # the register written from two rules: its mux defines r$D_IN and its
     # enable r$EN; the MUX_ value names keep the method spelling r$write_1
     find_regexp $fname {
-r\$D_IN  \= mux \(WILL_FIRE_RL_rA, MUX_r\$write_1__VAL_1\)
-	      \(WILL_FIRE_RL_rB, MUX_r\$write_1__VAL_2\)}
+r\$D_IN  \= mux \(WILL_FIRE_RL_rA, MUX_r\$write_1__VAL_RL_rA\)
+	      \(WILL_FIRE_RL_rB, MUX_r\$write_1__VAL_RL_rB\)}
     find_regexp $fname {^r\$EN  \= WILL_FIRE_RL_rA \|\| WILL_FIRE_RL_rB;$}
     # the FIFO's input ports
     find_regexp $fname {^f\$D_IN  \= }

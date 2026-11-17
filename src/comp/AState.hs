@@ -5,16 +5,18 @@ module AState(
               aState,
               -- used by VIOProps to model the muxes that aState creates
               MethBlob, MethPortBlob,
-              ratToBlobs, genMethodMult,
+              ratToBlobs, orderMethBlobs, genMethodMult,
               ) where
 
 import qualified Data.List as L
 import qualified Data.Map as M
 import qualified Data.Set as S
 
+import Data.Char(ord, isAscii, isAlphaNum)
 import Data.List(transpose, sortBy, sortOn, partition,
             unzip4, groupBy, intersect,
             genericLength)
+import Data.Word(Word64)
 
 import Util
 import FStringCompat
@@ -495,10 +497,12 @@ aState' flags pps schedule_info apkg = do
         -- the foreign blocks
         fblocks = mapFst domain_osc_lookup fdomain_map
 
-        -- New improved resource allocation
-        blobs = ratToBlobs (asi_method_uses_map schedule_info)
-                           omMultMap
-                           (asi_resource_alloc_table schedule_info)
+        -- New improved resource allocation, ordered by writer elaboration
+        -- and interface declaration order rather than RAT Map (Ord Id) order.
+        blobs = orderMethBlobs apkg $
+                    ratToBlobs (asi_method_uses_map schedule_info)
+                               omMultMap
+                               (asi_resource_alloc_table schedule_info)
         (ers, ars) = blobs
 
         -- Old resource allocation
@@ -989,6 +993,147 @@ ratToBlobs mMap omMultMap rat =
       (filter nonTrivial (map snd es), map snd as)
 
 
+-- Order every port's uses and shared-arm writer lists in module elaboration
+-- order (module rules in declaration order, then interface methods in VModInfo
+-- declaration order, with multiple calls inside one writer ordered by their
+-- appearance in that writer's actions or expressions) rather than Ord Id.
+orderMethBlobs :: APackage -> ([MethBlob], [MethBlob]) -> ([MethBlob], [MethBlob])
+orderMethBlobs apkg (exprBlobs, actBlobs) =
+    (map (orderBlob False) exprBlobs, map (orderBlob True) actBlobs)
+  where
+    wmap :: OrderMap
+    wmap = M.fromList (zip writerIds [0 ..])
+      where
+        ruleWriters = map aRuleName (apkg_rules apkg)
+        ifcWriters (AIAction { aif_body = rs }) = map aRuleName rs
+        ifcWriters (AIActionValue { aif_body = rs }) = map aRuleName rs
+        ifcWriters (AIDef { aif_name = i }) = [i]
+        ifcWriters _ = []
+        writerIds = ruleWriters ++ concatMap ifcWriters (apkg_interface apkg)
+
+    writerRank :: ARuleId -> (Int, String)
+    writerRank r = (M.findWithDefault maxBound r wmap, getIdString r)
+
+    canonWriters :: Maybe [ARuleId] -> Maybe [ARuleId]
+    canonWriters Nothing = Nothing
+    canonWriters (Just rs) = Just (L.sortOn writerRank rs)
+
+    allRules :: [ARule]
+    allRules = apkg_rules apkg ++ concatMap aIfaceRules (apkg_interface apkg)
+
+    actCallMap :: M.Map (AId, AId, ARuleId) [[AExpr]]
+    actCallMap =
+        M.map reverse $
+        L.foldl' (\acc (k, es) -> M.insertWith (\_ old -> es : old) k [es] acc)
+                 M.empty
+            [ ((o, unQualId m, aRuleName r), es)
+            | r <- allRules
+            , ACall o m es <- arule_actions r ]
+
+    actCallRank :: AId -> AId -> AExpr -> Maybe [ARuleId] -> Int
+    actCallRank obj meth (AMethCall _ _ _ es) (Just (r : _)) =
+        let calls = M.findWithDefault [] (obj, unQualId meth, r) actCallMap
+            exactMatch = L.findIndex (== es) calls
+            valMatch = case es of
+                (_ : vals) ->
+                    L.findIndex (\xs -> case xs of
+                                          (_ : vs) -> vs == vals
+                                          [] -> False)
+                                calls
+                [] -> Nothing
+        in  case exactMatch of
+              Just idx -> idx
+              Nothing -> case valMatch of
+                           Just idx -> idx
+                           Nothing -> maxBound
+    actCallRank _ _ _ _ = maxBound
+
+    defMap :: M.Map AId AExpr
+    defMap = M.fromList [ (i, e) | ADef i _ e _ <- apkg_local_defs apkg ]
+
+    exprContainsNaN :: AExpr -> Bool
+    exprContainsNaN (ASReal _ _ r) = isNaN r
+    exprContainsNaN (APrim _ _ _ args) = any exprContainsNaN args
+    exprContainsNaN (AMethCall _ _ _ args) = any exprContainsNaN args
+    exprContainsNaN (ATuple _ elems) = any exprContainsNaN elems
+    exprContainsNaN (ATupleSel _ e _) = exprContainsNaN e
+    exprContainsNaN (ANoInlineFunCall _ _ _ args) = any exprContainsNaN args
+    exprContainsNaN (AFunCall _ _ _ _ args) = any exprContainsNaN args
+    exprContainsNaN _ = False
+
+    normAExprKey :: AExpr -> AExpr
+    normAExprKey (APrim _ t op args) = APrim defaultAId t op (map normAExprKey args)
+    normAExprKey (AMethCall t aid mid args) =
+        AMethCall t aid mid (map normAExprKey args)
+    normAExprKey (ATuple t elems) = ATuple t (map normAExprKey elems)
+    normAExprKey (ATupleSel t e idx) = ATupleSel t (normAExprKey e) idx
+    normAExprKey (ANoInlineFunCall t aid af args) =
+        ANoInlineFunCall t aid af (map normAExprKey args)
+    normAExprKey (AFunCall t aid af isC args) =
+        AFunCall t aid af isC (map normAExprKey args)
+    normAExprKey (ASInt _ t il) = ASInt defaultAId t il
+    normAExprKey (ASReal _ t r) = ASReal defaultAId t r
+    normAExprKey (ASStr _ t s) = ASStr defaultAId t s
+    normAExprKey (ASClock _ c) = ASClock aTClock c
+    normAExprKey (ASReset _ r) = ASReset aTReset r
+    normAExprKey (ASInout _ io) = ASInout aTNat io
+    normAExprKey e = e
+
+    exprCallMap :: M.Map AExpr Int
+    exprCallMap =
+        let ruleRoots r = arule_pred r : concatMap aact_args (arule_actions r)
+            ifcRoots (AIDef { aif_value = ADef _ _ e _ }) = [e]
+            ifcRoots (AIAction { aif_body = rs }) = concatMap ruleRoots rs
+            ifcRoots (AIActionValue { aif_value = ADef _ _ ve _, aif_body = rs }) =
+                foldr ((++) . ruleRoots) [ve] rs
+            ifcRoots _ = []
+            roots = concatMap ruleRoots (apkg_rules apkg) ++
+                    concatMap ifcRoots (apkg_interface apkg) ++
+                    concatMap avi_iargs (apkg_state_instances apkg)
+            walk st@(!n, !vis, !cm) (ASDef _ dId)
+                | S.member dId vis = st
+                | Just rhs <- M.lookup dId defMap =
+                    walk (n, S.insert dId vis, cm) rhs
+                | otherwise = st
+            walk st (APrim _ _ _ args) = L.foldl' walk st args
+            walk st (ATuple _ elems) = L.foldl' walk st elems
+            walk st (ATupleSel _ e _) = walk st e
+            walk st (ANoInlineFunCall _ _ _ args) = L.foldl' walk st args
+            walk st (AFunCall _ _ _ _ args) = L.foldl' walk st args
+            walk st e@(AMethCall _ _ _ args) =
+                let st'@(!n', !vis', !cm') = L.foldl' walk st args
+                in  if exprContainsNaN e
+                    then st'
+                    else let k = normAExprKey e
+                         in  if M.member k cm'
+                             then st'
+                             else (n' + 1, vis', M.insert k n' cm')
+            walk st _ = st
+            (_, _, finalMap) = L.foldl' walk (0, S.empty, M.empty) roots
+        in  finalMap
+
+    exprCallRank :: AExpr -> Int
+    exprCallRank e
+        | exprContainsNaN e = maxBound
+        | otherwise = M.findWithDefault maxBound (normAExprKey e) exprCallMap
+
+    orderBlob :: Bool -> MethBlob -> MethBlob
+    orderBlob isAct (((obj, meth), multFlag), portBlobs) =
+        (((obj, meth), multFlag), map (orderPort isAct obj meth) portBlobs)
+
+    orderPort :: Bool -> AId -> AId -> MethPortBlob -> MethPortBlob
+    orderPort isAct obj meth portBlob =
+        let canon = [ (e, canonWriters mrs) | (e, mrs) <- portBlob ]
+            subRank e mrs
+                | isAct = actCallRank obj meth e mrs
+                | otherwise = exprCallRank e
+            key (idx, (e, mrs)) =
+                ( maybe [] (map writerRank) mrs
+                , subRank e mrs
+                , idx )
+        in  map snd $ L.sortOn key (zip [0 :: Int ..] canon)
+
+
 -- Given the method use map and an element from the RAT, produce a
 -- pair (Bool,MethBlob) where the Bool is True if the method use is an
 -- expression and False if it is an action
@@ -1299,12 +1444,79 @@ mkEmux portId exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,
                          then aRdyId rId
                          else aWillFireId rId
 
-        -- produce the uniquifier for mux selector Ids
-        -- Here we just add _#, but we could include the rules for
-        -- the selector in its name, or even just include one name
-        -- when it's only one rule.  for brevity, we just use _#
-        use2suffix :: Integer -> Maybe [Id] -> FString
-        use2suffix n _ = mkFString ("_" ++ itos n)
+        -- Produce the uniquifier for mux selector and value Ids from the
+        -- arm's writer (rule or method) names so adding an unrelated writer
+        -- does not renumber existing writers' wires. Multiple writers sharing
+        -- an arm are sorted and joined; joins past 60 characters keep the
+        -- first name's first 40 characters, _ETC_, and a 12-digit hash of the
+        -- space-joined writer names. Distinct writer sets whose suffixes
+        -- collide (such as rule a_b against rules a and b) append that
+        -- 12-digit hash; repeated arms from the same writer set (split
+        -- conditions within one rule) or a residual hash collision use _2, _3.
+        armNames :: (AExpr, AExpr, Maybe [ARuleId]) -> [String]
+        armNames (_, _, Just rs) =
+            S.toAscList (S.fromList (map (identChars . getIdBaseString) rs))
+        armNames (_, _, Nothing) = []
+
+        armRawKey :: (AExpr, AExpr, Maybe [ARuleId]) -> [String]
+        armRawKey (_, _, Just rs) =
+            S.toAscList (S.fromList (map getIdBaseString rs))
+        armRawKey (_, _, Nothing) = []
+
+        armRawText :: (AExpr, AExpr, Maybe [ARuleId]) -> String
+        armRawText = unwords . armRawKey
+
+        armSuffix :: (AExpr, AExpr, Maybe [ARuleId]) -> String
+        armSuffix arm =
+            case armNames arm of
+              [] -> "_use"
+              names@(first : more) ->
+                  let joined = L.intercalate "_" names
+                  in  "_" ++ (if not (null more) && length joined > 60
+                              then take 40 first ++ "_ETC_" ++ hashDigits (armRawText arm)
+                              else joined)
+
+        identChars :: String -> String
+        identChars =
+            map (\c -> if c == '_' || (isAscii c && isAlphaNum c) then c else '_')
+
+        hashString :: String -> Word64
+        hashString =
+            hashValue . L.foldl' (\h c -> nextHashByte h (fromIntegral (ord c))) hashInit
+
+        hashDigits :: String -> String
+        hashDigits s =
+            let d = show (hashString s `mod` 1000000000000)
+            in  replicate (12 - length d) '0' ++ d
+
+        armSuffixes :: [(AExpr, AExpr, Maybe [ARuleId])] -> [String]
+        armSuffixes arms = counterFallback (zipWith disambiguate arms ss)
+          where
+            ss = map armSuffix arms
+            rawKeysBySuffix =
+                M.fromListWith S.union
+                    [ (s, S.singleton (armRawKey arm))
+                    | (arm, s) <- zip arms ss ]
+            dups = M.keysSet (M.filter (\ks -> S.size ks > 1) rawKeysBySuffix)
+            disambiguate arm s
+                | S.member s dups = s ++ "_" ++ hashDigits (armRawText arm)
+                | otherwise       = s
+
+        counterFallback :: [String] -> [String]
+        counterFallback ss = go S.empty ss
+          where
+            bases = S.fromList ss
+            go _ [] = []
+            go !used (s : rest) =
+                let s' = if not (S.member s used)
+                         then s
+                         else findUnused used s 2
+                in  s' : go (S.insert s' used) rest
+            findUnused used s (n :: Integer) =
+                let cand = s ++ "_" ++ itos n
+                in  if not (S.member cand used) && not (S.member cand bases)
+                    then cand
+                    else findUnused used s (n + 1)
 
         -- ---------------
         -- Function to make the arguments to the selector primitive
@@ -1318,11 +1530,10 @@ mkEmux portId exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,
         -- return a list of the selector expr and the return expr, and
         -- any new defs (because we want to give the return expr a name)
 
-        mkArg :: (Integer, (AExpr, AExpr, Maybe [ARuleId])) ->
+        mkArg :: (FString, (AExpr, AExpr, Maybe [ARuleId])) ->
                  ([AExpr], [ADef])
-        mkArg (n, (e, _, mrs)) =
-            let suffix = use2suffix n mrs
-                val_type = ae_type e
+        mkArg (suffix, (e, _, mrs)) =
+            let val_type = ae_type e
                 val_id = valId suffix
                 props = case mrs of
                   Nothing -> []
@@ -1334,10 +1545,9 @@ mkEmux portId exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,
 
         -- ---------------
         -- Function to make the definitions for the control signals
-        mkSel :: (Integer, (AExpr, AExpr, Maybe [ARuleId])) -> [ADef]
-        mkSel (n, (_, c, Just rs)) =
-          let suffix = use2suffix n (Just rs)
-              props :: [DefProp]
+        mkSel :: (FString, (AExpr, AExpr, Maybe [ARuleId])) -> [ADef]
+        mkSel (suffix, (_, c, Just rs)) =
+          let props :: [DefProp]
               props = map DefP_Rule rs -- record the source rule
           in
               if isTrue c then
@@ -1364,8 +1574,8 @@ mkEmux portId exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,
         -- can be put at the appropriate place in the priority.
 
         order uses = let sep_numbered_uses =
-                             [ (num, (val, cond, Just [r]))
-                                 | (val, cond, Just rs) <- uses,
+                             [ ((num, srcIdx), (val, cond, Just [r]))
+                                 | (srcIdx, (val, cond, Just rs)) <- zip [0 :: Int ..] uses,
                                    r <- rs,
                                    let num = mlookup r om ]
                      in  map snd $
@@ -1378,10 +1588,15 @@ mkEmux portId exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,
         -- The type of the muxed value, for use in creating the new Defs
         t = aType e
 
-        -- The arg blobs, numbered, and in priority order if necessary
-        ers' = zip [1..] $ if usePri
-                           then order ers
-                           else ers
+        -- Priority muxes follow urgency order; exclusive muxes preserve the
+        -- writer order established by orderMethBlobs.
+        ers_ordered = if usePri
+                      then order ers
+                      else ers
+
+        -- The arg blobs, each with its writer-derived suffix
+        ers' = zip (map mkFString (armSuffixes ers_ordered))
+                   ers_ordered
 
         -- PrimMux takes a list of pairs of the selector ASDef and the
         -- expr that should result

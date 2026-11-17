@@ -1,0 +1,17 @@
+package TopA where
+
+import ScrambleA
+import WriterMux
+
+interface TopOut =
+  out :: Bit 8
+
+{-# verilog mkTopA #-}
+mkTopA :: Module TopOut
+mkTopA = module
+  dut <- mkGroundedMuxOrder
+  let warm :: Bit 8
+      warm = aa_scramble_01 8'd3 ^ aa_scramble_02 8'd5 ^ aa_scramble_03 8'd7
+  r :: Reg (Bit 8) <- mkReg warm
+  interface
+    out = dut.out ^ r

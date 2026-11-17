@@ -17,12 +17,14 @@ import Control.Monad.State.Strict(State, StateT, evalState, evalStateT, liftIO,
 import Data.List(sortBy, genericLength, sort, transpose, partition, groupBy, nub)
 import Data.Ord(Down(..))
 import Util(mapFst)
+import qualified Data.IntMap.Strict as IM
+import qualified Data.List as L
 import qualified Data.Map as M
 import qualified Data.Map.Strict as MS
 import qualified Data.Set as S
 import Util(allSame, flattenPairs, makePairs, remOrdDup, integerToBits,
-            itos, eqSnd, cmpSnd, nubByFst, map_insertManyWith,
-            headOrErr, initOrErr, lastOrErr, unconsOrErr)
+            itos, eqSnd, nubByFst, map_insertManyWith,
+            initOrErr, lastOrErr, unconsOrErr)
 import IntegerUtil(integerSelect)
 import PPrint
 import IntLit
@@ -1209,35 +1211,79 @@ optMuxPairs bflgs aid dty op eps = eps3
       eps2 = takeWhilePlus1 (not . isTrue . fst) eps1
       eps3 = mergeIdenExpr op eps2
 
--- merge Identical Expressions
--- The sort function here can cause reordering in case expression, which can
--- later turn to if expressions, and look totally wrong when comparing to older versions.
-mergeIdenExpr :: PrimOp -> [(AExpr,AExpr)] ->  [(AExpr,AExpr)]
-mergeIdenExpr op eps = if ( length newpairs < length eps ) then newpairs else eps
-    where
-      flattenGrps :: [(AExpr,AExpr)] -> (AExpr,AExpr)
-      flattenGrps [] = internalError( "AOpt::mergeIdenExpr" )
-      flattenGrps [a] = a
-      flattenGrps exps = (aOrs (map fst exps), snd (headOrErr "mergeIdenExpr" exps))
-      --
-      -- We need to have any ASAny as the last expr in group
-      -- required deriving Ord to place ASAny late in the list XXX
-      sortPairASAny :: [(AExpr,AExpr)] -> [(AExpr,AExpr)]
-      sortPairASAny [] = []
-      sortPairASAny xps =  res
-          where gpd :: [[(AExpr,AExpr)]]
-                gpd = groupBy (testf) (sortBy cmpSnd xps)
-                res = case gpd of
-                        [ x ] -> x
-                        [ x,y ] -> x ++ y
-                        x -> internalError( "Aopt::mergeIdenExpr: " ++ ppReadable eps ++ ppReadable x)
-                --
-                testf :: (AExpr,AExpr) -> (AExpr,AExpr) -> Bool
-                testf (_,x1) (_,x2) = isASAny x1 == isASAny x2
-      --
-      sortfn = if (op == PrimMux) then (sortPairASAny . sortBy cmpSnd) else id
-      meps = groupBy eqSnd (sortfn eps)
-      newpairs = map flattenGrps meps
+-- Merge arms with identical RHS expressions. For exclusive PrimMux, group
+-- equal RHSes in arm encounter order rather than Ord AExpr (which depends on
+-- Ord Id), keeping ASAny default arms at the end.
+mergeIdenExpr :: PrimOp -> [(AExpr,AExpr)] -> [(AExpr,AExpr)]
+mergeIdenExpr op eps
+    | length newpairs < length eps = newpairs
+    | otherwise                    = eps
+  where
+    flattenGrp :: (AExpr,AExpr) -> [(AExpr,AExpr)] -> (AExpr,AExpr)
+    flattenGrp pair [] = pair
+    flattenGrp (p, rhs) rest = (aOrs (p : map fst rest), rhs)
+
+    exprContainsNaN :: AExpr -> Bool
+    exprContainsNaN (ASReal _ _ r) = isNaN r
+    exprContainsNaN (APrim _ _ _ args) = any exprContainsNaN args
+    exprContainsNaN (AMethCall _ _ _ args) = any exprContainsNaN args
+    exprContainsNaN (ATuple _ elems) = any exprContainsNaN argsElems
+      where argsElems = elems
+    exprContainsNaN (ATupleSel _ e _) = exprContainsNaN e
+    exprContainsNaN (ANoInlineFunCall _ _ _ args) = any exprContainsNaN args
+    exprContainsNaN (AFunCall _ _ _ _ args) = any exprContainsNaN args
+    exprContainsNaN _ = False
+
+    normRhsKey :: AExpr -> AExpr
+    normRhsKey (APrim _ t p args) = APrim defaultAId t p (map normRhsKey args)
+    normRhsKey (AMethCall t aid mid args) =
+        AMethCall t aid mid (map normRhsKey args)
+    normRhsKey (ATuple t elems) = ATuple t (map normRhsKey elems)
+    normRhsKey (ATupleSel t e idx) = ATupleSel t (normRhsKey e) idx
+    normRhsKey (ANoInlineFunCall t aid af args) =
+        ANoInlineFunCall t aid af (map normRhsKey args)
+    normRhsKey (AFunCall t aid af isC args) =
+        AFunCall t aid af isC (map normRhsKey args)
+    normRhsKey (ASInt _ t il) = ASInt defaultAId t il
+    normRhsKey (ASReal _ t r) = ASReal defaultAId t r
+    normRhsKey (ASStr _ t s) = ASStr defaultAId t s
+    normRhsKey (ASClock _ c) = ASClock aTClock c
+    normRhsKey (ASReset _ r) = ASReset aTReset r
+    normRhsKey (ASInout _ io) = ASInout aTNat io
+    normRhsKey e = e
+
+    groupOrdered :: [(AExpr,AExpr)] -> [(AExpr,AExpr)]
+    groupOrdered pairs =
+        [ flattenRev rhs revPreds
+        | (_, (rhs, revPreds)) <- IM.toAscList grpMap ]
+      where
+        (_, _, grpMap) = L.foldl' step (0, M.empty, IM.empty) pairs
+        step (!nextIdx, !rhsIdx, !grps) (p, rhs)
+            | exprContainsNaN rhs =
+                ( nextIdx + 1
+                , rhsIdx
+                , IM.insert nextIdx (rhs, [p]) grps )
+            | otherwise =
+                let k = normRhsKey rhs
+                in  case M.lookup k rhsIdx of
+                      Nothing ->
+                          ( nextIdx + 1
+                          , M.insert k nextIdx rhsIdx
+                          , IM.insert nextIdx (rhs, [p]) grps )
+                      Just idx ->
+                          ( nextIdx
+                          , rhsIdx
+                          , IM.adjust (\ (r, ps) -> (r, p : ps)) idx grps )
+        flattenRev rhs [] = internalError ("AOpt.mergeIdenExpr: empty group " ++ ppReadable rhs)
+        flattenRev rhs [p] = (p, rhs)
+        flattenRev rhs revPs = (aOrs (reverse revPs), rhs)
+
+    newpairs
+        | op == PrimMux =
+            let (nonAny, anyArms) = partition (not . isASAny . snd) eps
+            in  groupOrdered nonAny ++ groupOrdered anyArms
+        | otherwise =
+            [ flattenGrp x xs | (x : xs) <- groupBy eqSnd eps ]
 
 
 ------------------------------------------------------------------------------------

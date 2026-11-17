@@ -24,7 +24,7 @@ import ASyntax
 import ASyntaxUtil( AVars(..), aType )
 import AScheduleInfo(AScheduleInfo(..), ExclusiveRulesDB,
                      areRulesExclusive)
-import AState(MethBlob, ratToBlobs, genMethodMult)
+import AState(MethBlob, ratToBlobs, orderMethBlobs, genMethodMult)
 import BackendNamingConventions(createVerilogNameMapForAVInst,
                                 xLateIdUsingFStringMap,
                                 isRWire, isRWire0,
@@ -1700,6 +1700,7 @@ getIOPropsA _flags pps mschedinfo apkg =
         mkArmClassMaps si =
             let multMap = M.fromList (concatMap genMethodMult vs)
                 (expr_blobs, action_blobs) =
+                    orderMethBlobs apkg $
                     ratToBlobs (asi_method_uses_map si) multMap
                                (asi_resource_alloc_table si)
                 edb = asi_exclusive_rules_db si
