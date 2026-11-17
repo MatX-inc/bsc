@@ -1,0 +1,21 @@
+-- fromMaybe of an if whose two branches share a cell: the memo delivers
+-- the shared result as one reference, and improveIf's "if c t t ==> t"
+-- fold must still fire on it, as it does on the structurally equal
+-- copies the unmemoized walk produced.
+package StaticOpMemoIfFold(sysStaticOpMemoIfFold) where
+
+{-# verilog sysStaticOpMemoIfFold #-}
+sysStaticOpMemoIfFold :: Module Empty
+sysStaticOpMemoIfFold = module
+  r :: Reg (Bit 2) <- mkReg 0
+  c :: Reg Bool <- mkReg False
+  c2 :: Reg Bool <- mkReg False
+  o :: Reg (Bit 8) <- mkReg 0
+  rules
+    "go": when True ==> action
+      let x :: Maybe (Bit 2)
+          x = if r == 0 then Invalid else Valid (r + 1)
+          e0 = if c then x else Valid 1
+          e1 = if c then x else Valid 1
+          y = if c2 then e0 else e1
+      o := zeroExtend (fromMaybe 2 y)

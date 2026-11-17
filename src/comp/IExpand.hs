@@ -34,6 +34,8 @@ import System.IO(Handle, BufferMode(..), IOMode(..), stdout, stderr,
 import System.FilePath(isRelative)
 import qualified Data.Array as Array
 import qualified Data.IntMap as IM
+import qualified Data.IntSet as IS
+import Data.IORef(IORef, newIORef, readIORef, writeIORef)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Debug.Trace(traceM)
@@ -2863,7 +2865,19 @@ evalUHn n e = do
 -}
 
 -- evaluate a static operator with potentially dynamic (or undetermined) arguments
--- XXX When the same heap ref appears twice, this does twice the work!
+--
+-- The operator is pushed through PrimIf and PrimArrayDynSelect down to the
+-- leaves of the argument, and the result is rebuilt bottom up (improveIf,
+-- improveDynSel).  The argument can be a DAG -- the same heap cell
+-- reachable along several paths, e.g. the value of
+--     x = c[i] ? x : (d[i] ? x : w)
+-- repeated in a loop -- in which case the number of paths is exponential
+-- in the depth.  So the walk is memoized per heap cell, for the duration of
+-- one call (see evalStaticOpM): a cell met again is not walked again, and
+-- its result is shared rather than copied, so that the rebuilt result is a
+-- DAG with the sharing of the argument rather than a tree.  The result of
+-- a cell reached along one path only is exactly what the unmemoized walk
+-- produced, so an argument without sharing is elaborated exactly as before.
 {-# INLINE evalStaticOp #-}
 evalStaticOp :: HExpr -> IType -> (HExpr -> G PExpr) -> G PExpr
 evalStaticOp e resultType handler =
@@ -2882,79 +2896,325 @@ evalStaticOp' :: Bool -> Bool -> Bool ->
                  HExpr -> IType ->
                  (HExpr -> (HPred, HExpr) -> G PExpr) -> G PExpr
 evalStaticOp' doUH doBK doUndet e resultType handler = do
-  (ee, pe@(P p e')) <-
-      -- for some array ops, we don't want to force the array (in evalUH)
-      if doUH
-      then evalUH e
-      else do pe <- eval1 e >>= unheap
-              -- we could return "pExprToHExpr pe", but better to just
-              -- make sure the handler only uses "pe"
-              let ee = internalError ("evalStaticOp: doUH == False")
-              return (ee, pe)
-  res <-
-   case e' of
-    ICon i (ICUndet { iuKind = k }) | doUndet -> do
-      let kind_integer = undefKindToInteger k
-      addPredG p $ doBuildUndefined resultType (getPosition i) kind_integer []
+  memo <- liftIO (newIORef emptyStaticOpMemo)
+  evalStaticOpM doUH doBK doUndet e resultType handler memo
 
-    -- found dynamic expression
-    IAps f@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els] -> do
-      P pthn thn' <- evalStaticOp' doUH doBK doUndet thn resultType handler
-      P pels els' <- evalStaticOp' doUH doBK doUndet els resultType handler
-      when doTraceIf $ traceM("evalStaticOp: improveIf try: " ++ ppReadable (t,thn',els'))
-      (e'', _) <- improveIf f resultType cnd thn' els'
-      when doTraceIf $ traceM("evalStaticOp: improveIf result: " ++ ppReadable e'')
-      p' <- pIf cnd (pConj p pthn) (pConj p pels)
-      return (P p' e'')
-    IAps ic@(ICon _ (ICPrim _ PrimArrayDynSelect))
-             [_, ITNum idx_sz] [arr_e, idx_e] -> do
-      addPredG p $
-          evalStaticOpInArray' doUH doBK doUndet
-                               ic idx_e idx_sz arr_e resultType handler
+-- The memo of one evalStaticOp' walk.
+--
+-- It lives in an IORef for the duration of the walk (allocated by
+-- evalStaticOp', read and written by evalStaticOpM) rather than being
+-- threaded through the walk's results, so that the walk returns exactly
+-- what the unmemoized walk returned -- the PExpr it built -- and nothing
+-- is matched or rebuilt on the way back up (see the stack note at
+-- evalStaticOpM).
+--
+-- som_cells: for each heap cell walked so far, the result of walking it
+-- and, once that result has been shared, its shared form (see
+-- shareStaticOpResult).
+--
+-- The other fields belong to the scan that runs ahead of the walk, to
+-- find the cells that the walk will reach along more than one path
+-- (som_shared), so that the result of such a cell is shared from its
+-- first use on: every use is then the same reference, and the folds that
+-- compare branches structurally -- "if c t t ==> t" and
+-- "if c1 t (if c2 t e) ==> if (c1 || c2) t e" in improveIf / iTransExpr,
+-- the collapse of equal elements in improveDynSel -- apply as they did to
+-- the equal copies made by the unmemoized walk.  The scan follows the
+-- dispatch of the walk (the branches of a PrimIf, the elements of a
+-- dynamically selected array, the result of a PrimSetSelPosition when
+-- doBK) through the cells that are already evaluated, and forces nothing:
+-- a cell that is not evaluated when the scan reaches it is left pending
+-- (som_pending), and its contents are scanned when the walk gets to it
+-- and has it evaluated, before the walk descends into it; a branch that
+-- is a bare expression rather than a reference is left to the walk too,
+-- which heaps it into a fresh cell (evalUH) and scans that cell's
+-- contents when it gets there.  Sharing that the scan could not see in
+-- time -- a cell met again after its result was delivered bare -- is
+-- still caught by the memo, and the result is shared from that use on.
+--
+-- (The fields are strict: the scan threads the sets through many cells
+-- before anything reads them, and lazy fields would build a chain of
+-- thunks as long as the scan, which overflows the stack on a large
+-- unshared tree when it is finally forced.)
+data StaticOpMemo = StaticOpMemo {
+    som_cells   :: !(IM.IntMap (PExpr, Maybe HExpr)),  -- by HeapPointer
+    som_reached :: !IS.IntSet,  -- cells the scan (or the walk) has been at
+    som_pending :: !IS.IntSet,  -- of those, not yet evaluated when reached
+    som_shared  :: !IS.IntSet   -- cells reached again
+  }
+
+emptyStaticOpMemo :: StaticOpMemo
+emptyStaticOpMemo = StaticOpMemo IM.empty IS.empty IS.empty IS.empty
+
+-- Scan an expression the walk is about to descend into (see
+-- StaticOpMemo): the contents of the cell it has just evaluated, or the
+-- bare expression at the top of a walk.  This must follow the dispatch
+-- of evalStaticOpM, and go only where the walk goes without evaluating
+-- anything first, so that a cell is marked shared only when the walk
+-- reaches it more than once.
+scanStaticOpArg :: Bool -> HExpr -> StaticOpMemo -> G StaticOpMemo
+scanStaticOpArg doBK e0 memo0 = scanExpr memo0 e0
+  where
+    scanExpr memo e =
+      case e of
+        IRefT _ ptr _ r -> scanRef memo ptr r
+        IAps (ICon _ (ICPrim _ PrimIf)) [_] [_, thn, els] -> do
+            memo' <- scanBranch memo thn
+            scanBranch memo' els
+        IAps (ICon _ (ICPrim _ PrimArrayDynSelect)) [_, ITNum _] [arr_e, _] -> do
+            marr <- case arr_e of
+                      IRefT _ _ _ r -> evaluatedContents r
+                      _ -> return (Just arr_e)
+            case marr of
+              Just (ICon _ (ICLazyArray _ arr Nothing)) ->
+                  foldM (\m (ArrayCell ptr r) -> scanRef m ptr r)
+                        memo (Array.elems arr)
+              _ -> return memo
+        IAps (ICon _ (ICPrim _ PrimSetSelPosition)) [_] [_, e_res] | doBK ->
+            scanBranch memo e_res
+        -- anything else is a leaf of the walk
+        _ -> return memo
+
+    -- a branch the walk descends into: a reference is scanned; a bare
+    -- expression is not, because the walk evaluates it first (evalUH
+    -- heaps it into a fresh cell, and doIf / doDynSel may rewrite it)
+    -- and scans that cell's contents when it gets there -- scanning the
+    -- bare form here would count every cell under it a second time, or
+    -- follow a shape the walk never dispatches on
+    scanBranch memo (IRefT _ ptr _ r) = scanRef memo ptr r
+    scanBranch memo _ = return memo
+
+    scanRef memo ptr r
+      | ptr `IS.member` som_reached memo =
+          return memo { som_shared = IS.insert ptr (som_shared memo) }
+      | otherwise = do
+          let memo1 = memo { som_reached = IS.insert ptr (som_reached memo) }
+          mcontents <- evaluatedContents r
+          case mcontents of
+            Just e' -> scanExpr memo1 e'
+            -- not evaluated yet: scanned when the walk forces it
+            Nothing -> return memo1 { som_pending =
+                                        IS.insert ptr (som_pending memo1) }
+
+    evaluatedContents r = do
+      cell <- getHeap r
+      return $ case cell of
+                 HWHNF { hc_pexpr = P _ e' } -> Just e'
+                 HNF { hc_pexpr = P _ e' } -> Just e'
+                 _ -> Nothing
+
+-- The walk.  It has the shape of the unmemoized walk (every level
+-- returns the PExpr it built, the memo is read and written through the
+-- IORef): a walk's result is consumed by walkNF much later, deep in the
+-- normalisation of the rule, and the frames the walk leaves behind it
+-- there are what the stack is spent on; returning a (PExpr, StaticOpMemo)
+-- pair from every level, matched by a case at every level, cost a
+-- measurable amount of stack on top of the unmemoized walk (see the PR).
+evalStaticOpM :: Bool -> Bool -> Bool ->
+                 HExpr -> IType ->
+                 (HExpr -> (HPred, HExpr) -> G PExpr) ->
+                 IORef StaticOpMemo -> G PExpr
+evalStaticOpM doUH doBK doUndet e resultType handler mref = do
+  -- a cell already walked: don't even evaluate it again
+  mhit0 <- case e of
+             IRefT _ ptr _ _ -> lookupHit ptr
+             _ -> return Nothing
+  case mhit0 of
+   Just (k, hit) -> shareHit k hit
+   Nothing -> do
+    (ee, pe@(P p e')) <-
+        -- for some array ops, we don't want to force the array (in evalUH)
+        if doUH
+        then evalUH e
+        else do pe <- eval1 e >>= unheap
+                -- we could return "pExprToHExpr pe", but better to just
+                -- make sure the handler only uses "pe"
+                let ee = internalError ("evalStaticOp: doUH == False")
+                return (ee, pe)
+    -- the cell being walked, if any: "e" itself, or else the cell that
+    -- "evalUH" heaped it into (the branches of a PrimIf and the elements
+    -- of an array are references, so this is only for the top of a walk)
+    let mkey = case e of
+                 IRefT _ ptr _ _ -> Just ptr
+                 _ | doUH, IRefT _ ptr _ _ <- ee -> Just ptr
+                 _ -> Nothing
+    mhit <- case mkey of
+              Just k -> lookupHit k
+              Nothing -> return Nothing
+    case mhit of
+     Just (k, hit) -> shareHit k hit
+     Nothing -> do
+      -- scan what the walk is descending into, unless the scan has been
+      -- through this cell already (see StaticOpMemo)
+      memo0 <- liftIO (readIORef mref)
+      memoS <- case mkey of
+                 Just k | k `IS.member` som_reached memo0 &&
+                          not (k `IS.member` som_pending memo0) -> return memo0
+                        | otherwise ->
+                            let memo0' = memo0 { som_reached =
+                                                   IS.insert k (som_reached memo0),
+                                                 som_pending =
+                                                   IS.delete k (som_pending memo0) }
+                            in  scanStaticOpArg doBK e' memo0'
+                 Nothing -> scanStaticOpArg doBK e' memo0
+      setMemo memoS
+      res <-
+       case e' of
+        ICon i (ICUndet { iuKind = k }) | doUndet -> do
+          let kind_integer = undefKindToInteger k
+          addPredG p $ doBuildUndefined resultType (getPosition i) kind_integer []
+
+        -- found dynamic expression
+        IAps f@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els] -> do
+          P pthn thn' <- recurse thn
+          P pels els' <- recurse els
+          when doTraceIf $ traceM("evalStaticOp: improveIf try: " ++ ppReadable (t,thn',els'))
+          (e'', _) <- improveIf f resultType cnd thn' els'
+          when doTraceIf $ traceM("evalStaticOp: improveIf result: " ++ ppReadable e'')
+          p' <- pIf cnd (pConj p pthn) (pConj p pels)
+          return (P p' e'')
+        IAps ic@(ICon _ (ICPrim _ PrimArrayDynSelect))
+                 [_, ITNum idx_sz] [arr_e, idx_e] -> do
+          addPredG p $
+              evalStaticOpInArrayM doUH doBK doUndet
+                                   ic idx_e idx_sz arr_e resultType handler mref
 
 {-
-    -- XXX this situation doesn't occur, because we don't use evalStaticOp
-    -- XXX for any prims that take an arg of type PrimAction
-    -- found a wrapper around a dynamic expression (of type PrimAction)
-    IAps f@(ICon _ (ICPrim _ pi)) [] [e2] | isIfWrapper pi ->
-      P p2 e2' <- evalStaticOp' doUH doBK doUndet e2 resultType handler
-      let p' = pConj p p2
-          e'' = IAps f [] [e2']
-      return (P p' e'')
+        -- XXX this situation doesn't occur, because we don't use evalStaticOp
+        -- XXX for any prims that take an arg of type PrimAction
+        -- found a wrapper around a dynamic expression (of type PrimAction)
+        IAps f@(ICon _ (ICPrim _ pi)) [] [e2] | isIfWrapper pi ->
+          P p2 e2' <- evalStaticOp' doUH doBK doUndet e2 resultType handler
+          let p' = pConj p p2
+              e'' = IAps f [] [e2']
+          return (P p' e'')
 -}
 
-    -- push inside book-keeping operators
-    IAps f@(ICon _ (ICPrim _ PrimSetSelPosition)) [ty] [e_pos, e_res]
-      | doBK -> do
-      P p_res e_res' <- evalStaticOp' doUH doBK doUndet e_res resultType handler
-      let p' = pConj p p_res
-      -- try reapplying the prim, in case it can apply now
-      addPredG p' $
-          evalAp "static-op set-sel-pos" f [T resultType, E e_pos, E e_res']
+        -- push inside book-keeping operators
+        IAps f@(ICon _ (ICPrim _ PrimSetSelPosition)) [ty] [e_pos, e_res]
+          | doBK -> do
+          P p_res e_res' <- recurse e_res
+          let p' = pConj p p_res
+          -- try reapplying the prim, in case it can apply now
+          addPredG p' $
+              evalAp "static-op set-sel-pos" f [T resultType, E e_pos, E e_res']
 
-    -- otherwise, apply the static op's handler
-    _ -> -- rather than "addPredG p", which would be redundant if the handler
-         -- uses "ee", we pass "p" in for the handler to use with "e'"
-         handler ee (p, e')
+        -- otherwise, apply the static op's handler
+        _ -> -- rather than "addPredG p", which would be redundant if the handler
+             -- uses "ee", we pass "p" in for the handler to use with "e'"
+             handler ee (p, e')
 
-  if doBK
-    then return res
-    else -- it's a bookkeeping no-op, so preserve the heap name if any
-      case e of
-        IRefT _ _ _ r -> do
-            old_cell <- getHeap r
-            let old_name = hc_name old_cell
-            res' <- toHeapWHNF "set-sel-pos" resultType res old_name
-            return $ P pTrue res'
-        _ -> return res
+      finishStaticOpWalk mref mkey doBK e resultType res
+  where
+    recurse x = evalStaticOpM doUH doBK doUndet x resultType handler mref
 
-{-# INLINE evalStaticOpInArray' #-}
-evalStaticOpInArray' :: Bool -> Bool -> Bool ->
+    lookupHit k = do
+        memo <- liftIO (readIORef mref)
+        return $ fmap ((,) k) (IM.lookup k (som_cells memo))
+
+    -- the record is forced on the way in (its fields are strict)
+    setMemo memo = liftIO (writeIORef mref $! memo)
+
+    -- a cell met again: deliver the shared form of its result, creating
+    -- it now if the cell was not known to be shared when it was walked
+    shareHit k (res@(P pres res_e), mshared) =
+      case mshared of
+        Just r -> return (P pres r)
+        Nothing -> do
+          r <- shareStaticOpResult resultType res_e
+          recordStaticOpResult mref k res (Just r)
+          return (P pres r)
+
+-- After the walk of a cell (the doBK step, then the record): out of line,
+-- so that only what it needs stays live on the stack across the nested
+-- evaluation under the handler.
+{-# NOINLINE finishStaticOpWalk #-}
+finishStaticOpWalk :: IORef StaticOpMemo -> Maybe HeapPointer -> Bool ->
+                      HExpr -> IType -> PExpr -> G PExpr
+finishStaticOpWalk mref mkey doBK e resultType res = do
+  res' <-
+    if doBK
+      then return res
+      else -- it's a bookkeeping no-op, so preserve the heap name if any
+        case e of
+          IRefT _ _ _ r -> do
+              old_cell <- getHeap r
+              let old_name = hc_name old_cell
+              res' <- toHeapWHNF "set-sel-pos" resultType res old_name
+              return $ P pTrue res'
+          _ -> return res
+  -- record the result; if the scan found the cell reached again, share
+  -- the result from this first use on
+  case mkey of
+    Just k -> do
+      memo1 <- liftIO (readIORef mref)
+      if k `IS.member` som_shared memo1
+        then do let P pres res_e = res'
+                r <- shareStaticOpResult resultType res_e
+                recordStaticOpResult mref k res' (Just r)
+                return (P pres r)
+        else do recordStaticOpResult mref k res' Nothing
+                return res'
+    Nothing -> return res'
+
+recordStaticOpResult :: IORef StaticOpMemo -> HeapPointer -> PExpr -> Maybe HExpr -> G ()
+recordStaticOpResult mref k res mshared = liftIO $ do
+    memo <- readIORef mref
+    writeIORef mref $! memo { som_cells = IM.insert k (res, mshared) (som_cells memo) }
+
+-- The shared form of the result of walking a cell that is reached along
+-- several paths: a constant or a reference is used as it is (constants
+-- stay bare, so that improveIf's folding of equal constant branches still
+-- applies); a residual dynamic selection stays inline, as the walk
+-- returned it, so that the evaluator can still re-dispatch on it; a
+-- constructor, tuple, PrimChr, PrimConcat or PrimSetSelPosition
+-- application stays bare as well, with its arguments shared instead,
+-- because improveIf folds these on their bare form -- "if c (chr a)
+-- (chr b) ==> chr (if c a b)", "if c (a, b) (a', b') ==> (if c a a', if
+-- c b b')", the same for constructors and concatenations, and the rule
+-- that keeps a constructor from being folded against an undefined arm --
+-- and a reference where the unmemoized walk delivered the application
+-- defeats them at every node above (the walk then returns a tree of ifs
+-- over the wrappers that the evaluator and every later static op
+-- re-walk); anything else is heaped (in WHNF, as the if-branches of an
+-- evaluated expression are) so that all the uses refer to one cell.  The
+-- predicate of the result stays outside, with the uses.
+shareStaticOpResult :: IType -> HExpr -> G HExpr
+shareStaticOpResult _ r@(IAps (ICon _ (ICPrim _ PrimArrayDynSelect)) _ _) =
+    return r
+shareStaticOpResult _ (IAps f@(ICon _ c) ts es) | isStructural c = do
+    argTys <- takeArgTypes (length es) <$> instFunType (iGetType f) ts
+    es' <- zipWithM shareArg argTys es
+    return (IAps f ts es')
+  where
+    isStructural (ICCon {}) = True
+    isStructural (ICTuple {}) = True
+    isStructural (ICPrim _ PrimChr) = True
+    isStructural (ICPrim _ PrimConcat) = True
+    isStructural (ICPrim _ PrimSetSelPosition) = True
+    isStructural _ = False
+    -- an argument that is such an application itself stays bare too;
+    -- any other is heaped as evalHeap heaps the arguments of an
+    -- evaluated application: unevaluated under a constructor or tuple,
+    -- whose arguments are lazy (a selected field may still be an
+    -- unevaluated expression, which a WHNF cell would misrepresent),
+    -- in WHNF under the strict primitives
+    shareArg t a@(IAps (ICon _ c') _ _) | isStructural c' =
+        shareStaticOpResult t a
+    shareArg t a | lazyArgs c = toHeap "static-op" t a Nothing
+                 | otherwise = shareStaticOpResult t a
+    lazyArgs (ICPrim _ _) = False
+    lazyArgs _ = True
+shareStaticOpResult t r = toHeapWHNF "static-op" t (P pTrue r) Nothing
+
+{-# INLINE evalStaticOpInArrayM #-}
+evalStaticOpInArrayM :: Bool -> Bool -> Bool ->
                         HExpr -> HExpr -> Integer ->
                         HExpr -> IType ->
-                        (HExpr -> (HPred, HExpr) -> G PExpr) -> G PExpr
-evalStaticOpInArray' doUH doBK doUndet
-                     ic idx_e idx_sz arr_e resultType handler = do
+                        (HExpr -> (HPred, HExpr) -> G PExpr) ->
+                        IORef StaticOpMemo -> G PExpr
+evalStaticOpInArrayM doUH doBK doUndet
+                     ic idx_e idx_sz arr_e resultType handler mref = do
   -- doUH doesn't apply here
   (_, P arr_p arr_e') <- evalUH arr_e
   case arr_e' of
@@ -2966,11 +3226,12 @@ evalStaticOpInArray' doUH doBK doUndet
                                       ppReadable arr_ty ++
                                       show arr_ty)
         -- leave the preds in the array elems, walkNF will collect them
+        -- (the elements are walked in order, through the one memo)
         let cells = Array.elems arr
             mapFn (ArrayCell ref_p ref_r) = do
                 let ref_e = IRefT elem_ty ref_p S.empty ref_r
-                ref_pe' <- evalStaticOp' doUH doBK doUndet
-                                         ref_e resultType handler
+                ref_pe' <- evalStaticOpM doUH doBK doUndet
+                                         ref_e resultType handler mref
                 return (pExprToHExpr ref_pe')
         cell_es' <- mapM mapFn cells
         (e', _) <- improveDynSel ic idx_e idx_sz
@@ -5296,30 +5557,45 @@ class HeapToDef a where
 
     hToDef _ x = x
 
+-- The parts of a structure are collected one after the other, with the
+-- map forced in between ("collPtrs xs `collThen` collPtrs x", instead of
+-- "collPtrs xs . collPtrs x"), so that the collection runs as a loop over
+-- the siblings and its stack is the depth of the heap rather than its
+-- size: composed lazily, every reference reached forced the map built by
+-- the one before it, a chain of thunks as long as the number of cells
+-- visited, which was the deepest stack of the whole compilation on a
+-- large elaborated module.
+infixr 9 `collThen`
+collThen :: (IM.IntMap HeapCell -> IM.IntMap HeapCell) ->
+            (IM.IntMap HeapCell -> IM.IntMap HeapCell) ->
+            IM.IntMap HeapCell -> IM.IntMap HeapCell
+collThen f g m = f $! g m
+
 instance HeapToDef a => HeapToDef [a] where
     collPtrs [] = id
-    collPtrs (x:xs) = collPtrs xs . collPtrs x
+    collPtrs (x:xs) = collPtrs xs `collThen` collPtrs x
     hToDef m xs = map (hToDef m) xs
 
 instance (HeapToDef a, HeapToDef b) => HeapToDef (a, b) where
-    collPtrs (a, b) = collPtrs b . collPtrs a
+    collPtrs (a, b) = collPtrs b `collThen` collPtrs a
     hToDef m (a, b) = (hToDef m a, hToDef m b)
 
 instance (HeapToDef a, HeapToDef b, HeapToDef c) => HeapToDef (a, b, c) where
-    collPtrs (a, b, c) = collPtrs c . collPtrs b . collPtrs a
+    collPtrs (a, b, c) = collPtrs c `collThen` collPtrs b `collThen` collPtrs a
     hToDef m (a, b, c) = (hToDef m a, hToDef m b, hToDef m c)
 
 instance (HeapToDef a, HeapToDef b, HeapToDef c, HeapToDef d) => HeapToDef (a, b, c, d) where
-    collPtrs (a, b, c, d) = collPtrs d . collPtrs c . collPtrs b . collPtrs a
+    collPtrs (a, b, c, d) =
+        collPtrs d `collThen` collPtrs c `collThen` collPtrs b `collThen` collPtrs a
     hToDef m (a, b, c, d) = (hToDef m a, hToDef m b, hToDef m c, hToDef m d)
 
 instance HeapToDef HEFace where
     collPtrs (IEFace i x e rs wp fi)
-        = collPtrs fi .
-          collPtrs wp .
-          collPtrs rs .
-          collPtrs e .
-          collPtrs x .
+        = collPtrs fi `collThen`
+          collPtrs wp `collThen`
+          collPtrs rs `collThen`
+          collPtrs e `collThen`
+          collPtrs x `collThen`
           collPtrs i
     hToDef m (IEFace i x e rs wp fi)
         = (IEFace (hToDef m i) (hToDef m x) (hToDef m e)
@@ -5361,10 +5637,10 @@ instance HeapToDef HExpr where
         else
             let c = unsafeDerefHeap r in
               case c of
-                HNF { hc_pexpr = P _ e } -> collPtrs e (IM.insert p c m)
+                HNF { hc_pexpr = P _ e } -> collPtrs e $! IM.insert p c m
                 HWHNF { hc_pexpr = P _ e } ->
 --                traces ("collPtrs: " ++ ppReadable (p, e))
-                  collPtrs e (IM.insert p c m)
+                  collPtrs e $! IM.insert p c m
                 e -> internalError ("collPtrs: " ++ ppReadable e)
     collPtrs e m = internalError ("collPtrs: " ++ ppReadable e)
 
@@ -5402,7 +5678,7 @@ instance HeapToDef HRules where
     hToDef m (IRules sps rs) = IRules sps (hToDef m rs)
 
 instance HeapToDef HRule where
-    collPtrs r = collPtrs (irule_body r) . collPtrs (irule_pred r)
+    collPtrs r = collPtrs (irule_body r) `collThen` collPtrs (irule_pred r)
 
     hToDef m r = r { irule_pred = hToDef m $ irule_pred r ,
                      irule_body = hToDef m $ irule_body r }

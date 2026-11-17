@@ -1,0 +1,25 @@
+-- fromMaybe and isValid of a dynamic selection whose leaves carry
+-- implicit conditions (FIFO firsts): the conditions stay with the uses,
+-- outside the shared reference the memo delivers.
+package StaticOpMemoImpCond(sysStaticOpMemoImpCond) where
+
+import FIFO
+import Vector
+
+{-# verilog sysStaticOpMemoImpCond #-}
+sysStaticOpMemoImpCond :: Module Empty
+sysStaticOpMemoImpCond = module
+  f1 :: FIFO (Bit 2) <- mkFIFO
+  f2 :: FIFO (Bit 2) <- mkFIFO
+  c :: Reg Bool <- mkReg False
+  sel :: Reg (Bit 1) <- mkReg 0
+  o :: Reg (Bit 8) <- mkReg 0
+  rules
+    "go": when True ==> action
+      let x :: Maybe (Bit 2)
+          x = if f1.first == 0 then Invalid else Valid (f1.first + 1)
+          v :: Vector 2 (Maybe (Bit 2))
+          v = update (update newVector 0 (if c then x else Valid f2.first)) 1 (if c then x else Valid 1)
+          fm :: Bit 2
+          fm = fromMaybe 2 (select v sel._read)
+      o := zeroExtend fm + (if isValid (select v sel._read) then 1 else 0)

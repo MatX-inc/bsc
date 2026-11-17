@@ -1,0 +1,36 @@
+-- A static operator (here isValid) pushed through an if-DAG: the value
+-- is built by a loop in which each step refers to the previous value
+-- twice, so the DAG has 2^n root-to-leaf paths.  evalStaticOp' memoizes
+-- its walk per heap cell; without the memo this took time exponential
+-- in n.
+package StaticOpMemoIsValid(sysStaticOpMemoIsValid) where
+
+import qualified List
+import Vector
+
+interface Sub =
+  v :: Maybe (Bit 32)
+  put :: Bit 32 -> Action
+
+mkSub :: Module Sub
+mkSub = module
+  c :: Vector 16 (Reg Bool) <- replicateM (mkReg False)
+  d :: Vector 16 (Reg Bool) <- replicateM (mkReg False)
+  r :: Reg (Bit 32) <- mkReg 0
+  w :: Reg (Bit 32) <- mkReg 0
+  let step :: Maybe (Bit 32) -> Integer -> Maybe (Bit 32)
+      step x i = let y = if (d !! i)._read then x else (if w == 0 then Invalid else Valid w)
+                 in if (c !! i)._read then x else y
+  interface
+    v = List.foldl step (Valid r) (List.upto 0 15)
+    put z = r := z
+
+{-# verilog sysStaticOpMemoIsValid #-}
+sysStaticOpMemoIsValid :: Module Empty
+sysStaticOpMemoIsValid = module
+  s :: Sub <- mkSub
+  o :: Reg (Bit 32) <- mkReg 0
+  rules
+    "go": when True ==> action
+      o := if isValid s.v then 1 else 0
+      s.put o

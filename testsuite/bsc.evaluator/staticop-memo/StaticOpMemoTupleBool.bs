@@ -1,0 +1,45 @@
+-- The selection and unpack of the Bool field of a tuple pushed through
+-- an if-DAG: the value is built by a loop in which each step refers to
+-- the previous value twice, through the methods of an inlined
+-- submodule, so the DAG has 2^n root-to-leaf paths.  The unpack of the
+-- Bool reaches the cell of the innermost step along two paths; its
+-- result is a PrimChr application, which the memo must deliver bare
+-- (with its contents shared) so that improveIf's "if c (chr a) (chr b)
+-- ==> chr (if c a b)" fold still fires at every node above, as it does
+-- in the unmemoized compiler.  Delivering it as a heaped reference
+-- instead turned the result into a tree of ifs over the wrappers that
+-- the evaluator and every later static op re-walked (10x the heap cells
+-- of the unmemoized compiler, twice its stack).  The generated Verilog
+-- is what the unmemoized compiler generates.
+package StaticOpMemoTupleBool(sysStaticOpMemoTupleBool) where
+
+import qualified List
+import Vector
+
+interface Sub =
+  vm :: (Bit 8, Bool) -> (Bit 8, Bool)
+  vm2 :: (Bit 8, Bool) -> (Bit 8, Bool)
+
+mkSub :: Module Sub
+mkSub = module
+  r :: Reg (Bit 8) <- mkReg 0
+  rb :: Reg Bool <- mkReg False
+  interface
+    vm x = (x.fst + r, not x.snd)
+    vm2 x = (x.fst, x.snd && rb)
+
+{-# verilog sysStaticOpMemoTupleBool #-}
+sysStaticOpMemoTupleBool :: Module Empty
+sysStaticOpMemoTupleBool = module
+  s :: Sub <- mkSub
+  cs :: Vector 8 (Reg Bool) <- replicateM (mkReg False)
+  ds :: Vector 8 (Reg Bool) <- replicateM (mkReg False)
+  o :: Reg (Bit 8, Bool) <- mkReg (0, False)
+  ob :: Reg (Bit 8) <- mkReg 0
+  let step :: (Bit 8, Bool) -> Integer -> (Bit 8, Bool)
+      step x i = if (cs !! i)._read then s.vm x else (if (ds !! i)._read then s.vm2 x else x)
+  rules
+    "go": when True ==> action
+      let x = List.foldl step (0, False) (List.upto 0 7)
+      o := x
+      ob := x.fst

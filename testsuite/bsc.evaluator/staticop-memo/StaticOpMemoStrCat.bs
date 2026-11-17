@@ -1,0 +1,36 @@
+-- String concatenation of a DAG with itself, then stringLength: the
+-- handler of the outer walk starts an inner walk at every leaf, so the
+-- unmemoized compiler walked 4^n paths.  Each step of the loop refers to
+-- the previous value twice.
+package StaticOpMemoStrCat(sysStaticOpMemoStrCat) where
+
+import qualified List
+import Vector
+
+interface Sub =
+  v :: String
+  put :: Bit 32 -> Action
+
+mkSub :: Module Sub
+mkSub = module
+  c :: Vector 8 (Reg Bool) <- replicateM (mkReg False)
+  d :: Vector 8 (Reg Bool) <- replicateM (mkReg False)
+  r :: Reg (Bit 32) <- mkReg 0
+  let step :: String -> Integer -> String
+      step x i = let y = if (d !! i)._read then x else "abc"
+                 in if (c !! i)._read then x else y
+  interface
+    v = List.foldl step "seven" (List.upto 0 7)
+    put z = r := z
+
+{-# verilog sysStaticOpMemoStrCat #-}
+sysStaticOpMemoStrCat :: Module Empty
+sysStaticOpMemoStrCat = module
+  s :: Sub <- mkSub
+  o :: Reg (Bit 32) <- mkReg 0
+  rules
+    "go": when True ==> action
+      let t :: String
+          t = s.v + s.v
+      o := fromInteger (stringLength t)
+      s.put o

@@ -1,0 +1,39 @@
+# evalStaticOp' memoizes its walk per heap cell, so a static operator
+# over an if-DAG with 2^n root-to-leaf paths is linear in n.  The
+# generated Verilog is compared so that sharing the rebuilt result does
+# not change what the backend sees: for all but StaticOpMemoNested it is
+# what the unmemoized compiler generated (that one overflows the stack
+# there).
+
+compile_verilog_pass StaticOpMemoMaybe.bs
+compare_verilog sysStaticOpMemoMaybe.v
+
+compile_verilog_pass StaticOpMemoIsValid.bs
+compare_verilog sysStaticOpMemoIsValid.v
+
+compile_verilog_pass StaticOpMemoUnpack.bs
+compare_verilog sysStaticOpMemoUnpack.v
+
+compile_verilog_pass StaticOpMemoDynSel.bs
+compare_verilog sysStaticOpMemoDynSel.v
+
+compile_verilog_pass StaticOpMemoIfFold.bs
+compare_verilog sysStaticOpMemoIfFold.v
+
+compile_verilog_pass StaticOpMemoDynSelFold.bs
+compare_verilog sysStaticOpMemoDynSelFold.v
+
+compile_verilog_pass StaticOpMemoImpCond.bs
+compare_verilog sysStaticOpMemoImpCond.v
+
+compile_verilog_pass StaticOpMemoIntAdd.bs
+compare_verilog sysStaticOpMemoIntAdd.v
+
+compile_verilog_pass StaticOpMemoStrCat.bs
+compare_verilog sysStaticOpMemoStrCat.v
+
+compile_verilog_pass StaticOpMemoTupleBool.bs
+compare_verilog sysStaticOpMemoTupleBool.v
+
+compile_verilog_pass StaticOpMemoNested.bs
+compare_verilog sysStaticOpMemoNested.v

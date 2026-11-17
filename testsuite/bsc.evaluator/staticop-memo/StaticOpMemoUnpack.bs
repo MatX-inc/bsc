@@ -1,0 +1,45 @@
+-- A static operator (here the unpack of an enum) pushed through an
+-- if-DAG: the value is built by a loop in which each step refers to the
+-- previous value twice, so the DAG has 2^n root-to-leaf paths.
+-- evalStaticOp' memoizes its walk per heap cell; without the memo this
+-- took time exponential in n.
+package StaticOpMemoUnpack(sysStaticOpMemoUnpack) where
+
+import qualified List
+import Vector
+
+data Tri = EA | EB | EC
+  deriving (Bits, Eq)
+
+interface Sub =
+  v :: Bit 2
+  put :: Bit 32 -> Action
+
+mkSub :: Module Sub
+mkSub = module
+  c :: Vector 16 (Reg Bool) <- replicateM (mkReg False)
+  d :: Vector 16 (Reg Bool) <- replicateM (mkReg False)
+  r :: Reg (Bit 32) <- mkReg 0
+  w :: Reg (Bit 32) <- mkReg 0
+  let rv :: Bit 32
+      rv = r
+      wv :: Bit 32
+      wv = w
+      step :: Bit 2 -> Integer -> Bit 2
+      step x i = let y = if (d !! i)._read then x else wv[1:0]
+                 in if (c !! i)._read then x else y
+  interface
+    v = List.foldl step rv[1:0] (List.upto 0 15)
+    put z = r := z
+
+{-# verilog sysStaticOpMemoUnpack #-}
+sysStaticOpMemoUnpack :: Module Empty
+sysStaticOpMemoUnpack = module
+  s :: Sub <- mkSub
+  o :: Reg (Bit 32) <- mkReg 0
+  rules
+    "go": when True ==> action
+      let t :: Tri
+          t = unpack s.v
+      o := if t == EB then 1 else 0
+      s.put o
