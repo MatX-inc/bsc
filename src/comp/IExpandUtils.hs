@@ -75,6 +75,7 @@ import Data.IORef
 import System.IO.Unsafe
 import Data.List
 import Data.Maybe
+import Data.Ord(comparing)
 import Data.Char(isAlphaNum)
 import System.Time -- XXX: from old-time package
 import Debug.Trace(traceM)
@@ -987,7 +988,9 @@ runG errh flags symt alldefs atf_rules defId is_noinlined_func pps gFn =
                      go_steps = final_steps,
                      go_hp = final_hp,
                      go_profile = profilingMap gs',
-                     go_comments_map = M.toList (commentsMap gs'),
+                     go_comments_map =
+                         sortBy (comparing (getIdString . fst))
+                                (M.toList (commentsMap gs')),
                      go_backend_specific = backend_specific gs',
                      go_ffcallNo = final_ffcallNo,
                      goutput = retval
@@ -2356,7 +2359,14 @@ chkIfcPortNames errh args ifcs (ClockInfo ci co _ _) (ResetInfo ri ro) =
     arg_clock_names = [ (n, i) | (i, inf) <- ci, n <- in_clock_ports inf ]
     arg_reset_names = [ (n, i) | (i, inf) <- ri, n <- in_reset_ports inf ]
 
-    arg_names = sort $
+    cmpNamedId =
+      comparing (\(n, i) ->
+                   let pos = getPosition i
+                   in  (n, getPositionFile pos, getPositionLine pos,
+                        getPositionColumn pos, getIdBaseString i,
+                        getIdQualString i))
+
+    arg_names = sortBy cmpNamedId $
       arg_port_names ++ arg_inout_names ++ arg_clock_names ++ arg_reset_names
 
     ifc_port_names =
@@ -2369,7 +2379,8 @@ chkIfcPortNames errh args ifcs (ClockInfo ci co _ _) (ResetInfo ri ro) =
       [ (n, i) | IEFace {ief_fieldinfo = Clock i} <- ifcs, n <- output_clock_ports i ]
     ifc_reset_names =
       [ (n, i) | IEFace {ief_fieldinfo = Reset i} <- ifcs, n <- output_reset_ports i ]
-    ifc_names = sort $ ifc_port_names ++ ifc_inout_names ++ ifc_clock_names ++ ifc_reset_names
+    ifc_names = sortBy cmpNamedId $
+      ifc_port_names ++ ifc_inout_names ++ ifc_clock_names ++ ifc_reset_names
 
     -- ---------------
     -- check that no ifc port name clashes with another port name and

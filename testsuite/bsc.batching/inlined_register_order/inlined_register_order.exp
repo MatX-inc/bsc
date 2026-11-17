@@ -1,0 +1,66 @@
+# Verify that InlineReg emits inlined-register always blocks and reset groups
+# in the module's instance-list order rather than Ord AExpr / Ord Id order,
+# both under -trace-intern-reverse and when batched behind a scrambler.
+
+proc always_events { v } {
+    global srcdir
+    global subdir
+    set fh [open [file join [absolute $srcdir] $subdir $v]]
+    set events [list]
+    while { [gets $fh line] >= 0 } {
+        if { [regexp {^\s*always\s*@\s*\((.*)\)\s*$} $line -> ev] } {
+            lappend events $ev
+        }
+    }
+    close $fh
+    return $events
+}
+
+proc reset_tests { v } {
+    global srcdir
+    global subdir
+    set fh [open [file join [absolute $srcdir] $subdir $v]]
+    set resets [list]
+    while { [gets $fh line] >= 0 } {
+        if { [regexp {^\s*if \((\w+) == `BSV_RESET_VALUE\)} $line -> rst] } {
+            lappend resets $rst
+        }
+    }
+    close $fh
+    return $resets
+}
+
+set src InlinedRegisterOrder.bs
+set mod mkInlinedRegisterOrder
+
+reverse_intern_same_verilog $src $mod
+
+batching_verilog_pair $src $mod InlinedRegisterOrderTop.bs mkInlinedRegisterOrderTop {InlinedRegisterOrderScramble.bs}
+
+set expected_events [list \
+    "posedge CLK_clkM" \
+    "posedge CLK" \
+    "posedge CLK_clkZ" \
+    "posedge CLK_clkZ or `BSV_RESET_EDGE RST_N_rstZ" \
+    "posedge CLK or `BSV_RESET_EDGE RST_N" \
+    "posedge CLK_clkM or `BSV_RESET_EDGE RST_N_rstM" \
+]
+set expected_resets [list \
+    RST_N_rstM RST_N RST_N_rstA2 RST_N_rstZ \
+    RST_N_rstZ RST_N RST_N_rstM \
+]
+
+foreach v [list $mod.normal.v $mod.oneshot.v $mod.v] {
+    set events [always_events $v]
+    if { $events eq $expected_events } {
+        pass "the always blocks in `$v' follow the order of the registers in the instance list"
+    } else {
+        fail "the always blocks in `$v' are in the order `$events'"
+    }
+    set resets [reset_tests $v]
+    if { $resets eq $expected_resets } {
+        pass "the reset groups in `$v' follow the order of the registers in the instance list"
+    } else {
+        fail "the reset groups in `$v' are in the order `$resets'"
+    }
+}

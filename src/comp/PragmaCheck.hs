@@ -9,8 +9,9 @@ module PragmaCheck ( checkModuleArgPragmas,
 import qualified Data.Map as M
 
 import Control.Monad(msum)
-import Data.List(groupBy, sort, partition, nub, intersect)
+import Data.List(groupBy, sortBy, partition, nub, intersect)
 import Data.Maybe(listToMaybe, mapMaybe, catMaybes, fromMaybe, isNothing)
+import Data.Ord(comparing)
 
 import Util(thd, fst3, headOrErr)
 
@@ -687,8 +688,15 @@ checkModulePortNames flgs pos pps vtis ftps =
     -- We also check that param arguments do not clash, but note that
     -- XXX parameters will be referred to as "ports" in the error message
 
-        arg_names = sort [ (getIdBaseString n, getAPIArgName api)
-                         | api@(API { api_port = Just n }) <- all_arg_info ]
+        cmpNamedId =
+            comparing (\(n, i) ->
+                         let p = getPosition i
+                         in  (n, getPositionFile p, getPositionLine p,
+                              getPositionColumn p, getIdBaseString i,
+                              getIdQualString i))
+        arg_names = sortBy cmpNamedId
+                        [ (getIdBaseString n, getAPIArgName api)
+                        | api@(API { api_port = Just n }) <- all_arg_info ]
         arg_same_name = filter (\xs -> (length xs) > 1) $
                                groupBy (\(n1,_) (n2,_) -> n1 == n2) arg_names
         arg_kw_clash  = filter (\(n,_) -> n `elem` vKeywords) arg_names

@@ -1893,10 +1893,12 @@ getIOPropsA _flags pps mschedinfo apkg =
                                                arms)),
                                    True)
                         -- join the fates of an expression's split arms
+                        arm_map = M.fromListWith classJoin
+                                      [ (e, c) | ((e, _), c) <- arm_classes ]
                         class_map =
-                            M.toList
-                                (M.fromListWith classJoin
-                                    [ (e, c) | ((e, _), c) <- arm_classes ])
+                            [ (e, c)
+                            | e <- stableOrdNub [ e' | ((e', _), _) <- arm_classes ]
+                            , Just c <- [M.lookup e arm_map] ]
                         -- the last surviving arm, whose selector is
                         -- not referenced
                         last_arms =

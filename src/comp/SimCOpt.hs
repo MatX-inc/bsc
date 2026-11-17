@@ -255,16 +255,19 @@ moveDefsOntoStack flags instmodmap (blocks,scheds) =
           in fn { sf_body = body }
       moveDefs Nothing fn = -- move into schedule
           let fname = sf_name fn
+              moved = sortOn (\(sbid, aid) -> (sbid, getIdBaseString aid))
+                             (M.findWithDefault [] (Nothing,fname) move_map)
               new_defs = [ [ SFSDef isPort (ty,qual_id) Nothing
-                           | qual_id <- S.toList qids
+                           | qual_id <- sortOn (\qid -> (getIdQualString qid, getIdBaseString qid))
+                                               (S.toList qids)
                            ]
-                         | (sbid,aid) <- M.findWithDefault [] (Nothing,fname) move_map
+                         | (sbid,aid) <- moved
                          , let ty = btype_lookup (sbid,aid)
                          , let isPort = S.member (sbid,aid) port_set
                          , let qids = M.findWithDefault S.empty (sbid, aid) sched_qids
                          ]
               idmap = M.fromList [ (qual_id, inline qual_id)
-                                 | (sbid,aid) <- M.findWithDefault [] (Nothing,fname) move_map
+                                 | (sbid,aid) <- moved
                                  , let qids = M.findWithDefault S.empty (sbid,aid) sched_qids
                                  , qual_id <- S.toList qids
                                  ]

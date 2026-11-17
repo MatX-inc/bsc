@@ -4,6 +4,7 @@ module InlineReg (
                   ) where
 
 import Data.List(partition)
+import qualified Data.List as L
 import qualified Data.Map as M
 import IntLit
 import IntegerUtil(aaaa)
@@ -34,14 +35,14 @@ vInlineReg errh flags avis =
         -- separate the RegAs from the RegN and RegUN
         (regas, regns_and_reguns) = partition isRegA avis
 
-        -- make a map from clock to the RegNs and RegUNs in that clock
-        ns_and_uns_by_clock = M.toList (partitionByClock errh regns_and_reguns)
+        -- group RegNs and RegUNs by clock in instance-list order
+        ns_and_uns_by_clock = partitionByClock errh regns_and_reguns
 
         -- translate the partitioned RegN/RegUNs into always blocks
         ns_and_uns_items = map (vInlineN errh vco) ns_and_uns_by_clock
 
-        -- make a map from clock and reset to the RegAs for that pair
-        as_by_clock_and_reset = M.toList (partitionByClockAndReset errh regas)
+        -- group RegAs by clock and reset in instance-list order
+        as_by_clock_and_reset = partitionByClockAndReset errh regas
 
         -- translate the partitioned RegAs into always blocks
         as_items = map (vInlineA vco) as_by_clock_and_reset
@@ -111,7 +112,7 @@ vInlineN errh vco (clk, avis) =
         -- translate into statements inside the always block
         body_items =
             -- put a comment here "initialized registers"
-            map (translateRegN vco) (M.toList regns_by_reset) ++
+            map (translateRegN vco) regns_by_reset ++
             -- put a comment here "uninitialized registers"
             map (translateRegUN vco) reguns
 
@@ -222,31 +223,41 @@ translateRegUN vco avi = mkENAssignment avi
 
 
 -- ==============================
+-- partition reg instances by a key (their clock, reset, or both)
+
+-- Emit groups in first-sighting key order along the instance list, keeping
+-- each group's instances in list order rather than Ord AExpr / Ord Id order.
+partitionBy :: (Ord k) => (AVInst -> k) -> [AVInst] -> [(k, [AVInst])]
+partitionBy key avis =
+    let step (m, revKeys) avi =
+            let k = key avi
+            in  case M.lookup k m of
+                  Nothing -> (M.insert k [avi] m, k : revKeys)
+                  Just vs -> (M.insert k (avi : vs) m, revKeys)
+        (groups, revKeys) = L.foldl' step (M.empty, []) avis
+    in  [ (k, reverse (M.findWithDefault [] k groups))
+        | k <- reverse revKeys ]
+
+-- ==============================
 -- partition reg instances by their clock
 
-partitionByClock :: ErrorHandle -> [AVInst] -> M.Map AExpr [AVInst]
-partitionByClock errh avis =
-    let mkPair avi = (getRegClock errh avi, [avi])
-    in  M.fromListWith (flip (++)) (map mkPair avis)
+partitionByClock :: ErrorHandle -> [AVInst] -> [(AExpr, [AVInst])]
+partitionByClock errh = partitionBy (getRegClock errh)
 
 
 -- ==============================
 -- partition reg instances by their reset
 
-partitionByReset :: ErrorHandle -> [AVInst] -> M.Map AExpr [AVInst]
-partitionByReset errh avis =
-    let mkPair avi = (getRegReset errh avi, [avi])
-    in  M.fromListWith (flip (++)) (map mkPair avis)
+partitionByReset :: ErrorHandle -> [AVInst] -> [(AExpr, [AVInst])]
+partitionByReset errh = partitionBy (getRegReset errh)
 
 
 -- ==============================
 -- partition reg instances by their clock and reset (for RegA)
 
-partitionByClockAndReset :: ErrorHandle -> [AVInst] -> M.Map (AExpr, AExpr) [AVInst]
-partitionByClockAndReset errh avis =
-    let mkPair avi = let clk_rst = (getRegClock errh avi, getRegReset errh avi)
-                     in  (clk_rst, [avi])
-    in  M.fromListWith (flip (++)) (map mkPair avis)
+partitionByClockAndReset :: ErrorHandle -> [AVInst] -> [((AExpr, AExpr), [AVInst])]
+partitionByClockAndReset errh =
+    partitionBy (\avi -> (getRegClock errh avi, getRegReset errh avi))
 
 
 -- ==============================

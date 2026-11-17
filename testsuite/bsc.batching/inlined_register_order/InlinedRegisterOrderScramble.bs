@@ -1,0 +1,25 @@
+-- Declares clkM/rstM before clkZ/rstZ so a batch compile interns CLK_clkM and
+-- RST_N_rstM ahead of CLK_clkZ and RST_N_rstZ before compiling the probe.
+package InlinedRegisterOrderScramble where
+
+onCR :: (IsModule mod modType) => Clock -> Reset -> mod a -> mod a
+onCR c r = changeSpecialWires (Just c) (Just r) Nothing
+
+onR :: (IsModule mod modType) => Reset -> mod a -> mod a
+onR r = changeSpecialWires Nothing (Just r) Nothing
+
+{-# verilog mkInlinedRegisterOrderScramble #-}
+mkInlinedRegisterOrderScramble ::
+  Clock -> Reset -> Clock -> Reset -> Reset -> Module Empty
+mkInlinedRegisterOrderScramble clkM rstM clkZ rstZ rstA2 =
+  module
+    s_m  :: Reg (UInt 8) <- onCR clkM rstM (mkReg 0)
+    s_z  :: Reg (UInt 8) <- onCR clkZ rstZ (mkReg 0)
+    s_a2 :: Reg (UInt 8) <- onR rstA2 (mkReg 0)
+    s_a  :: Reg (UInt 8) <- mkReg 0
+
+    rules
+      "tick_m":  when True ==> s_m  := s_m  + 1
+      "tick_z":  when True ==> s_z  := s_z  + 1
+      "tick_a2": when True ==> s_a2 := s_a2 + 1
+      "tick_a":  when True ==> s_a  := s_a  + 1

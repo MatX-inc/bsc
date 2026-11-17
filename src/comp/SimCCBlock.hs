@@ -1478,7 +1478,15 @@ data Symbol = SymModule AId
             | SymPort  AId Integer
             | SymRule
             | SymUnknown
-  deriving (Eq,Ord,Show)
+  deriving (Eq,Show)
+
+symKey :: Symbol -> (Int, String, Integer)
+symKey (SymModule i)  = (0, getIdString i, 0)
+symKey (SymDef i sz)  = (1, getIdString i, sz)
+symKey (SymParam i s) = (2, getIdString i, s)
+symKey (SymPort i sz) = (3, getIdString i, sz)
+symKey SymRule        = (4, "", 0)
+symKey SymUnknown     = (5, "", 0)
 
 instance PPrint Symbol where
   pPrint d _ (SymModule i)  = (text "Module") <+> (pPrint d 0 i)
@@ -1767,7 +1775,7 @@ symOrd :: (String,Symbol) -> (String,Symbol) -> Ordering
 symOrd (str1,sym1) (str2,sym2) =
     case (strCmp str1 str2) of
       LT -> LT
-      EQ -> compare sym1 sym2
+      EQ -> compare (symKey sym1) (symKey sym2)
       GT -> GT
   where strCmp [] [] = EQ
         strCmp [] _  = LT

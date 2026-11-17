@@ -23,6 +23,8 @@ import Util
 
 import Data.Maybe(mapMaybe, isJust, fromJust, fromMaybe, maybeToList)
 import Data.List(partition, nub, union, find, sortBy, sortOn, (\\))
+import Data.Ord(comparing)
+import qualified Data.List as L
 import qualified Data.Map as M
 import qualified Data.Set as S
 
@@ -76,7 +78,7 @@ simMakeCBlocks :: Flags -> SimSystem ->
                   ([SimCCBlock], [SimCCSched], [SimCCClockGroup], SimCCGateInfo, SBId)
 simMakeCBlocks flags sim_system =
   let pkg_map  = ssys_packages sim_system
-      pkgs     = M.elems pkg_map
+      pkgs     = sortBy (comparing (getIdString . sp_name)) (M.elems pkg_map)
       scheds   = ssys_schedules sim_system
       inst_map = ssys_instmap sim_system
 
@@ -182,9 +184,15 @@ simMakeCBlocks flags sim_system =
                  inst_map full_dmap full_mmap call_map)
             scheds
       stmt_map = M.unionsWith combineStmtGroups stmt_infos
+      sched_edges = stableOrdNub
+                        [ td
+                        | s <- scheds
+                        , let clk_expr = aclock_osc (ss_clock s)
+                        , td <- [Pos clk_expr, Neg clk_expr] ]
 
-      -- make the SimCCScheds from the stmt pairs in the map
-      schedules = mapMaybe mkOneSchedule (M.toList stmt_map)
+      -- make the SimCCScheds in domain-discovery schedule order
+      schedules = mapMaybe (\td -> M.lookup td stmt_map >>= \ssg -> mkOneSchedule (td, ssg))
+                           sched_edges
 
       -- make the SimCCClockGroups from the schedules
       clock_groups = map mkClockGroup scheds
@@ -233,6 +241,29 @@ getExprIds in_sched def_map known ((ASDef _ id):es) =
          Nothing    -> getExprIds in_sched def_map known' es
 getExprIds in_sched def_map known (_:es) = getExprIds in_sched def_map known es
 
+-- Like getExprIds, returning visited AIds in DFS first-sighting order so
+-- tsortADefs receives a deterministic input order rather than S.toList's Ord AId.
+getExprIdsOrdered :: Bool -> DefMap -> [AExpr] -> [AId]
+getExprIdsOrdered in_sched def_map es0 = reverse (snd (go S.empty [] es0))
+  where
+    go known rev [] = (known, rev)
+    go known rev ((APrim _ _ _ args):es) = go known rev (args ++ es)
+    go known rev ((AMethCall _ _ _ args):es) = go known rev (args ++ es)
+    go known rev ((ATuple _ elems):es) = go known rev (elems ++ es)
+    go known rev ((ATupleSel _ e _):es) = go known rev (e:es)
+    go known rev ((ANoInlineFunCall _ _ _ args):es) = go known rev (args ++ es)
+    go known rev ((AFunCall _ _ _ _ args):es) = go known rev (args ++ es)
+    go known rev ((ASDef _ i):es)
+      | i `S.member` known || (isIdWillFire i && not in_sched) =
+          go known rev es
+      | otherwise =
+          let known' = S.insert i known
+              rev'   = i : rev
+          in  case M.lookup i def_map of
+                Just def -> go known' rev' (adef_expr def : es)
+                Nothing  -> go known' rev' es
+    go known rev (_:es) = go known rev es
+
 -- Create the SimCCBlock for a SimPackage
 onePackageToBlock :: Flags -> NameMap -> ModMethMap -> SimSystem -> SimPackage -> SimCCBlock
 onePackageToBlock flags name_map full_meth_map ss pkg =
@@ -276,7 +307,8 @@ onePackageToBlock flags name_map full_meth_map ss pkg =
       pub_ids  = getExprIds True def_map S.empty cf_wf_ex
       (pub_defs, pri_defs) = partition ((`S.member` pub_ids).snd) all_defs
 
-      task_defs  = [ aid | d@(ADef aid _ (ATaskValue {}) _) <- raw_defs ]
+      task_defs  = sortOn getIdBaseString
+                       [ aid | ADef aid _ (ATaskValue {}) _ <- raw_defs ]
 
       -- ----------
       -- instantiation parameters (module arguments)
@@ -510,7 +542,8 @@ cvtActions modId rId def_map method_order_map other_defs acts reset_ids =
       ids = other_defs `S.union` action_ids
 
       -- get their defs
-      defs = map (findDef def_map) (S.toList ids)
+      defs = sortBy (comparing (\(ADef i _ _ _) -> getIdString i))
+                    (map (findDef def_map) (S.toList ids))
 
       -- order the defs and actions, and convert to statements
       -- XXX is it more efficient to pass in the whole def map,
@@ -683,7 +716,7 @@ sortTickCalls ticks =
               Nothing -> internalError ("sortTickCalls: missing from map: " ++
                                         ppReadable clk)
 
-      clocks = M.keys grouped_ticks_map
+      clocks = stableOrdNub (map fst ticks)
       -- map from a gate to its clock
       clock_map =
           let mkEdge clk = case (aclock_gate clk) of
@@ -691,17 +724,19 @@ sortTickCalls ticks =
                                (ASPort _ objId)   -> Just (mk_homeless_id (getIdQualString objId), [clk])
                                _ -> Nothing
               es = mapMaybe mkEdge clocks
-          in  M.fromListWith (++) es
+          in  M.fromListWith (flip (++)) es
 
       -- for a set of ticks, find the Ids of the submods that are ticked
       getModIds calls = map fst3 calls
 
-      -- make the tsort edges
+      -- make the tsort edges in first-sighting clock order
       mkEdge (clk, calls) =
           let mods = getModIds calls
               clocks = concat (mapMaybe (\i -> M.lookup i clock_map) mods)
           in  (clk, clocks)
-      edges = map mkEdge (M.toList grouped_ticks_map)
+      edges = [ mkEdge (clk, calls)
+              | clk <- clocks
+              , Just calls <- [M.lookup clk grouped_ticks_map] ]
   in  case (tsort edges) of
         Left is -> internalError ("sortTickCalls: cyclic " ++ ppReadable is)
         Right is -> map findCalls (reverse is)
@@ -1106,7 +1141,7 @@ mkActionMethodSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map
 
       -- ----------
       -- Get all the defs needed for the WF expr
-      ids = S.toList $ getExprIds True def_map S.empty [ASDef bit_type unqual_wf]
+      ids = getExprIdsOrdered True def_map [ASDef bit_type unqual_wf]
       defs = tsortADefs $ map (findDef def_map) ids
 
       -- ----------
@@ -1159,7 +1194,7 @@ mkRuleSchedStmts prune inst_map full_dmap method_calls
 
       -- ----------
       -- Get all the defs needed for the WF expr
-      ids = S.toList $ getExprIds True def_map S.empty [ASDef bit_type unqual_wf]
+      ids = getExprIdsOrdered True def_map [ASDef bit_type unqual_wf]
       defs = tsortADefs $ map (findDef def_map) ids
 
       -- ----------
@@ -1504,7 +1539,10 @@ tsortActionsAndDefs modId rId mmap ds acts reset_ids =
         decNode (Left r)  = Left (fromJust (M.lookup r unrank_map))
         decNode (Right n) = Right n
         enc_edges :: [EncEdge]
-        enc_edges = sortOn fst [ (encNode n, map encNode ns) | (n,ns) <- g_edges ]
+        enc_edges =
+            sortOn fst
+                [ (encNode n, S.toList (S.fromList (map encNode ns)))
+                | (n,ns) <- g_edges ]
 
         -- ----------
         -- convert a graph node back into a def/action
@@ -1727,22 +1765,22 @@ mkMERuleInhibits :: S.Set AId -> [SchedNode] -> DisjointRulesDB -> M.Map AId [AI
 mkMERuleInhibits top_vmeth_set sched_order disjoint_map =
     let
         -- value methods can't change state, so they don't need to inhibit
-
-        foldfunc :: (IdSet, [(AId,[AId])]) -> SchedNode ->
-                    (IdSet, [(AId,[AId])])
-        foldfunc (seen_exec_nodes, res) (Exec r) =
-            if (S.member r top_vmeth_set)
-            then (seen_exec_nodes, res)
-            else (S.insert r seen_exec_nodes, res)
-        foldfunc (seen_exec_nodes, res) (Sched r) =
+        foldfunc :: (IdSet, [AId], [(AId,[AId])]) -> SchedNode ->
+                    (IdSet, [AId], [(AId,[AId])])
+        foldfunc (seen_set, rev_seen, res) (Exec r)
+            | S.member r top_vmeth_set || S.member r seen_set =
+                (seen_set, rev_seen, res)
+            | otherwise =
+                (S.insert r seen_set, r : rev_seen, res)
+        foldfunc (seen_set, rev_seen, res) (Sched r) =
             case (M.lookup r disjoint_map) of
-                Nothing -> (seen_exec_nodes, res)
+                Nothing -> (seen_set, rev_seen, res)
                 Just dset ->
-                    let inhibit_set = S.intersection dset seen_exec_nodes
-                        new_res = (r, S.toList inhibit_set)
-                    in  (seen_exec_nodes, new_res:res)
+                    let inhibits = [ e | e <- reverse rev_seen, S.member e dset ]
+                    in  (seen_set, rev_seen, (r, inhibits) : res)
+        (_, _, rev_res) = L.foldl' foldfunc (S.empty, [], []) sched_order
     in
-        M.fromList $ reverse $ snd $ foldl foldfunc (S.empty, []) sched_order
+        M.fromList (reverse rev_res)
 
 
 -- ===============

@@ -27,8 +27,8 @@ BEGIN
      #) ;
   
   rule_RL_r1 (state0 : STATE) : [ BOOLEAN, STATE ] =
-    LET def_s1__h348 : Bit{1}!T = CTX_RegN{1}!meth_read(state0.inst_s1)
-    IN LET def_f3_i_notFull____d1 : Bit{1}!T = CTX_FIFO2{17}!meth_i_notFull(state0.inst_f3)
+    LET def_f3_i_notFull____d1 : Bit{1}!T = CTX_FIFO2{17}!meth_i_notFull(state0.inst_f3)
+    IN LET def_s1__h348 : Bit{1}!T = CTX_RegN{1}!meth_read(state0.inst_s1)
     IN LET def_f2_i_notFull____d3 : Bit{1}!T = CTX_FIFO2{17}!meth_i_notFull(state0.inst_f2)
     IN LET def_f1_i_notFull____d4 : Bit{1}!T = CTX_FIFO2{17}!meth_i_notFull(state0.inst_f1)
     IN LET def_IF_s1_THEN_f2_i_notFull_ELSE_f1_i_notFull___d5 : Bit{1}!T =

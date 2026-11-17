@@ -28,12 +28,15 @@
 module WireAnalysis (getWireTypeMap, getWireTypeCandidates,
                      getFinalWireTypeCandidates) where
 
+import Data.List(sortBy)
 import qualified Data.Map as M
 import qualified Data.Map.Strict as MS
 import qualified Data.Set as S
 import Util(stableOrdNub)
 
-import Id(getIdString, unQualId, mkRdyId, isRdyId, mkIdCanFire, mkIdWillFire)
+import FStringCompat(getFString)
+import Id(getIdString, cmpIdByName, unQualId, mkRdyId, isRdyId, mkIdCanFire, mkIdWillFire)
+import IType(sameITypeNode)
 import ISyntax(IType(..))
 import ISyntaxUtil(itBool, itClock, itReset, itBit)
 import ASyntax
@@ -65,10 +68,41 @@ getWireTypeMap apkg =
 -- Unlike wiretypemap, this query represents ambiguity explicitly. A CSE'd
 -- expression can be unpacked at several unrelated nominal source types.
 getWireTypeCandidates :: APackage -> [(String, [IType])]
-getWireTypeCandidates apkg = M.toList $ M.map S.toList $
-    MS.unionWith S.union (observedWireTypes apkg)
-        (MS.fromListWith S.union [(n,S.singleton t) |
-                                 (n,t) <- namedDeclaredWireTypeMap apkg])
+getWireTypeCandidates apkg =
+    M.toList $ M.map (sortBy cmpITypeByName . S.toList) $
+        MS.unionWith S.union (observedWireTypes apkg)
+            (MS.fromListWith S.union [(n,S.singleton t) |
+                                     (n,t) <- namedDeclaredWireTypeMap apkg])
+
+-- Structural name-based ordering on IType matching IType.cmpT's constructor
+-- precedence while comparing Ids and FStrings by text rather than intern order.
+cmpITypeByName :: IType -> IType -> Ordering
+cmpITypeByName x@(ITForAll i1 _ t1) y@(ITForAll i2 _ t2)
+    | sameITypeNode x y = EQ
+    | otherwise = cmpIdByName i1 i2 <> cmpITypeByName t1 t2
+cmpITypeByName (ITForAll {}) _ = LT
+cmpITypeByName (ITAp {}) (ITForAll {}) = GT
+cmpITypeByName x@(ITAp f1 a1) y@(ITAp f2 a2)
+    | sameITypeNode x y = EQ
+    | otherwise = cmpITypeByName f1 f2 <> cmpITypeByName a1 a2
+cmpITypeByName (ITAp {}) _ = LT
+cmpITypeByName (ITVar _) (ITForAll {}) = GT
+cmpITypeByName (ITVar _) (ITAp {}) = GT
+cmpITypeByName (ITVar i1) (ITVar i2) = cmpIdByName i1 i2
+cmpITypeByName (ITVar _) _ = LT
+cmpITypeByName (ITCon {}) (ITForAll {}) = GT
+cmpITypeByName (ITCon {}) (ITAp {}) = GT
+cmpITypeByName (ITCon {}) (ITVar _) = GT
+cmpITypeByName (ITCon i1 _ _) (ITCon i2 _ _) = cmpIdByName i1 i2
+cmpITypeByName (ITCon {}) _ = LT
+cmpITypeByName (ITNum _) (ITForAll {}) = GT
+cmpITypeByName (ITNum _) (ITAp {}) = GT
+cmpITypeByName (ITNum _) (ITVar _) = GT
+cmpITypeByName (ITNum _) (ITCon {}) = GT
+cmpITypeByName (ITNum n1) (ITNum n2) = compare n1 n2
+cmpITypeByName (ITNum _) _ = LT
+cmpITypeByName (ITStr s1) (ITStr s2) = compare (getFString s1) (getFString s2)
+cmpITypeByName (ITStr _) _ = GT
 
 isBitType :: IType -> Bool
 isBitType (ITAp t _) = t == itBit
