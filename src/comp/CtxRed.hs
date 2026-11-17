@@ -44,15 +44,30 @@ cCtxReduceIO errh flags s keep_provisos
              (CPackage mi exps imps impsigs fixs ds includes) = do
     -- The False argument to 'runTI' indicates that incoherent instances should not be matched at this time
     -- We want to preserve those contexts to be handled in typecheck (XXX why?)
-    let ti_res = runTI flags False s
-                   (if keep_provisos then mapM ctxRedTop ds
-                    else mapM (fmap (\ d -> (d, Nothing)) . ctxRed) ds)
-    when (not (null (tiWarnings ti_res))) $ bsWarning errh (tiWarnings ti_res)
-    case tiResult ti_res of
+    -- Reduce each top-level definition in its own fresh TI state (mirroring
+    -- TypeCheck.tiDefns) so generated type-variable numbering in one definition
+    -- cannot depend on sibling definitions in the same package.
+    let reduceOne d =
+            runTI flags False s
+                (if keep_provisos then ctxRedTop d
+                 else fmap (\ d' -> (d', Nothing)) (ctxRed d))
+        collect [] accWarns accPkgs accDps =
+            (accWarns, Right (accPkgs, reverse accDps))
+        collect (d:rest) accWarns accPkgs accDps =
+            let r = reduceOne d
+                accWarns' = tiWarnings r ++ accWarns
+                accPkgs'  = S.union accPkgs (tiUsedPackages r)
+            in case tiResult r of
+                 Left emsgs -> (accWarns', Left emsgs)
+                 Right dp   -> collect rest accWarns' accPkgs' (dp : accDps)
+        (warns, res) = collect ds [] S.empty []
+    when (not (null warns)) $ bsWarning errh warns
+    case res of
       Left emsgs -> bsError errh emsgs
-      Right dps -> return (CPackage mi exps imps impsigs fixs (map fst dps) includes,
-                           tiUsedPackages ti_res,
-                           [ sp | (_, Just sp) <- dps ])
+      Right (usedPkgs, dps) ->
+          return (CPackage mi exps imps impsigs fixs (map fst dps) includes,
+                  usedPkgs,
+                  [ sp | (_, Just sp) <- dps ])
 
 ctxRedTop :: CDefn -> TI (CDefn, Maybe SignProvisos)
 ctxRedTop (CValueSign d@(CDef i _ _)) = do

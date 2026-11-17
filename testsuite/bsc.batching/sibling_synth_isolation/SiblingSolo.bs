@@ -1,0 +1,32 @@
+package SiblingPkg(TargetIfc(..), mkTarget) where
+
+import Vector
+
+sampleTime :: ActionValue (Bit 32)
+sampleTime = $stime
+
+interface TargetIfc =
+    feed :: Bit 8 -> Action
+    loadVec :: Vector 4 (Bit 4) -> Action
+    peek :: Bit 16
+
+widenPair :: (Bits a sa, Bits b sb, Add sa sb sc) => a -> b -> Bit sc
+widenPair x y = pack x ++ pack y
+
+{-# verilog mkTarget #-}
+mkTarget :: Module TargetIfc
+mkTarget =
+  module
+    rgA :: Reg (Bit 8) <- mkReg 0
+    rgB :: Reg (Bit 8) <- mkReg 1
+    rules
+      "stepTarget": when True ==> do
+        now <- sampleTime
+        let comb :: Bit 16
+            comb = widenPair rgA._read rgB._read
+        rgA := truncate comb + now[7:0]
+        rgB := rgB ^ rgA
+    interface
+      feed v = rgA := v
+      loadVec vs = rgB := pack (vs !! 0) ++ pack (vs !! 1)
+      peek = widenPair rgB._read rgA._read

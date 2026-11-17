@@ -6,6 +6,7 @@ module ContextErrors (
                       ) where
 
 import Data.List
+import Data.Ord(comparing)
 import qualified Data.Set as S
 import Control.Monad(when)
 
@@ -631,8 +632,9 @@ defaultWeakContextErr pos t qs rs =
 
         -- find the tvars so that we can report a position for any
         -- generated tvars
-        tvars = nub $ sort $ concat [tv (removePredPositions pred)
-                                        | (pred, _) <- rs']
+        tvars = sortBy (comparing ppString) $ nub $
+                    concat [tv (removePredPositions pred)
+                               | (pred, _) <- rs']
         -- only report the location of generated tvars
         -- (niceTypes preserves the "isNewTVar" property)
         gen_tvars = filter isNewTVar tvars

@@ -1,6 +1,5 @@
-module LiftDicts(liftDictsPkg, liftDictsWrapper,
-                 LiftDictsContext, prepareLiftDictsContext,
-                 reserveLiftDictsNames) where
+module LiftDicts(liftDictsPkg, liftDictsPkgWithContext, liftDictsWrapper,
+                 LiftDictsContext) where
 
 import Control.Applicative((<|>))
 import Control.Monad(when, zipWithM)
@@ -80,50 +79,78 @@ trace_lift_dicts = "-trace-lift-dicts" `elem` progArgs
 
 liftDictsPkg :: ErrorHandle -> Flags -> SymTab -> CPackage
              -> (CPackage, [IDef a])
-liftDictsPkg errh flags symt =
-    liftDictsWithContext errh flags symt [] (LiftDictsContext M.empty S.empty)
+liftDictsPkg errh flags symt pkg =
+    let (pkg', ds, _) = liftDictsPkgWithContext errh flags symt pkg
+    in  (pkg', ds)
+
+liftDictsPkgWithContext :: ErrorHandle -> Flags -> SymTab -> CPackage
+                        -> (CPackage, [IDef a], LiftDictsContext)
+liftDictsPkgWithContext errh flags symt =
+    liftDictsWithContext errh flags symt [] emptyLiftDictsContext
+
+-- Metadata for a hashed lifted dictionary minted earlier in the same package,
+-- allowing later wrapper lifting passes to reuse the canonical hashed Id when
+-- lifting identical evidence rather than falling back to sequential counters.
+data KnownHashedDict = KnownHashedDict {
+    khd_id    :: !Id,
+    khd_ctype :: !CType,
+    khd_itype :: !IType,
+    khd_str   :: !String,
+    khd_kids  :: ![Id],
+    khd_tys   :: ![IType]
+}
+
+mkKnownHashedDict :: Id -> CType -> IType -> String -> [Id] -> [IType] -> KnownHashedDict
+mkKnownHashedDict i ct it str kids tys =
+    forceList str `seq` forceList kids `seq` forceList tys `seq`
+    KnownHashedDict i ct it str kids tys
+  where
+    forceList [] = ()
+    forceList (x : xs) = x `seq` forceList xs
 
 -- Force the projections once, so keeping the context during elaboration
 -- does not also retain the host package's typechecked expression bodies.
 data LiftDictsContext = LiftDictsContext
-    !(M.Map Id ([TyVar], CType)) !(S.Set FString)
+    !(M.Map Id ([TyVar], CType))
+    !(S.Set FString)
+    !(M.Map FString KnownHashedDict)
 
--- Keep the names emitted by the initial lifting pass reserved even if
--- fixup later drops their definitions.  Later phases may retain references
--- to those names, so a wrapper must never reuse them for different evidence.
-prepareLiftDictsContext :: [Id] -> CPackage -> LiftDictsContext
-prepareLiftDictsContext lifted (CPackage _ _ _ _ _ ds _) =
-    LiftDictsContext
-        (M.fromList [ (i, (vs, t))
-                    | CValueSign (CDefT i vs (CQType [] t) _) <- ds,
-                      isDictFun t ])
-        (S.fromList (map getIdBase lifted ++
-                     [ getIdBase (getDName def) | CValueSign def <- ds ]))
+emptyLiftDictsContext :: LiftDictsContext
+emptyLiftDictsContext = LiftDictsContext M.empty S.empty M.empty
 
--- Preserve allocation history independently of which definitions survive
--- fixup, including dictionaries emitted by earlier wrappers.
-reserveLiftDictsNames :: [Id] -> LiftDictsContext -> LiftDictsContext
-reserveLiftDictsNames ids (LiftDictsContext insts names) =
-    LiftDictsContext insts (S.union names (S.fromList (map getIdBase ids)))
+extractPkgContext :: CPackage -> (M.Map Id ([TyVar], CType), S.Set FString)
+extractPkgContext (CPackage _ _ _ _ _ ds _) =
+    let !insts = M.fromList [ (i, (vs, t))
+                            | CValueSign (CDefT i vs (CQType [] t) _) <- ds,
+                              isDictFun t ]
+        !names = S.fromList [ getIdBase (getDName def) | CValueSign def <- ds ]
+    in  (insts, names)
 
--- Wrappers are lifted after the host package has been converted.  Reserve
--- its current definition names, including dictionaries from earlier wrappers,
--- and use the host context to resolve local instance evidence.
--- These instance definitions were added by convinst and are not in SymTab.
+-- Wrappers are lifted after the host package has been converted.  Reuse
+-- matching hashed dictionaries minted by the host package or earlier wrappers,
+-- keep all previously allocated names reserved, and use the host context to
+-- resolve local instance evidence added by convinst.
 liftDictsWrapper :: ErrorHandle -> Flags -> SymTab -> [Id] -> LiftDictsContext
-                 -> CPackage -> (CPackage, [IDef a])
+                 -> CPackage -> (CPackage, [IDef a], LiftDictsContext)
 liftDictsWrapper = liftDictsWithContext
 
 liftDictsWithContext :: ErrorHandle -> Flags -> SymTab -> [Id] -> LiftDictsContext
-                     -> CPackage -> (CPackage, [IDef a])
-liftDictsWithContext errh flags symt taken (LiftDictsContext hostInsts hostNames)
-                    pkg@(CPackage mi exps imps impsigs fixs ds includes)
-  = (CPackage mi exps imps impsigs fixs ds' includes, reverse (liftedDefs s'))
-  where LiftDictsContext insts names = prepareLiftDictsContext [] pkg
+                     -> CPackage -> (CPackage, [IDef a], LiftDictsContext)
+liftDictsWithContext errh flags symt taken
+                     (LiftDictsContext hostInsts hostNames hostHashed)
+                     pkg@(CPackage mi exps imps impsigs fixs ds includes)
+  = (CPackage mi exps imps impsigs fixs ds' includes,
+     reverse (liftedDefs s'),
+     ctx')
+  where (insts, names) = extractPkgContext pkg
         context = LiftDictsContext (M.union insts hostInsts)
                                    (S.union names hostNames)
+                                   hostHashed
         s0 = initLState errh flags symt taken context mi
         (ds', s') = runState (liftDicts S.empty M.empty ds) s0
+        !ctx' = LiftDictsContext (localInstInfo s')
+                                 (topLevelBases s')
+                                 (knownHashed s')
 
 data LState a = LState {
   errHandle :: ErrorHandle,
@@ -146,6 +173,11 @@ data LState a = LState {
   -- The lifted definitions, most recent first (reversed at the end, so
   -- the emitted order is lifting order and thus deterministic)
   liftedDefs :: [IDef a],
+  -- Definition Ids already present in the target IPackage or already emitted
+  -- in liftedDefs during this pass, so reusing a hashed dictionary across
+  -- wrapper passes never emits a duplicate IDef while re-emitting one that
+  -- an earlier fixup pass redirected and dropped.
+  presentIds :: S.Set Id,
   -- CSyntax types of the lifted dictionaries, for the CSyntax-side
   -- analysis (getTopNameInfo) of later dictionary expressions
   liftedTypes :: M.Map Id CType,
@@ -166,6 +198,8 @@ data LState a = LState {
   -- names never collide with a user definition (a user def named
   -- _lifted_dictN is legal)
   topLevelBases :: S.Set FString,
+  -- Hashed dictionaries minted earlier in this package, keyed by base name
+  knownHashed :: M.Map FString KnownHashedDict,
   -- Name of the package being compiled (for qualified lifted ids)
   packageName :: Id,
   symt :: SymTab
@@ -173,21 +207,24 @@ data LState a = LState {
 
 type L t a = State (LState t) a
 
--- The context definitions supply instance types and reserved source names;
--- taken additionally reserves definitions already emitted as ISyntax.
+-- The context definitions supply instance types, reserved source names, and
+-- previously minted hashed dictionaries; taken supplies definitions currently
+-- surviving in the package's ISyntax.
 initLState :: ErrorHandle -> Flags -> SymTab -> [Id] -> LiftDictsContext
            -> Id -> LState a
-initLState errh fs r taken (LiftDictsContext instInfo names) mi = LState {
+initLState errh fs r taken (LiftDictsContext instInfo names hashed) mi = LState {
   errHandle = errh,
   flags = fs,
   dictNo = 0,
   dictPool = M.empty,
   dictPoolC = M.empty,
   liftedDefs = [],
-  liftedTypes = M.empty,
-  convEnv = instConvEnv,
+  presentIds = S.fromList taken,
+  liftedTypes = knownLiftedTypes,
+  convEnv = M.union knownConvEnv instConvEnv,
   localInstInfo = instInfo,
   topLevelBases = S.union names (S.fromList (map getIdBase taken)),
+  knownHashed = hashed,
   packageName = mi,
   symt = r
 }
@@ -201,6 +238,13 @@ initLState errh fs r taken (LiftDictsContext instInfo names) mi = LState {
             let it = foldr (\ (TyVar v _ k) acc -> ITForAll v (iConvK k) acc)
                            (iConvT fs r t) vs
             in  ICon i (ICDef it (icUndetAt (getIdPosition i) it UNoMatch))
+        knownLiftedTypes =
+            M.fromList [ (khd_id khd, khd_ctype khd) | khd <- M.elems hashed ]
+        knownConvEnv =
+            M.fromList [ (i, ICon i (ICDef it (icUndetAt (getIdPosition i) it UNoMatch)))
+                       | khd <- M.elems hashed
+                       , let i = khd_id khd
+                       , let it = khd_itype khd ]
 
 getTopNameInfo :: Id -> L a (Maybe ([TyVar], CType))
 getTopNameInfo i = do
@@ -237,32 +281,63 @@ evidenceBase t (str, kids, tys) =
     dictBaseName t (hashString (unlines (str : map getIdBaseString kids ++
                                          map ppString tys)))
 
--- Evidence yields a stable name; without it (an incoherent dictionary) fall
--- back to the package-local counter.  The counter is also the escape hatch if
--- a user definition has somehow claimed the hashed name.
-newDictId :: Position -> CType -> Maybe (String, [Id], [IType]) -> L a Id
-newDictId pos t mev = do
+-- Allocate or reuse a dictionary Id:
+-- * Renderable coherent evidence hashes to a deterministic base name.  If an
+--   earlier lifting pass in this package already minted that hashed name for
+--   the exact same (IType, rendering, kids, types), reuse that Id directly so
+--   wrapper lifting never perturbs kid hashes or falls back to dictNo.  If a
+--   user definition or non-matching evidence already occupies the base name,
+--   probe deterministic "_2", "_3", ... suffixes.
+-- * Incoherent or unrenderable evidence falls back to the package-local
+--   counter (skipping any reserved base names).
+allocDictId :: Position -> CType -> IType -> Maybe (String, [Id], [IType])
+            -> L a (Id, Bool)
+allocDictId pos ct it mev = do
   mi <- gets packageName
   taken <- gets topLevelBases
+  hashed <- gets knownHashed
   -- setBadId as enumId does: isBadId marks a name the user did not write, and
   -- AConv, SimCCBlock and the instance-hierarchy walks all key on it to keep
   -- these out of Bluesim symbols and Bluetcl's hierarchy.
-  let mk base = qualId mi $ addIdProps (setBadId (mkId pos (mkFString base)))
-                                       [IdPDict, IdPCAF]
+  let mk fs = qualId mi $ addIdProps (setBadId (mkId pos fs)) [IdPDict, IdPCAF]
   case mev of
-    Just ev | let base = evidenceBase t ev,
-              not (mkFString base `S.member` taken)
-            -> return (mk base)
-    _ -> do
+    Just ev@(str, kids, tys) -> do
+      let base0 = evidenceBase ct ev
+          cands = base0 : [ base0 ++ "_" ++ itos k | k <- [2 :: Int ..] ]
+          pick [] = internalError "LiftDicts.allocDictId: exhausted candidates"
+          pick (cand : rest) =
+            let fs = mkFString cand
+            in case M.lookup fs hashed of
+                 Just khd
+                   | khd_itype khd == it
+                   , khd_str khd == str
+                   , khd_kids khd == kids
+                   , khd_tys khd == tys ->
+                       return (khd_id khd, True)
+                   | otherwise -> pick rest
+                 Nothing
+                   | fs `S.member` taken -> pick rest
+                   | otherwise -> do
+                       let lift_i = mk fs
+                           !khd = mkKnownHashedDict lift_i ct it str kids tys
+                       modify (\s -> s {
+                           topLevelBases = S.insert fs (topLevelBases s),
+                           knownHashed = M.insert fs khd (knownHashed s) })
+                       return (lift_i, False)
+      pick cands
+    Nothing -> do
       n <- gets dictNo
-      -- skip any name a user definition already claims
+      -- skip any name a user definition or earlier dictionary already claims
       let fresh k | getIdBase (enumId "lifted_dict" pos k) `S.member` taken
                       = fresh (k + 1)
                   | otherwise = k
           n' = fresh n
-      modify (\s -> s { dictNo = n' + 1 })
-      return $ qualId mi $
-          addIdProps (enumId "lifted_dict" pos n') [IdPDict, IdPCAF]
+          raw_i = enumId "lifted_dict" pos n'
+          fs = getIdBase raw_i
+      modify (\s -> s {
+          dictNo = n' + 1,
+          topLevelBases = S.insert fs (topLevelBases s) })
+      return (qualId mi (addIdProps raw_i [IdPDict, IdPCAF]), False)
 
 isIncoherentDict :: Id -> Bool
 isIncoherentDict i = isDictId i && hasIdProp i IdPIncoherent
@@ -437,20 +512,25 @@ handleDict incoherent p t e = do
                           Just (str, kids, tys) -> [ DefP_DictRendering str,
                                                      DefP_DictKids kids,
                                                      DefP_DictTypes tys ]
-            lift_i0 <- newDictId (getPosition e) t mev
+            (lift_i0, reused) <- allocDictId (getPosition e) t it mev
             let lift_i = if incoherent then addIdProp lift_i0 IdPIncoherent
                          else lift_i0
             when trace_lift_dicts $ traceM $
-                "adding lifted dict: " ++ ppReadable (lift_i, e')
+                (if reused then "reusing lifted dict: " else "adding lifted dict: ")
+                ++ ppReadable (lift_i, e')
             when (trace_lift_dicts && not incoherent && null props) $ traceM $
                 "no evidence rendering (not cross-package dedupable): "
                 ++ ppReadable (lift_i, e')
             let ref = ICon lift_i (ICDef it (icUndetAt (getIdPosition lift_i) it UNoMatch))
-            modify (\s -> s {
-                dictPool = M.insertWith (\new old -> old ++ new) it [(lift_i, ie)] (dictPool s),
-                liftedDefs = IDef lift_i it ie props : liftedDefs s,
-                liftedTypes = M.insert lift_i t (liftedTypes s),
-                convEnv = M.insert lift_i ref (convEnv s) })
+            modify (\s ->
+                let alreadyPresent = lift_i `S.member` presentIds s
+                in s {
+                    dictPool = M.insertWith (\new old -> old ++ new) it [(lift_i, ie)] (dictPool s),
+                    liftedDefs = if alreadyPresent then liftedDefs s
+                                 else IDef lift_i it ie props : liftedDefs s,
+                    presentIds = S.insert lift_i (presentIds s),
+                    liftedTypes = M.insert lift_i t (liftedTypes s),
+                    convEnv = M.insert lift_i ref (convEnv s) })
             recordC lift_i
             return $ Right lift_i
 

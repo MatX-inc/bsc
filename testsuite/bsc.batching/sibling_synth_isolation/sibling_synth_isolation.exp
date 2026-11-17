@@ -1,0 +1,122 @@
+# Verify that context-reducing, typechecking, synthesizing, and wrapper-lifting
+# mkTarget in a Bluespec Classic package produces identical -dctxreduce,
+# -dwrappercomp, .ba, and Verilog output whether mkTarget is compiled alone,
+# preceded by a synthesized sibling module sharing both an ActionValue $stime
+# helper and compound wrapper dictionary evidence, or followed by one, and that
+# multi-module compilation is invariant under reversed and randomized intern
+# ordering.
+
+proc extract_target_ctxred { ctxfile outfile } {
+    set in_fh [open $ctxfile r]
+    set out_fh [open $outfile w]
+    set keep 0
+    while {[gets $in_fh line] >= 0} {
+        set trimmed [string trim $line]
+        if {[regexp {^(sampleTime|widenPair|mkTarget|interface \(?TargetIfc|toTargetIfc|fromTargetIfc|instance Prelude\.Generic SiblingPkg\.TargetIfc)} $line]} {
+            set keep 1
+        } elseif {[regexp {(^(stitchFour|mkExtra|interface \(?ExtraIfc|toExtraIfc|fromExtraIfc|instance Prelude\.Generic SiblingPkg\.ExtraIfc|-----)|properties mkExtra)} $line]} {
+            set keep 0
+        }
+        if {$keep && $trimmed ne "" && $trimmed ne "\x7d" && $trimmed ne "\x7d;"} {
+            puts $out_fh $line
+        }
+    }
+    close $in_fh
+    close $out_fh
+}
+
+proc run_sibling_variant { src outdir extra_opts env_pairs } {
+    bsc_initialize
+    global bsc srcdir subdir
+    set dumpba_bin [which_dumpba]
+    set here [file join [absolute $srcdir] $subdir]
+    set srcpath [file join $here $src]
+    set outpath [file join $here $outdir]
+    file delete -force $outpath
+    file mkdir $outpath
+    set staged [file join $outpath "SiblingPkg.bs"]
+    file copy -force $srcpath $staged
+    set ctxdump [file join $outpath "ctxred.dump"]
+    set wrapdump [file join $outpath "wrap_%m.dump"]
+    set saved [list]
+    foreach {k v} $env_pairs {
+        if {[info exists ::env($k)]} {
+            lappend saved $k 1 $::env($k)
+        } else {
+            lappend saved $k 0 ""
+        }
+        set ::env($k) $v
+    }
+    set status [catch {
+        eval [list exec $bsc -verilog -no-show-timestamps -no-warn-action-shadowing -dctxreduce=$ctxdump -dwrappercomp=$wrapdump -bdir $outpath -vdir $outpath] $extra_opts [list $staged]
+    } msg]
+    foreach {k had val} $saved {
+        if {$had} {
+            set ::env($k) $val
+        } else {
+            unset -nocomplain ::env($k)
+        }
+    }
+    if {$status != 0} {
+        fail "compile $src -> $outdir failed: $msg"
+        return 0
+    }
+    pass "compile $src -> $outdir"
+    extract_target_ctxred $ctxdump [file join $outpath "target.ctxred"]
+    if {[catch {exec $dumpba_bin $outpath/mkTarget.ba > $outpath/mkTarget.ba.txt} dmsg]} {
+        fail "dumpba $outdir/mkTarget.ba failed: $dmsg"
+        return 0
+    }
+    # Normalize only the temporary staging path and source line offset in dumpba
+    # output when comparing across variants where mkTarget sits at a different line.
+    exec sed -E {s|^  path: .*|  path: <staged>|; s|"[^"]*SiblingPkg\.bs", line [0-9]+|"SiblingPkg.bs", line 1|g} \
+        $outpath/mkTarget.ba.txt > $outpath/mkTarget.ba.norm.txt
+    # Extract lifted dictionary references from wrappercomp dump
+    set wfh [open [file join $outpath "wrap_mkTarget.dump"] r]
+    set wtxt [read $wfh]
+    close $wfh
+    set dicts [lsort -unique [regexp -all -inline {SiblingPkg\._(?:dict|lifted_dict)[^\s\)\],]+} $wtxt]]
+    set dfh [open [file join $outpath "wrap_mkTarget.dicts"] w]
+    foreach d $dicts { puts $dfh $d }
+    close $dfh
+    return 1
+}
+
+if { $vtest == 1 } {
+    set here [file join [absolute $srcdir] $subdir]
+    set ok_solo   [run_sibling_variant "SiblingSolo.bs"   "out_solo"   {} {}]
+    set ok_before [run_sibling_variant "SiblingBefore.bs" "out_before" {} {}]
+    set ok_after  [run_sibling_variant "SiblingAfter.bs"  "out_after"  {} {}]
+    set ok_rev    [run_sibling_variant "SiblingBefore.bs" "out_rev"    {-trace-intern-reverse} {}]
+    set ok_rand   [run_sibling_variant "SiblingBefore.bs" "out_rand"   {-trace-intern-random}  {BSC_INTERN_SEED 314159}]
+
+    if {$ok_solo && $ok_before} {
+        compare_file [file join $here out_solo/target.ctxred] [file join $here out_before/target.ctxred]
+        compare_file [file join $here out_solo/mkTarget.v] [file join $here out_before/mkTarget.v]
+        compare_file [file join $here out_solo/mkTarget.ba.norm.txt] [file join $here out_before/mkTarget.ba.norm.txt]
+        compare_file [file join $here out_solo/wrap_mkTarget.dump] [file join $here out_before/wrap_mkTarget.dump]
+        find_regexp [file join $here out_before/mkTarget.v] {TASK_stime}
+        set bfh [open [file join $here out_before/wrap_mkTarget.dump] r]
+        set btxt [read $bfh]
+        close $bfh
+        if {[regexp {_lifted_dict} $btxt]} {
+            fail "out_before/wrap_mkTarget.dump unexpectedly fell back to _lifted_dict"
+        } else {
+            pass "out_before/wrap_mkTarget.dump reuses hashed dictionary names"
+        }
+    }
+    if {$ok_solo && $ok_after} {
+        compare_file [file join $here out_solo/target.ctxred] [file join $here out_after/target.ctxred]
+        compare_file [file join $here out_solo/mkTarget.v] [file join $here out_after/mkTarget.v]
+        compare_file [file join $here out_solo/mkTarget.ba.norm.txt] [file join $here out_after/mkTarget.ba.norm.txt]
+        compare_file [file join $here out_solo/wrap_mkTarget.dump] [file join $here out_after/wrap_mkTarget.dump]
+    }
+    if {$ok_before && $ok_rev} {
+        compare_file [file join $here out_before/ctxred.dump] [file join $here out_rev/ctxred.dump]
+        compare_file [file join $here out_before/wrap_mkTarget.dicts] [file join $here out_rev/wrap_mkTarget.dicts]
+    }
+    if {$ok_before && $ok_rand} {
+        compare_file [file join $here out_before/ctxred.dump] [file join $here out_rand/ctxred.dump]
+        compare_file [file join $here out_before/wrap_mkTarget.dicts] [file join $here out_rand/wrap_mkTarget.dicts]
+    }
+}

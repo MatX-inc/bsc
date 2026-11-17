@@ -318,9 +318,8 @@ mkATFClassPred tag posType cls pIdxs tIdx atfArgs targetType = do
 warnTransitiveIncoherent :: SolvedBinds -> TI SolvedBinds
 warnTransitiveIncoherent sbs = do
     let sbs' = computeTransitiveIncoherent sbs
-        newlyIncoherent = getIncoherentIds sbs' `S.difference` getIncoherentIds sbs
     mapM_ (diagnoseOne (bindTypes sbs') (directIncoherences sbs') (bindClasses sbs'))
-          (S.toList newlyIncoherent)
+          (newlyIncoherentIds sbs sbs')
     return sbs'
   where
     diagnoseOne typeMap diMap clsMap i = do
