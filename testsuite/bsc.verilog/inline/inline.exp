@@ -24,3 +24,48 @@ if {$vtest == 1} {
     find_n_strings sysProbeTest.v {assign x$PROBE = } 1
 }
 
+# Test that inlined RWire and CReg boundary signals are preserved by default,
+# compiler-internal conflict-free check RWires are not emitted, dead retained
+# boundary wires do not mask unused-port deduction, and flag toggles work.
+if {$vtest == 1} {
+    compile_verilog_pass KeepInlinedBoundaries.bs
+    find_n_strings sysKeepInlinedBoundaries.v {assign rw$wget = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {assign rw$whas = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {assign cr$port0__write_1 = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {assign cr$EN_port0__write = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {assign cr$port1__read = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {assign cr$port1__write_1 = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {assign cr$EN_port1__write = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {CAN_FIRE_RL_produce} 0
+
+    find_n_strings sysKeepInlinedConflictFree.v {$whas} 0
+
+    find_n_strings mkKeepInlinedUnusedEn.v {assign w$whas = } 1
+    find_regexp mkKeepInlinedUnusedEn.v {EN_set2 +I +1 unused}
+
+    erase KeepInlinedBoundaries.bo
+    compile_verilog_pass KeepInlinedBoundaries.bs "" -no-keep-inlined-boundaries
+    find_n_strings sysKeepInlinedBoundaries.v {assign rw$wget = } 0
+    find_n_strings sysKeepInlinedBoundaries.v {assign rw$whas = } 0
+    find_n_strings sysKeepInlinedBoundaries.v {assign cr$EN_port0__write = } 0
+    find_n_strings sysKeepInlinedBoundaries.v {assign cr$EN_port1__write = } 0
+    find_n_strings mkKeepInlinedUnusedEn.v {assign w$whas = } 0
+
+    erase KeepInlinedBoundaries.bo
+    compile_verilog_pass KeepInlinedBoundaries.bs sysKeepInlinedBoundaries -keep-fires
+    find_n_strings sysKeepInlinedBoundaries.v {assign CAN_FIRE_RL_produce = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {assign WILL_FIRE_RL_produce = } 1
+
+    erase KeepInlinedBoundaries.bo
+    compile_verilog_pass KeepInlinedBoundaries.bs sysKeepInlinedBoundaries "-keep-fires -no-keep-fires"
+    find_n_strings sysKeepInlinedBoundaries.v {assign CAN_FIRE_RL_produce = } 0
+
+    erase KeepInlinedBoundaries.bo
+    compile_verilog_pass KeepInlinedBoundaries.bs sysKeepInlinedBoundaries "-no-aggressive-conditions -keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched -no-opt-aggressive-inline -no-opt-AndOr -opt-join-defs"
+    find_n_strings sysKeepInlinedBoundaries.v {assign rw$wget = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {assign rw$whas = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {assign cr$EN_port0__write = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {assign cr$EN_port1__write = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {assign CAN_FIRE_RL_produce = } 1
+    find_n_strings sysKeepInlinedBoundaries.v {assign WILL_FIRE_RL_produce = } 1
+}

@@ -10,6 +10,7 @@ import Flags
 import PPrint
 import ErrorUtil(internalError)
 import IntLit(ilValue)
+import Position(noPosition)
 import Id
 import PreIds(idPrimAction, idInout_, idPrimUnit)
 import Pragma(PProp, isAlwaysRdy, isAlwaysEn)
@@ -102,8 +103,11 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _ _) =
             where err = internalError ("getIOProps.getDef failed: " ++
                                        ppString (i, defMap))
 
+        dsMap :: M.Map AId ADef
+        dsMap = M.fromList [(i, d) | d@(ADef i _ _ _) <- ds ]
+
         -- mapping from ids to their defs
-        defMap = M.union (M.fromList [(i, d) | d@(ADef i _ _ _) <- ds ])
+        defMap = M.union dsMap
                          -- XXX do the two maps ever mix?  can we defined
                          -- XXX getIOProps to only work with the ioDefMap?
                          ioDefMap
@@ -289,10 +293,46 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _ _) =
                 M.fromList (submod_pairs ++ output_pairs ++
                             inout_sink_pairs)
 
+        -- Definitions retained solely as debug/waveform handles (e.g. via
+        -- -keep-inlined-boundaries or -keep-fires) have no path to module
+        -- outputs, inouts, submodule ports, or foreign calls, and must not
+        -- mask unused-input deduction.
+        instRoots :: AVInst -> [AId]
+        instRoots inst =
+            aVars inst ++
+            [ mkId noPosition p | (_, p) <- createVerilogNameMapForAVInst flags inst ]
+
+        liveRoots :: [AId]
+        liveRoots =
+            map fst os ++
+            map fst ios ++
+            [ i | ADef i _ _ _ <- io_ds ] ++
+            aVars io_ds ++
+            concatMap instRoots vs ++
+            aVars fs ++
+            concat [ afc_writes fc | (_, fcs) <- fs, fc <- fcs ] ++
+            [ i | ADef i _ _ _ <- ds, hasIdProp i IdP_keepEvenUnused ]
+
+        collectLive :: S.Set AId -> [AId] -> S.Set AId
+        collectLive !seen [] = seen
+        collectLive !seen (x:xs)
+            | S.member x seen = collectLive seen xs
+            | otherwise =
+                let seen' = S.insert x seen
+                in case M.lookup x dsMap of
+                     Nothing -> collectLive seen' xs
+                     Just (ADef _ _ e _) -> collectLive seen' (aVars e ++ xs)
+
+        liveDefIds :: S.Set AId
+        liveDefIds = collectLive S.empty liveRoots
+
+        live_ds :: [ADef]
+        live_ds = [ d | d@(ADef i _ _ _) <- ds, S.member i liveDefIds ]
+
         -- use a map to limit search over all definition
         -- key is AId data is list of defs where key is used.
         defuseMap :: M.Map AId (S.Set AId)
-        defuseMap = getDefUses ds
+        defuseMap = getDefUses live_ds
 
         -- given a signal, this determines its props
         getSignalInProp :: AId -> [VeriPortProp]

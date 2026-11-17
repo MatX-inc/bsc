@@ -24,8 +24,16 @@ if { $vtest == 1 } {
     find_regexp_fail mkMuxFireSurvivor.v {MUX_r\$write_1__SEL_}
 
     # Inlined RWire $whas keeps its non-winner enable role and $wget ranks
-    # below user binders: payload survives and neither $whas nor $wget hijacks
-    # the user binders or firing signal.
+    # below user binders: payload survives, neither $whas nor $wget hijacks
+    # the user binders or firing signal, and default boundary preservation
+    # keeps rw$wget and rw$whas as aliases to the surviving signals.
+    find_regexp mkWhasSurvivor.v {assign payload(__h\d+)?\s*=}
+    find_regexp mkWhasSurvivor.v {WILL_FIRE_RL_drive_rw}
+    find_regexp mkWhasSurvivor.v {assign rw\$wget = payload(__h\d+)?\s*;}
+    find_regexp mkWhasSurvivor.v {assign rw\$whas = CAN_FIRE_RL_drive_rw\s*;}
+
+    erase WhasSurvivor.bo
+    compile_verilog_pass WhasSurvivor.bs mkWhasSurvivor {-keep-fires -aggressive-conditions -no-keep-inlined-boundaries}
     find_regexp mkWhasSurvivor.v {assign payload(__h\d+)?\s*=}
     find_regexp mkWhasSurvivor.v {WILL_FIRE_RL_drive_rw}
     find_regexp_fail mkWhasSurvivor.v {rw\$wget}

@@ -1,5 +1,5 @@
 # Correlate wire type maps with VCDs from both backends. Verilog is run
-# with default flags and -keep-inlined-boundaries; Bluesim needs one
+# with default flags and -no-keep-inlined-boundaries; Bluesim needs one
 # build because it does not perform the corresponding Verilog inlining.
 if {!$vtest || !$ctest} {
     unsupported "vcd_correlation requires Verilog and Bluesim"
@@ -42,7 +42,7 @@ namespace eval vcd_correlation {
         variable testdir
         set output [file join $testdir run_correlation.out]
         set buildlog [file join $testdir vcd_correlation_build.log]
-        foreach name {bo_sim bo_default bo_kib veri_default veri_kib sim
+        foreach name {bo_sim bo_default bo_nkib veri_default veri_nkib sim
                       vcd_correlation_build.log dumpmap_default.out
                       run_correlation.out run_correlation.out.diff-out} {
             file delete -force [file join $testdir $name]
@@ -54,7 +54,7 @@ namespace eval vcd_correlation {
             {SplitPorts sysSplitPortsTest SplitPortsSim.bsv
                 {mkSplitPortsTest main.top.dut}}
         }
-        foreach variant {sim default kib} {
+        foreach variant {sim default nkib} {
             set bo [file join $testdir bo_$variant]
             set extra {}
             if {$variant eq "sim"} {
@@ -63,7 +63,7 @@ namespace eval vcd_correlation {
             } else {
                 set dir [file join $testdir veri_$variant]
                 set backend [list -verilog -vdir $dir]
-                if {$variant eq "kib"} { set extra {-keep-inlined-boundaries} }
+                if {$variant eq "nkib"} { set extra {-no-keep-inlined-boundaries} }
             }
             file mkdir $bo $dir
             set compiler [concat [list $::bsc -bdir $bo] $backend $extra]
@@ -97,7 +97,7 @@ namespace eval vcd_correlation {
                 [list $::bluetcl $script sim-maps $top $modules] \
                 [file join $testdir sim $name.typemap]
         }
-        foreach {variant description} {default {default flags} kib -keep-inlined-boundaries} {
+        foreach {variant description} {default {default flags} nkib -no-keep-inlined-boundaries} {
             append_line $output "########## variant: $variant (Verilog $description; Bluesim is flag-agnostic) ##########"
             foreach testcase $cases {
                 lassign $testcase name top source modules

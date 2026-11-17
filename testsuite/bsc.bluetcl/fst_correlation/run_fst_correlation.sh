@@ -29,7 +29,7 @@ export BSC_VERILOG_SIM=${BSC_VERILOG_SIM:-iverilog}
 # the designs are shared with the VCD correlation test
 SRC=../vcd_correlation
 
-rm -rf bo_sim bo_default bo_kib veri_default veri_kib sim \
+rm -rf bo_sim bo_default bo_nkib veri_default veri_nkib sim \
        fst_correlation_build.log
 mkdir -p bo_sim sim
 
@@ -78,7 +78,7 @@ build_verilog () {
 } > fst_correlation_build.log 2>&1
 
 build_verilog default ""
-build_verilog kib "-keep-inlined-boundaries"
+build_verilog nkib "-no-keep-inlined-boundaries"
 
 # correlate <variant-tag>
 correlate_variant () {
@@ -104,4 +104,4 @@ correlate_variant () {
 }
 
 correlate_variant default "default flags"
-correlate_variant kib     "-keep-inlined-boundaries"
+correlate_variant nkib    "-no-keep-inlined-boundaries"
