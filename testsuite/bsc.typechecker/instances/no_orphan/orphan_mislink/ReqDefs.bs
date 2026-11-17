@@ -1,0 +1,10 @@
+package ReqDefs where
+
+-- A shared request type and a shared interface
+struct Req =
+    addr :: Bit 32
+    dat  :: Bit 64
+  deriving (Bits, Eq)
+
+interface ReqSink =
+    put :: Req -> Action

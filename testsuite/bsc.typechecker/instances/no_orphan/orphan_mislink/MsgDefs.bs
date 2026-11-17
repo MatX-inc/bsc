@@ -1,0 +1,18 @@
+package MsgDefs where
+
+-- Shared protocol types, with derived (generic) Bits instances.
+--
+-- Derived layouts (first field in the most-significant bits):
+--   Hdr:      src [31:24] ++ dst [23:16] ++ len [15:0]           (32 bits)
+--   Msg t:    payload [msb:1] ++ valid [0]                       (width t + 1)
+
+struct Hdr =
+    src :: Bit 8
+    dst :: Bit 8
+    len :: Bit 16
+  deriving (Bits, Eq)
+
+struct Msg t =
+    payload :: t
+    valid   :: Bool
+  deriving (Bits, Eq)

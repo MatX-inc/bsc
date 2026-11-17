@@ -1,0 +1,18 @@
+package SplitRev where
+
+import Vector
+import LaneDefs
+
+-- A second orphan instance for the same head as SplitFwd's.  It has the
+-- same port names and widths, but port _0 carries the highest lane.
+instance SplitPorts QBus (Port (Bit 8), Port (Bit 8), Port (Bit 8), Port (Bit 8)) where
+    splitPorts v = (Port (select v (3 :: Integer)), Port (select v (2 :: Integer)),
+                    Port (select v (1 :: Integer)), Port (select v (0 :: Integer)))
+    unsplitPorts (Port a, Port b, Port c, Port d) =
+        update (update (update (update newVector (3 :: Integer) a)
+                               (2 :: Integer) b)
+                       (1 :: Integer) c)
+               (0 :: Integer) d
+    portNames _ base =
+        Cons (base +++ "_0") (Cons (base +++ "_1")
+            (Cons (base +++ "_2") (Cons (base +++ "_3") Nil)))

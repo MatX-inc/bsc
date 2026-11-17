@@ -1,0 +1,10 @@
+package WireEnc2 where
+
+import MsgDefs
+
+-- A second orphan instance for the same head as WireEnc's.  Its layout
+-- differs from WireEnc's only by swapping src and dst.
+instance Bits (Msg Hdr) 33 where
+    pack m   = pack m.valid ++ m.payload.dst ++ m.payload.src ++ m.payload.len
+    unpack b = Msg { payload = Hdr { src = b[23:16]; dst = b[31:24]; len = b[15:0]; };
+                     valid = unpack b[32:32]; }

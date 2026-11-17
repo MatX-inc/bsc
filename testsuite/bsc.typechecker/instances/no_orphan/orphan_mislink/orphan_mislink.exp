@@ -1,0 +1,18 @@
+# The orphan-defining packages from the reproduction in B-Lang-org/bsc#1061
+# (testsuite/bsc.typechecker/instances/orphan_mislink on the
+# orphan-instance-mislink-repro branch of nanavati/bsc).  Each defines an
+# orphan instance of a no_orphan Prelude class, so none of them compiles.
+
+# The packages they import
+compile_pass_no_warning MsgDefs.bs
+compile_pass_no_warning LaneDefs.bs
+compile_pass_no_warning ReqDefs.bs
+
+# Orphan Bits instances
+compile_fail_error WireEnc.bs T0127
+compile_fail_error WireEnc2.bs T0127
+
+# Orphan SplitPorts instances
+compile_fail_error SplitFwd.bs T0127
+compile_fail_error SplitRev.bs T0127
+compile_fail_error ReqSplit.bs T0127

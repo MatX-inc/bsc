@@ -1,0 +1,6 @@
+package LaneDefs where
+
+import Vector
+
+-- A shared 4-lane bus type
+type QBus = Vector 4 (Bit 8)

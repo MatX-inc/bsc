@@ -1,0 +1,11 @@
+package ReqSplit where
+
+import ReqDefs
+
+-- An orphan instance: SplitPorts is from the Prelude and Req from ReqDefs.
+-- A compile that does not import ReqSplit falls back to the catch-all
+-- SplitPorts a (Port a) instance, and so to an unsplit port for Req.
+instance SplitPorts Req (Port (Bit 32), Port (Bit 64)) where
+    splitPorts r = (Port r.addr, Port r.dat)
+    unsplitPorts (Port a, Port d) = Req { addr = a; dat = d; }
+    portNames _ base = Cons (base +++ "_addr") (Cons (base +++ "_dat") Nil)
