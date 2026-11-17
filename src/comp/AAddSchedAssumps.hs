@@ -18,7 +18,7 @@ import AConv(aConv)
 import ASchedule(extractCFPairsSP, errAction, RAT)
 import AUses(MethodId(..), MethodUsers, UniqueUse(..), MethodUsesList, ucTrue,
              mergeUseMapData, extractCondition, ruleMethodUsesToUUs)
-import AScheduleInfo(AScheduleInfo(..))
+import AScheduleInfo(AScheduleInfo(..), computePortUsePri)
 import VModInfo(VMethodConflictInfo, vSched)
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import PreIds
@@ -97,7 +97,9 @@ aAddSchedAssumps apkg schedule schedinfo = (apkg'', schedinfo')
                       (asi_method_uses_map schedinfo)
                       (M.fromListWith (mergeUseMapData) newUseMapEntries)
         schedinfo' = schedinfo { asi_method_uses_map = newUseMap,
-                                 asi_resource_alloc_table = newRat }
+                                 asi_resource_alloc_table = newRat,
+                                 asi_port_use_pri = computePortUsePri newUseMap newRat
+                                                        (asi_exclusive_rules_db schedinfo) }
 
 
 addCFAssumps :: [ASchedulePragma] -> RuleMethodMap -> OSchedMap
@@ -184,7 +186,9 @@ aAddCFConditionWires errh r alldefs flags apkg schedinfo =
     return (apkg { apkg_rules = rules',
                    apkg_state_instances = oldState ++ newWires },
             schedinfo { asi_resource_alloc_table = newRat,
-                        asi_method_uses_map = newUseMap })
+                        asi_method_uses_map = newUseMap,
+                        asi_port_use_pri = computePortUsePri newUseMap newRat
+                                               (asi_exclusive_rules_db schedinfo) })
 
   where pragmas = apkg_schedule_pragmas apkg
         cfPairs = extractCFPairsSP pragmas

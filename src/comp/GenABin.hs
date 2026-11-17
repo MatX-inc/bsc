@@ -36,7 +36,7 @@ import qualified Data.ByteString.Lazy as BL
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261114-4"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261117-1"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -392,15 +392,15 @@ instance Bin AIFace where
 -- Bin AScheduleInfo
 
 instance Bin AScheduleInfo where
-    writeBytes (AScheduleInfo ws mumap rumap rat erdb sorder sch sgraph rrdb vsi) =
+    writeBytes (AScheduleInfo ws mumap rumap rat erdb pup sorder sch sgraph rrdb vsi) =
         section "AScheduleInfo" $
-        do toBin ws; toBin mumap; toBin rumap; toBin rat; toBin erdb;
+        do toBin ws; toBin mumap; toBin rumap; toBin rat; toBin erdb; toBin pup;
            toBin sorder; toBin sch; toBin sgraph; toBin rrdb; toBin vsi
     readBytes =
         do ws <- fromBin; mumap <- fromBin; rumap <- fromBin; rat <- fromBin;
-           erdb <- fromBin; sorder <- fromBin; sch <- fromBin;
+           erdb <- fromBin; pup <- fromBin; sorder <- fromBin; sch <- fromBin;
            sgraph <- fromBin; rrdb <- fromBin; vsi <- fromBin;
-           return (AScheduleInfo ws mumap rumap rat erdb sorder sch sgraph rrdb vsi)
+           return (AScheduleInfo ws mumap rumap rat erdb pup sorder sch sgraph rrdb vsi)
 
 instance Bin AScheduleErrInfo where
     writeBytes (AScheduleErrInfo ws es mumap rumap rat erdb sorder sch sgraph rrdb vsi) =

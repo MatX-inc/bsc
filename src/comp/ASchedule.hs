@@ -512,8 +512,9 @@ aSchedule errh flags prefix urgency_pairs pps amod = do
                         (Just rrdb) (Just vsi)
                   -> let
 
+                         port_use_pri = computePortUsePri mumap rat erdb
                          schedule_info = AScheduleInfo (map processWarning ws)
-                                             mumap rumap rat erdb
+                                             mumap rumap rat erdb port_use_pri
                                              sorder sch sgraph rrdb vsi
                      in
                          return (Right (schedule_info, amod'))
