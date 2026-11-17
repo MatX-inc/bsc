@@ -90,7 +90,9 @@ instance PPrint AScheduleInfo where
                  | (m, us) <- sortBy (\ (x, _) (y, _) -> compare (ppString x) (ppString y))
                                      (M.toList (asi_method_uses_map asi)) ] $+$
             text "-- rule uses map" $+$
-            pPrint d 0 (asi_rule_uses_map asi) $+$
+            foldr ($+$) empty [ pPrint d 0 r <+> text "->" <+> pPrint d 0 us
+                 | (r, us) <- sortBy (\ (x, _) (y, _) -> compare (ppString x) (ppString y))
+                                     (M.toList (asi_rule_uses_map asi)) ] $+$
             text "-- resource allocation table" $+$
             pPrint d 0 (ratInUseOrder (asi_method_uses_map asi)
                                       (asi_resource_alloc_table asi))
@@ -160,11 +162,16 @@ instance PPrint AScheduleErrInfo where
             (let ppErr = vcat . map text . lines
              in  vcat (map (ppErr . thd) (asei_errors asei))) $+$
             text "-- method uses map" $+$
-            pPrint d 0 (asei_method_uses_map asei) $+$
+            foldr ($+$) empty [ pPrint d 0 m <+> text "->" <+> pPrint d 0 us
+                 | (m, us) <- sortBy (\ (x, _) (y, _) -> compare (ppString x) (ppString y))
+                                     (M.toList (asei_method_uses_map asei)) ] $+$
             text "-- rule uses map" $+$
-            pPrint d 0 (asei_rule_uses_map asei) $+$
+            foldr ($+$) empty [ pPrint d 0 r <+> text "->" <+> pPrint d 0 us
+                 | (r, us) <- sortBy (\ (x, _) (y, _) -> compare (ppString x) (ppString y))
+                                     (M.toList (asei_rule_uses_map asei)) ] $+$
             text "-- resource allocation table" $+$
-            pPrint d 0 (asei_resource_alloc_table asei)
+            pPrint d 0 (fmap (ratInUseOrder (asei_method_uses_map asei))
+                             (asei_resource_alloc_table asei))
             -- no dump of DBs, sched graph and order
             )
 

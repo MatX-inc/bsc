@@ -11,7 +11,7 @@ Error: "RuleBetweenMethods_TwoRulesConflict.bsv", line 37, column 9: (G0100)
   opposite order according to the current module's schedule. See entry #30 in
   the KPNS document for more information and possible solutions.
   The methods and the rules between them are as follows:
-    (sub.method2, sub.method1)
+    (sub.method1, sub.method2)
       RL_sub_rule
   The execution order path is as follows:
     `RL_top_rule_1' -> `RL_top_rule_2' -> `RL_top_rule_3'

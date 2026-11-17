@@ -27,9 +27,19 @@ import qualified Data.Set as S
 import PPrint
 import Pragma(ASchedulePragma)
 import Error(internalError, ErrMsg(..), showErrorList, ErrorHandle)
+import Data.Function(on)
+import Data.List(sortBy)
 import Id
 import Util(unzipWith, ordPairBy)
 import Util(mapSnd)
+
+-- Preserve first-occurrence order while deduplicating via an Ord key.
+dedupOrd :: (Ord a) => [a] -> [a]
+dedupOrd = go S.empty
+  where go _ [] = []
+        go seen (x:xs)
+          | x `S.member` seen = go seen xs
+          | otherwise = x : go (S.insert x seen) xs
 
 -- | Method name mapped to condition of usage
 type MethodCondMap = M.Map AMethodId AExpr
@@ -84,8 +94,9 @@ aAddSchedAssumps apkg schedule schedinfo = (apkg'', schedinfo')
                          [(n, methodConflictInfo (vSched vmi))
                              | AVInst { avi_vname = n, avi_vmi = vmi }  <- insts ]
         insts = apkg_state_instances apkg
+        instOrder = map avi_vname insts
         apkg' = apkg
-        doCFAssumps = addCFAssumps pragmas ruleMethodMap instSchedMap cmpRule
+        doCFAssumps = addCFAssumps pragmas ruleMethodMap instSchedMap instOrder cmpRule
         (rs', newUseInfos) = unzip (map doCFAssumps (apkg_rules apkg'))
         newUseInfo = concat newUseInfos
         apkg'' = apkg' { apkg_rules = rs' }
@@ -100,10 +111,10 @@ aAddSchedAssumps apkg schedule schedinfo = (apkg'', schedinfo')
                                  asi_resource_alloc_table = newRat }
 
 
-addCFAssumps :: [ASchedulePragma] -> RuleMethodMap -> OSchedMap
+addCFAssumps :: [ASchedulePragma] -> RuleMethodMap -> OSchedMap -> [AId]
              -> (ARuleId -> ARuleId -> Ordering) -> ARule
              -> (ARule, [(ARuleId, MethodId, UniqueUse)])
-addCFAssumps pragmas ruleMethodMap instSchedMap cmpRule = proc_rule
+addCFAssumps pragmas ruleMethodMap instSchedMap instOrder cmpRule = proc_rule
   where cf_pairs = extractCFPairsSP pragmas
         sorted_cf_pairs = map (ordPairBy cmpRule) cf_pairs
         check_pairs = [ (a, [b]) | (a, b) <- sorted_cf_pairs ]
@@ -112,16 +123,17 @@ addCFAssumps pragmas ruleMethodMap instSchedMap cmpRule = proc_rule
           case (M.lookup rid check_map) of
             Nothing -> (r, [])
             Just rids ->
-             let (new_assumps, useinfos) = unzip (mkCFAssumps ruleMethodMap instSchedMap rid rids)
+             let (new_assumps, useinfos) = unzip (mkCFAssumps ruleMethodMap instSchedMap instOrder rid rids)
              in (r { arule_assumps = arule_assumps r ++ new_assumps }, useinfos)
 
-mkCFAssumps :: RuleMethodMap -> OSchedMap -> ARuleId -> [ARuleId]
+mkCFAssumps :: RuleMethodMap -> OSchedMap -> [AId] -> ARuleId -> [ARuleId]
             -> [(AAssumption, (ARuleId, MethodId, UniqueUse))]
-mkCFAssumps ruleMethodMap instSchedMap rid rids = concatMap (mkCFAssump ruleMethodMap instSchedMap rid) rids
+mkCFAssumps ruleMethodMap instSchedMap instOrder rid rids =
+    concatMap (mkCFAssump ruleMethodMap instSchedMap instOrder rid) rids
 
-mkCFAssump :: RuleMethodMap -> OSchedMap -> ARuleId -> ARuleId
+mkCFAssump :: RuleMethodMap -> OSchedMap -> [AId] -> ARuleId -> ARuleId
            -> [(AAssumption, (ARuleId, MethodId, UniqueUse))]
-mkCFAssump ruleMethodMap instSchedMap r1 r2 = concat $ M.elems overlapMap
+mkCFAssump ruleMethodMap instSchedMap instOrder r1 r2 = concat orderedOverlaps
   where
     omcm_r1 = getOMCond r1
     omcm_r2 = getOMCond r2
@@ -133,6 +145,9 @@ mkCFAssump ruleMethodMap instSchedMap r1 r2 = concat $ M.elems overlapMap
                     Just m -> m
     err r = internalError ("AAddSchedAssumps: no OMCondMap: " ++ ppReadable r)
     overlapMap = M.intersectionWithKey checkMethodCalls omcm_r1 omcm_r2
+    instSet = S.fromList instOrder
+    extraInsts = sortBy cmpIdByName [ o | o <- M.keys overlapMap, not (o `S.member` instSet) ]
+    orderedOverlaps = [ xs | o <- instOrder ++ extraInsts, Just xs <- [M.lookup o overlapMap] ]
     -- methods are ok if they appear in the CF list in either order
     -- or if they appear in the SB or SBR list in the correct execution order
     -- remember r2 executes before r1!
@@ -147,9 +162,9 @@ mkCFAssump ruleMethodMap instSchedMap r1 r2 = concat $ M.elems overlapMap
         sched = case (M.lookup o instSchedMap) of
                   Nothing -> internalError ("AddSchedAssumps: no VSchedInfo: " ++ ppReadable o)
                   Just sched -> sched
-        -- convert to lists to do a cross-product
-        newAssumps = [ (assump, useinfo) | (m1, c1) <- M.toList methCondMap1,
-                                           (m2, _) <- M.toList methCondMap2,
+        -- convert to lists in lexical method order to do a cross-product
+        newAssumps = [ (assump, useinfo) | (m1, c1) <- sortBy (cmpIdByName `on` fst) (M.toList methCondMap1),
+                                           (m2, _) <- sortBy (cmpIdByName `on` fst) (M.toList methCondMap2),
                                            not (isOKPair sched (m1, m2)),
                                            let obj = mkCFCondWireInstId r2 o m2,
                                            -- extracts m2's condition from the wire
@@ -180,7 +195,7 @@ aAddCFConditionWires errh r alldefs flags apkg schedinfo =
    else do
     rWireInstFn <- getRWireInstFn errh flags r alldefs
     let mkWireInst r (MethodId obj meth)= rWireInstFn (mkCFCondWireInstId r obj meth)
-    let newWires = concatMap (buildWireInsts ruleMethodMap mkWireInst) (S.toList cfRules)
+    let newWires = concatMap (buildWireInsts ruleMethodMap mkWireInst) cfRulesList
     return (apkg { apkg_rules = rules',
                    apkg_state_instances = oldState ++ newWires },
             schedinfo { asi_resource_alloc_table = newRat,
@@ -188,7 +203,8 @@ aAddCFConditionWires errh r alldefs flags apkg schedinfo =
 
   where pragmas = apkg_schedule_pragmas apkg
         cfPairs = extractCFPairsSP pragmas
-        cfRules = S.fromList ((map fst cfPairs) ++ (map snd cfPairs))
+        cfRulesList = dedupOrd ((map fst cfPairs) ++ (map snd cfPairs))
+        cfRules = S.fromList cfRulesList
         ruleMethodMap :: RuleMethCondMap
         ruleMethodMap = M.map (buildMethCondList .
                                ruleMethodUsesToUUs . snd)
@@ -213,8 +229,11 @@ useInfoToUseMapEntry :: (ARuleId, MethodId, UniqueUse)
 useInfoToUseMapEntry (rid, mid, u) = (mid, [(u, ([],[rid],[]))])
 
 buildMethCondList :: MethodUsesList -> [(MethodId, AExpr)]
-buildMethCondList uses = M.toList (M.fromListWith aOr uses')
+buildMethCondList uses =
+    [ (mid, M.findWithDefault err mid condMap) | mid <- dedupOrd (map fst uses') ]
   where uses'   = mapSnd buildUseConditions uses
+        condMap = M.fromListWith (flip aOr) uses'
+        err     = internalError "AAddSchedAssumps.buildMethCondList"
 
 -- | We need a function that will take an id and make us the RWire instance we want.
 -- It's a little more complicated than you might expect

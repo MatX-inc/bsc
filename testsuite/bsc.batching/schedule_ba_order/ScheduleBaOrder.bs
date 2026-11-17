@@ -1,0 +1,60 @@
+package ScheduleBaOrder where
+
+import RegFile
+
+interface ScheduleBaIfc =
+  putZeta :: Bit 4 -> Bit 16 -> Action
+  putAlpha :: Bit 4 -> Bit 16 -> Action
+  getOmega :: Bit 16
+  getBeta :: Bit 16
+
+{-# verilog mkScheduleBaOrder #-}
+mkScheduleBaOrder :: Module ScheduleBaIfc
+mkScheduleBaOrder = module
+  store :: RegFile (Bit 4) (Bit 16) <- mkRegFileFull
+  selB :: Reg (Bit 2) <- mkReg 0
+  selA :: Reg (Bit 2) <- mkReg 1
+  accZ :: Reg (Bit 16) <- mkReg 0
+  accM :: Reg (Bit 16) <- mkReg 0
+  accA :: Reg (Bit 16) <- mkReg 0
+  accP :: Reg (Bit 16) <- mkReg 0
+
+  let cfLeft =
+        rules
+          "cfZeta": when (selB == 0 && selA == 1) || (selB == 2 && selA == 3)
+            ==> store.upd 0 (accZ + 1)
+      cfRight =
+        rules
+          "cfAlpha": when (selB == 1 && selA == 1) || (selB == 0 && selA == 0)
+            ==> store.upd 1 (accZ + 2)
+  addRules (rJoinConflictFree cfLeft cfRight)
+
+  let meLeft =
+        rules
+          "meZeta": when selB == 3 && selA == 0 ==> accM := store.sub (selB ++ selA)
+      meRight =
+        rules
+          "meAlpha": when selB == 0 && selA == 3 ==> accM := store.sub (selA ++ selB)
+  addRules (rJoinMutuallyExclusive meLeft meRight)
+
+  let urgHi =
+        rules
+          "urgZeta": when selB[0:0] == 1 ==> accA := accA + store.sub (0 ++ selB) + 1
+      urgLo =
+        rules
+          "urgAlpha": when selA[0:0] == 1 ==> accA := accA + store.sub (0 ++ selA) + 2
+  addRules (rJoinDescendingUrgency urgHi urgLo)
+
+  let execFirst =
+        rules
+          "execZeta": when True ==> selB := selB + 1
+      execSecond =
+        rules
+          "execAlpha": when True ==> selA := selA + 1
+  addRules (rJoinExecutionOrder execFirst execSecond)
+
+  interface
+    putZeta idx val = store.upd idx val
+    putAlpha idx val = accP := store.sub idx + val
+    getOmega = store.sub (0 ++ selB) + accM
+    getBeta = store.sub (1 ++ selA) + accA

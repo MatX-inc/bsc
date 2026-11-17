@@ -1,0 +1,103 @@
+# Issue: UseCond conjunction emission and parameterized method-use numbering
+# (AUses), schedule / .ba metadata tables (ASchedule), conflict_free and
+# mutually_exclusive runtime assumption emission (AAddSchedAssumps),
+# always_ready proof obligations (AAddScheduleDefs), and SystemC wrapper port
+# lists (SystemCWrapper) depended on Ord Id (intern) order.
+# Fix: UseCond records insertion order, mergeExprUsesM and schedule metadata
+# sort by name rather than Ord Id, and AAddScheduleDefs / SystemCWrapper follow
+# interface declaration order.
+
+set src ScheduleBaOrder.bs
+set ar_src AlwaysReadyOrder.bs
+
+# 1. -show-schedule, R0001/R0002 runtime assumptions, and .ba schedule/uses
+# metadata invariance on mkScheduleBaOrder
+proc extract_sched_assumps { vfile outfile } {
+    set fd_in [open $vfile r]
+    set fd_out [open $outfile w]
+    while { [gets $fd_in line] >= 0 } {
+        if { [string first "\$display(" $line] >= 0 } {
+            puts $fd_out $line
+        }
+    }
+    close $fd_in
+    close $fd_out
+}
+
+proc extract_ba_sched_section { dumpfile outfile } {
+    set fd_in [open $dumpfile r]
+    set fd_out [open $outfile w]
+    set keep 0
+    while { [gets $fd_in line] >= 0 } {
+        if { [string equal $line "  -- AP rules"] } {
+            set keep 1
+        }
+        if { $keep } {
+            puts $fd_out $line
+        }
+    }
+    close $fd_in
+    close $fd_out
+}
+
+erase ScheduleBaOrder.bo
+erase mkScheduleBaOrder.ba
+with_normal_intern_order {
+    compile_verilog_schedule_pass $src mkScheduleBaOrder "-elab"
+}
+extract_sched_assumps mkScheduleBaOrder.v mkScheduleBaOrder.normal.assumps
+move [make_bsc_sched_output_name $src] ScheduleBaOrder.normal.sched-out
+if { [do_internal_checks] } {
+    set ba_abs [file join [absolute $srcdir] $subdir mkScheduleBaOrder.ba]
+    dumpba $ba_abs
+    extract_ba_sched_section [make_dumpba_output_name $ba_abs] mkScheduleBaOrder.normal.ba-sched
+}
+
+erase ScheduleBaOrder.bo
+erase mkScheduleBaOrder.ba
+with_normal_intern_order {
+    compile_verilog_schedule_pass $src mkScheduleBaOrder "-elab -trace-intern-reverse"
+}
+extract_sched_assumps mkScheduleBaOrder.v mkScheduleBaOrder.rev.assumps
+compare_file mkScheduleBaOrder.rev.assumps mkScheduleBaOrder.normal.assumps
+compare_file [make_bsc_sched_output_name $src] ScheduleBaOrder.normal.sched-out
+if { [do_internal_checks] } {
+    set ba_abs [file join [absolute $srcdir] $subdir mkScheduleBaOrder.ba]
+    dumpba $ba_abs
+    extract_ba_sched_section [make_dumpba_output_name $ba_abs] mkScheduleBaOrder.rev.ba-sched
+    compare_file mkScheduleBaOrder.rev.ba-sched mkScheduleBaOrder.normal.ba-sched
+} else {
+    unsupported "`mkScheduleBaOrder.ba' normal and reversed dumps compared (internal checks off)"
+}
+
+# 2. always_ready diagnostic (G0006) order invariance on mkAlwaysReadyOrder
+erase AlwaysReadyOrder.bo
+with_normal_intern_order {
+    compile_verilog_fail_error $ar_src G0006 2 mkAlwaysReadyOrder
+}
+move [make_bsc_vcomp_output_name $ar_src] AlwaysReady.normal.vcomp-out
+
+erase AlwaysReadyOrder.bo
+with_normal_intern_order {
+    compile_verilog_fail_error $ar_src G0006 2 mkAlwaysReadyOrder "-trace-intern-reverse"
+}
+compare_file [make_bsc_vcomp_output_name $ar_src] AlwaysReady.normal.vcomp-out
+
+# 3. SystemC wrapper header order invariance when SystemC tests are enabled
+if { ($ctest == 1) && ($systemctest == 1) } {
+    erase ScheduleBaOrder.bo
+    erase mkScheduleBaOrder.ba
+    with_normal_intern_order {
+        compile_object_pass $src mkScheduleBaOrder
+        create_systemc_objects_pass mkScheduleBaOrder.ba mkScheduleBaOrder
+    }
+    move mkScheduleBaOrder_systemc.h mkScheduleBaOrder_systemc.normal.h
+
+    erase ScheduleBaOrder.bo
+    erase mkScheduleBaOrder.ba
+    with_normal_intern_order {
+        compile_object_pass $src mkScheduleBaOrder "-trace-intern-reverse"
+        create_systemc_objects_pass mkScheduleBaOrder.ba mkScheduleBaOrder "-trace-intern-reverse"
+    }
+    compare_file mkScheduleBaOrder_systemc.h mkScheduleBaOrder_systemc.normal.h
+}
