@@ -229,7 +229,11 @@ export default grammar({
 
     class_definition: $ => seq(
       'class',
-      optional(choice('coherent', 'incoherent')),
+      // "orphan" may come before or after the coherence annotation
+      optional(choice(
+        seq(choice('coherent', 'incoherent'), optional('orphan')),
+        seq('orphan', optional(choice('coherent', 'incoherent'))),
+      )),
       optional(seq('(', $.constructor_identifier, '::', $._type, ')')),
       optional($.class_context),
       field('name', $.constructor_identifier),

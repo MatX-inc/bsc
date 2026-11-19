@@ -9,6 +9,7 @@
   "class"
   "coherent"
   "incoherent"
+  "orphan"
   "instance"
   "deriving"
   "interface"
