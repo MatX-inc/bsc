@@ -1,4 +1,4 @@
-package SplitIfNested(sysIfTest) where
+package SplitIfNested(sysIfTest, IfTest(..)) where
 
 interface IfTest =
   flip_a :: Action

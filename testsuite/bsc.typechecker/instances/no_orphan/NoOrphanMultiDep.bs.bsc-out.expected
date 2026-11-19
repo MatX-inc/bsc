@@ -1,0 +1,12 @@
+checking package dependencies
+compiling NoOrphanMultiDep.bs
+Error: "NoOrphanMultiDep.bs", line 9, column 9: (T0127)
+  Exporting orphan typeclass instance NoOrphanClasses.NoOrphanMutual
+  NoOrphanMultiDep.T Prelude.Bool. The instance's typeclass as well as all of
+  the instance's source type parameters are defined in other packages. This
+  can lead to confusing and inconsistent instance resolution if the orphan
+  instance is not imported everywhere it could be used.
+  The typeclass NoOrphanClasses.NoOrphanMutual is not declared orphan, so its
+  instances must be defined in the package that defines the typeclass, or in
+  one that defines, for each of the typeclass's dependencies, a type in the
+  instance's parameters that the dependency does not determine.

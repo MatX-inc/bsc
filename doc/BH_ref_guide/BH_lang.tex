@@ -1192,10 +1192,15 @@ The general concepts behind classes, instances, overloading etc.
 were introduced in section {\ref{sec-overloading}}.  A new class is
 declared using the following:
 
-\gram{topDefn}{\term{class} \opt{\term{coherent} {\alt} \term{incoherent}} \opt{\nterm{context} \term{=>}} \nterm{classId} \many{\nterm{tyVarId}} \opt{\term{|} \nterm{funDep}}
+\gram{topDefn}{\term{class} \opt{\nterm{classAnnos}} \opt{\nterm{context} \term{=>}} \nterm{classId} \many{\nterm{tyVarId}} \opt{\term{|} \nterm{funDep}}
         \term{where} \term{\{}} \\
 \grammore{ \many{\nterm{varId} \term{::} \nterm{ctxType} \term{;}} } \\
 \grammore{ \term{\}} }
+
+\gram{classAnnos}{ \nterm{coherenceAnno} \opt{\term{orphan}} } \\
+\gramalt          { \term{orphan} \opt{\nterm{coherenceAnno}} }
+
+\gram{coherenceAnno}{ \term{coherent} {\alt} \term{incoherent} }
 
 {\nterm{classId}} is the newly declared class.  It can be polymorphic,
 if {\nterm{tyVarId}}'s exist; these are called the {\emph{parameters}}
@@ -1301,6 +1306,39 @@ Example:
 \begin{verbatim}
  class incoherent Pick a b | a -> b where
      pick :: a -> b
+\end{verbatim}
+
+\index{orphan@\te{orphan} (keyword)}
+\index{orphan instance}
+An instance is an {\emph{orphan}} when its class and all of its source
+types are defined in packages other than the one containing the
+instance.  The source types are the types in the parameters that the
+class's dependencies do not determine.  If the class has several
+dependencies, each has its own source types (the parameters that it
+does not determine), and the instance is an orphan if the class and
+the source types of any one dependency are all defined elsewhere.  An
+orphan is used only where its package is imported, so two packages
+that use the same type can silently resolve the class to different
+instances.  An orphan instance is therefore an error (T0127):
+instances must be defined in the package that defines the class or one
+of the instance's source types (for each dependency, if there are
+several).  To give a type a different instance, wrap it in a new type
+defined alongside the instance.  The optional {\te{orphan}}
+annotation, written before or after any coherence annotation, allows
+orphan instances of the class, and makes T0127 a warning for them.
+For now, and for {\te{Bits}} only, the error can be demoted to a
+warning with {\te{-demote-errors T0127}}, so that existing code can
+migrate.  This will change in a future release, which will make an
+orphan {\te{Bits}} instance an error that cannot be demoted.  Because
+the warning for a class declared {\te{orphan}} has the same tag,
+demoting T0127 also keeps {\te{-promote-warnings}} from turning those
+warnings into errors.
+
+Example (from the Prelude):
+\begin{verbatim}
+ class orphan Eq a where
+     (==) :: a -> a -> Bool
+     (/=) :: a -> a -> Bool
 \end{verbatim}
 
 % ----------------------------------------------------------------

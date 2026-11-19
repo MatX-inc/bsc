@@ -198,23 +198,23 @@ data CClassAnnots = CClassAnnots
     { -- Just True = incoherent, Just False = coherent,
       -- Nothing = follow the -incoherent-instance-matches flag
       cca_incoherent :: Maybe Bool
-      -- an orphan instance of the class is an error (T0127), not a warning;
-      -- true unless the class is declared "orphan"
-    , cca_no_orphan  :: Bool
+      -- the class is declared "orphan": an orphan instance of it is a
+      -- warning (T0127), not an error
+    , cca_orphan     :: Bool
     } deriving (Eq, Ord, Show)
 
 -- The annotations of a class declared with none
 noCClassAnnots :: CClassAnnots
-noCClassAnnots = CClassAnnots { cca_incoherent = Nothing, cca_no_orphan = True }
+noCClassAnnots = CClassAnnots { cca_incoherent = Nothing, cca_orphan = False }
 
 -- The annotation keywords, in the order they are printed
 cClassAnnotWords :: CClassAnnots -> [String]
-cClassAnnotWords (CClassAnnots incoh no_orphan) =
+cClassAnnotWords (CClassAnnots incoh orphan) =
     [ w | Just b <- [incoh], let w = if b then "incoherent" else "coherent" ] ++
-    [ "orphan" | not no_orphan ]
+    [ "orphan" | orphan ]
 
 instance NFData CClassAnnots where
-    rnf (CClassAnnots incoh no_orphan) = rnf2 incoh no_orphan
+    rnf (CClassAnnots incoh orphan) = rnf2 incoh orphan
 
 -- Top level definition
 data CDefn

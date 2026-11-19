@@ -2,8 +2,9 @@
 # (T0127) unless the class is declared "orphan", which makes it a warning.
 # The "orphan" annotation may come before or after "coherent"/"incoherent".
 #
-# A source compiled twice is compared against a second expected file
-# (<source>.demote.bsc-out.expected) for its -demote-errors run.
+# A source compiled twice has the output of its -demote-errors run moved
+# to <source>.demote.bsc-out, so that it does not replace the output (or
+# the differences) of the first run.
 
 # ----------
 # Classic
@@ -17,7 +18,8 @@ compile_fail_error NoOrphanInsts.bs T0127 3
 compare_file NoOrphanInsts.bs.bsc-out
 # ... which cannot be demoted (S0094 reports the refused demotion)
 compile_fail_error NoOrphanInsts.bs T0127 3 {-demote-errors T0127}
-compare_file NoOrphanInsts.bs.bsc-out NoOrphanInsts.bs.demote.bsc-out.expected
+move NoOrphanInsts.bs.bsc-out NoOrphanInsts.bs.demote.bsc-out
+compare_file NoOrphanInsts.bs.demote.bsc-out
 
 # "orphan" alone and in either order with a coherence annotation: an
 # orphan instance of each class is a warning
@@ -37,6 +39,36 @@ compile_pass_no_warning NoOrphanAbstract.bs
 compile_fail_error NoOrphanAbstractInst.bs T0127
 compare_file NoOrphanAbstractInst.bs.bsc-out
 
+# An orphan instance is an error even if the package does not export it
+# (here because its head names types that the package does not export)
+compile_fail_error NoOrphanHidden.bs T0127 2
+compare_file NoOrphanHidden.bs.bsc-out
+
+# With several dependencies, the package must define one of the source
+# types of each dependency
+compile_fail_error NoOrphanMultiDep.bs T0127
+compare_file NoOrphanMultiDep.bs.bsc-out
+
+# The orphan error is reported along with export errors
+compile_fail_error NoOrphanExportError.bs T0010
+compare_file NoOrphanExportError.bs.bsc-out
+
+# The error comes before code generation, so no Verilog file is written
+erase mkNoOrphanSynth.v
+compile_verilog_fail_error NoOrphanSynth.bs T0127
+if { [file exists [join [concat $subdir mkNoOrphanSynth.v] "/"]] } {
+    fail "mkNoOrphanSynth.v should not exist"
+} else {
+    pass "mkNoOrphanSynth.v does not exist"
+}
+
+# With -continue-after-errors, the error does not stop the compile:
+# NoOrphanContinue.bo is written, and the package that imports it is
+# compiled (and reports its own error)
+erase NoOrphanContinue.bo
+compile_fail_error NoOrphanContinueUse.bs T0020 1 {-continue-after-errors}
+compare_file NoOrphanContinueUse.bs.bsc-out
+
 # The coherence annotation keeps its meaning in either order
 compile_fail_error OrphanCoherent.bs T0030 2 {-incoherent-instance-matches}
 compile_pass OrphanIncoherent.bs
@@ -53,7 +85,8 @@ compile_pass_no_warning NoOrphanClassesBSV.bsv
 compile_fail_error NoOrphanInstsBSV.bsv T0127 3
 compare_file NoOrphanInstsBSV.bsv.bsc-out
 compile_fail_error NoOrphanInstsBSV.bsv T0127 3 {-demote-errors T0127}
-compare_file NoOrphanInstsBSV.bsv.bsc-out NoOrphanInstsBSV.bsv.demote.bsc-out.expected
+move NoOrphanInstsBSV.bsv.bsc-out NoOrphanInstsBSV.bsv.demote.bsc-out
+compare_file NoOrphanInstsBSV.bsv.demote.bsc-out
 
 compile_pass_no_warning OrphanClassesBSV.bsv
 compile_pass_warning OrphanInstsBSV.bsv T0127 5
@@ -73,10 +106,12 @@ compile_pass_no_warning NoBitsType.bs
 compile_fail_error BitsOrphan.bs T0127
 compare_file BitsOrphan.bs.bsc-out
 compile_pass_warning BitsOrphan.bs T0127 1 {-demote-errors T0127}
-compare_file BitsOrphan.bs.bsc-out BitsOrphan.bs.demote.bsc-out.expected
+move BitsOrphan.bs.bsc-out BitsOrphan.bs.demote.bsc-out
+compare_file BitsOrphan.bs.demote.bsc-out
 
 # Nor is SplitPorts, and this error cannot be demoted
 compile_fail_error SplitPortsOrphan.bs T0127
 compare_file SplitPortsOrphan.bs.bsc-out
 compile_fail_error SplitPortsOrphan.bs T0127 1 {-demote-errors T0127}
-compare_file SplitPortsOrphan.bs.bsc-out SplitPortsOrphan.bs.demote.bsc-out.expected
+move SplitPortsOrphan.bs.bsc-out SplitPortsOrphan.bs.demote.bsc-out
+compare_file SplitPortsOrphan.bs.demote.bsc-out

@@ -483,7 +483,8 @@ class Literal a where
     fromInteger    :: Integer -> a
     inLiteralRange :: a -> Integer -> Bool
 
-class RealLiteral a where
+-- Declared orphan: users define instances for types from other packages
+class orphan RealLiteral a where
     fromReal       :: Real -> a
 
 class SizedLiteral a n | a -> n where
@@ -4561,7 +4562,9 @@ instance (FShow a) => FShow (List a)
 -- ModIfc <- mkMod (modParams) ; -- construct the module
 
 
-class coherent DefaultValue a where
+-- Declared orphan: users define default values for types from other
+-- packages
+class coherent orphan DefaultValue a where
    defaultValue :: a
 
 -- Any type in the Literal class can have a default value -- simply 0

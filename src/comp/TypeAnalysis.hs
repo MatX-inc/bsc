@@ -54,7 +54,7 @@ data TypeAnalysis =
     | Enum        Id [Id] (Maybe Integer)
     | TaggedUnion Id Kind [Id] Bool [(Id, Type, Maybe Integer)] (Maybe Integer)
     | Interface   Id Kind [Id] Bool [(Bool, Id, Qual Type, [IfcPragma])] [IfcPragma]
-    | Typeclass   Id Kind [Id] [Type] [[Bool]] (Maybe Bool) [Qual Type] [(Id, Qual Type)]
+    | Typeclass   Id Kind [Id] [Type] [[Bool]] (Maybe Bool) Bool [Qual Type] [(Id, Qual Type)]
 
 
 -- ---------------
@@ -301,7 +301,8 @@ analyzeType' flags symtab unqual_ty primpair_is_interface = doRight analyze (kin
             insts = let mkInst (Inst _ _ (qs :=> p) _) = (qs :=> predToType p)
                     in  map mkInst (getInsts cls)
             allow = allowIncoherent cls
-        in  Right $ Typeclass qi k vs ps fdeps allow insts (map mkPair fieldInfos)
+            orphan = allowOrphan cls
+        in  Right $ Typeclass qi k vs ps fdeps allow orphan insts (map mkPair fieldInfos)
     -- associated type function: treat like an abstract/primary type
     -- XXX we should probably report some additional info here, like what class it's associated with, etc.
     analyzeNonNumTCon t qi k vs as isC (TIatf {}) =

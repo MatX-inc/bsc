@@ -1,4 +1,4 @@
-package IfNested(sysIfTest) where
+package IfNested(sysIfTest, IfTest(..)) where
 
 interface IfTest =
   flip_a :: Action

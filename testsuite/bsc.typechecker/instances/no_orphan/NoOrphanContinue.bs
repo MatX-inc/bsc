@@ -1,0 +1,9 @@
+package NoOrphanContinue where
+
+import NoOrphanClasses
+
+instance NoOrphan (Maybe Integer) where
+  noOrphan _ = True
+
+c :: Bool
+c = noOrphan (Nothing :: Maybe Integer)

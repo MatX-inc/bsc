@@ -1,0 +1,20 @@
+checking package dependencies
+compiling NoOrphanHidden.bs
+Error: "NoOrphanHidden.bs", line 11, column 9: (T0127)
+  Exporting orphan typeclass instance NoOrphanClasses.NoOrphan (Prelude.Maybe
+  Prelude.Bool). The instance's typeclass as well as all of the instance's
+  source type parameters are defined in other packages. This can lead to
+  confusing and inconsistent instance resolution if the orphan instance is not
+  imported everywhere it could be used.
+  The typeclass NoOrphanClasses.NoOrphan is not declared orphan, so its
+  instances must be defined in the package that defines the typeclass or one
+  of the instance's source types.
+Error: "NoOrphanHidden.bs", line 17, column 9: (T0127)
+  Exporting orphan typeclass instance NoOrphanClasses.NoOrphanDep Prelude.Bool
+  NoOrphanHidden.Hidden. The instance's typeclass as well as all of the
+  instance's source type parameters are defined in other packages. This can
+  lead to confusing and inconsistent instance resolution if the orphan
+  instance is not imported everywhere it could be used.
+  The typeclass NoOrphanClasses.NoOrphanDep is not declared orphan, so its
+  instances must be defined in the package that defines the typeclass or one
+  of the instance's source types.

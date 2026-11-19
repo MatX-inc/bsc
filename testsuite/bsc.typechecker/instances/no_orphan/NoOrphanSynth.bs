@@ -1,0 +1,10 @@
+package NoOrphanSynth where
+
+import NoOrphanClasses
+
+instance NoOrphan (Maybe Integer) where
+  noOrphan _ = True
+
+{-# verilog mkNoOrphanSynth #-}
+mkNoOrphanSynth :: Module Empty
+mkNoOrphanSynth = module { }

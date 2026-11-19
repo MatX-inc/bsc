@@ -25,7 +25,7 @@ of the connection.  The \te{Connectables} type class defines the module
 \index{Connectable@\te{Connectable} (class)}
 \index[typeclass]{Connectable}
 \begin{libverbatim}
-typeclass Connectable#(type a, type b);
+typeclass orphan Connectable#(type a, type b);
     module mkConnection#(a x1, b x2)(Empty);
 endtypeclass
 \end{libverbatim}

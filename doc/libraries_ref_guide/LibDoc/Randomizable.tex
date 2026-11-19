@@ -24,7 +24,7 @@ random values of a given data type.
 The \te{Randomizable} package includes the \te{Randomizable} typeclass.
 
 \begin{verbatim}
-typeclass Randomizable#(type t);
+typeclass orphan Randomizable#(type t);
    module mkRandomizer (Randomize#(t));
 endtypeclass
 \end{verbatim}

@@ -193,7 +193,7 @@ data Class
             allowIncoherent :: Maybe Bool, -- Just False = always coherent
                                            -- Just True  = always incoherent
                                            -- Nothing = flag-controlled
-            noOrphan :: Bool, -- an orphan instance is an error (T0127), not a warning
+            allowOrphan :: Bool, -- an orphan instance is a warning (T0127), not an error
             isComm :: Bool, -- if the class is commutative (used for Add and Mul)
             pkg_src :: Maybe Id, -- package from which this class came
             assocTypes :: [(TyCon, [Int], Int)]
@@ -239,7 +239,7 @@ instance NFData Class where
             rnf (inputPositions c)  `seq`
             -- funDeps2, genInsts, getInsts intentionally not forced
             rnf (allowIncoherent c) `seq`
-            rnf (noOrphan c)        `seq`
+            rnf (allowOrphan c)     `seq`
             rnf (isComm c)          `seq`
             rnf (pkg_src c)         `seq`
             rnf (assocTypes c)

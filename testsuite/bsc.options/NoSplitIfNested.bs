@@ -1,4 +1,4 @@
-package NoSplitIfNested(sysIfTest) where
+package NoSplitIfNested(sysIfTest, IfTest(..)) where
 
 interface IfTest =
   flip_a :: Action

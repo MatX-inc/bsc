@@ -4541,13 +4541,18 @@ selection rules and exactly what the annotation changes.
 \index{orphan@\te{orphan} (typeclass annotation)}
 \index{orphan instance}
 An instance is an \emph{orphan} when its typeclass and all of its
-source types (the types not determined by the class's dependencies)
-are defined in packages other than the one containing the instance.
+source types are defined in packages other than the one containing the
+instance.  The source types are the types in the parameters that the
+class's dependencies do not determine.  If the class has several
+dependencies, each has its own source types (the parameters that it
+does not determine), and the instance is an orphan if the typeclass
+and the source types of any one dependency are all defined elsewhere.
 An orphan is used only where its package is imported, so two packages
 that use the same type can silently resolve the class to different
-instances.  An exported orphan instance is therefore an error (T0127):
+instances.  An orphan instance is therefore an error (T0127):
 instances must be defined in the package that defines the typeclass or
-one of the instance's source types.  To give a type a different
+one of the instance's source types (for each dependency, if there are
+several).  To give a type a different
 instance, wrap it in a new type defined alongside the instance.  The
 optional \texttt{orphan} annotation, written before or after any
 coherence annotation, allows orphan instances of the class, and makes
@@ -4556,7 +4561,10 @@ is recognized only in this position.  For now, and for \te{Bits}
 only, the error can be demoted to a warning with
 \texttt{-demote-errors T0127}, so that existing code can migrate.
 This will change in a future release, which will make an orphan
-\te{Bits} instance an error that cannot be demoted.
+\te{Bits} instance an error that cannot be demoted.  Because the
+warning for a class declared \texttt{orphan} has the same tag,
+demoting T0127 also keeps \texttt{-promote-warnings} from turning
+those warnings into errors.
 
 Example (from the Standard Prelude package):
 \index{Standard Prelude}
@@ -4629,7 +4637,7 @@ parentheses.
 
 Example of a typeclass definition specifying type dependencies:
 \begin{verbatim}
-typeclass Connectable #(type a, type b)
+typeclass orphan Connectable #(type a, type b)
     dependencies (a determines b, b determines a);
        module mkConnection#(a x1, b x2) (Empty);
 endtypeclass
@@ -5069,7 +5077,7 @@ value of type \texttt{a}.
 The \texttt{Eq} type class contains the overloaded operators \texttt{==}
 (logical equality) and \texttt{!=} (logical inequality):
 \begin{verbatim}
- typeclass Eq#(type a);
+ typeclass orphan Eq#(type a);
      function Bool \== (a x1, a x2);
      function Bool \/= (a x1, a x2);
  endtypeclass: Eq

@@ -29,7 +29,7 @@ using the \te{deriving} statement.
 can be applied to create an associated \te{Fmt} representation.
 
 \begin{verbatim}
-typeclass FShow#(type t);
+typeclass orphan FShow#(type t);
    function Fmt fshow(t value);
 endtypeclass
 \end{verbatim}

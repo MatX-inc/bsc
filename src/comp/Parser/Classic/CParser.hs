@@ -5,7 +5,7 @@
 module Parser.Classic.CParser(pPackage, pDefnsAndEOF, errSyntax, CParser, pType, qcon, eof) where
 
 import Data.List(nub)
-import Data.Maybe(isNothing)
+import Data.Maybe(isJust)
 
 import Parse
 import IntLit
@@ -438,9 +438,9 @@ pClassBodyItem =
 pClassAnnots :: CParser CClassAnnots
 pClassAnnots =
         pCoherence +.+ option pOrphan
-            >>- (\ (incoh, orphan) -> CClassAnnots (Just incoh) (isNothing orphan))
+            >>- (\ (incoh, orphan) -> CClassAnnots (Just incoh) (isJust orphan))
     ||! pOrphan ..+ option pCoherence
-            >>- (\ incoh -> CClassAnnots incoh False)
+            >>- (\ incoh -> CClassAnnots incoh True)
     ||! succeed noCClassAnnots
 
 pOrphan :: CParser ()

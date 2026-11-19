@@ -88,12 +88,13 @@ typeAnalysisToHTclObj (Interface t k vs isC fs pragmas) =
         [tagLst "members" (map interfaceFieldToHTclObj fs)] ++
         showTaggedPosition t ++
         (if (not $ null pragmas) then  [tagLst "attributes" (map ifcPragmaToHTclObj pragmas)] else [])
-typeAnalysisToHTclObj (Typeclass t k vs ps fdeps allow insts fs) =
+typeAnalysisToHTclObj (Typeclass t k vs ps fdeps allow orphan insts fs) =
     tag "Typeclass" $
         [TStr $ showType True t k vs] ++
         showSuperclasses ps ++
         showDependencies vs fdeps ++
         showAllowIncoherent allow ++
+        showAllowOrphan orphan ++
         [tagLst "members" (map typeclassFieldToHTclObj fs)] ++
         showInstances insts ++
         showTaggedPosition t
@@ -263,12 +264,13 @@ typeAnalysisToDetail  (Interface t k vs isC fs pragmas) =
         (if (not $ null pragmas) then  [tagLst "attributes" (map ifcPragmaToHTclObj pragmas)] else []) ++
         showTaggedPosition t
 
-typeAnalysisToDetail (Typeclass t k vs ps fdeps allow insts fs) =
+typeAnalysisToDetail (Typeclass t k vs ps fdeps allow orphan insts fs) =
     tag "Typeclass" $
         [TLst [TStr $ showType True t k vs]] ++
         showSuperclasses ps ++
         showDependencies vs fdeps ++
         showAllowIncoherent allow ++
+        showAllowOrphan orphan ++
         if (null fs) then []
                      else [tagLst "members" (map typeclassFieldToDetail fs)] ++
         showInstances insts ++
@@ -389,6 +391,10 @@ showAllowIncoherent :: Maybe Bool -> [HTclObj]
 showAllowIncoherent (Nothing)    = []
 showAllowIncoherent (Just False) = [TStr "coherent"]
 showAllowIncoherent (Just True)  = [TStr "incoherent"]
+
+showAllowOrphan :: Bool -> [HTclObj]
+showAllowOrphan False = []
+showAllowOrphan True  = [TStr "orphan"]
 
 showInstances :: [Qual Type] -> [HTclObj]
 showInstances insts =

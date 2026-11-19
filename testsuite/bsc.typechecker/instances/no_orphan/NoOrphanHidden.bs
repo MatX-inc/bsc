@@ -1,0 +1,21 @@
+package NoOrphanHidden(nHidden) where
+
+import NoOrphanClasses
+
+-- Neither instance is exported, because each names a type that this
+-- package does not export, but both are orphans
+
+-- The check expands the synonym, to Maybe Bool
+type MaybeBool = Maybe Bool
+
+instance NoOrphan MaybeBool where
+  noOrphan _ = True
+
+-- Hidden is determined by the dependency, so it is not a source type
+data Hidden = Hidden
+
+instance NoOrphanDep Bool Hidden where
+  noOrphanDep _ = Hidden
+
+nHidden :: Integer
+nHidden = 2

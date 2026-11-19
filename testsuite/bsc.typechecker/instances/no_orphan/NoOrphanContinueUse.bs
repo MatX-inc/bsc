@@ -1,0 +1,7 @@
+package NoOrphanContinueUse where
+
+import NoOrphanContinue
+
+-- A type error
+d :: Integer
+d = c

@@ -86,6 +86,12 @@ Note: the numeric keyword is not required
 The functions {\tt pack} and {\tt unpack} are provided to convert
 elements to {\tt Bit\#()} and to convert {\tt Bit\#()} elements to another datatype.
 
+\te{Bits} is not declared \te{orphan}, so an orphan instance of it (one
+in a package that defines neither \te{Bits} nor the instance's type) is
+an error (T0127).  For now, the error can be demoted to a warning with
+\te{-demote-errors T0127}, so that existing code can migrate; a future
+release will make it an error that cannot be demoted.
+
 Instances of \te{Bits} are required to be mutually inverse, up to
 resolution of don't-care bits: \te{unpack(pack(x))} must equal \te{x}
 exactly, and every bit vector \te{b} must be a legal resolution of
@@ -160,7 +166,7 @@ the  \te{deriving} statement.
 \index[typeclass]{Eq}
 
 \begin{libverbatim}
-   typeclass Eq #(type data_t);
+   typeclass orphan Eq #(type data_t);
        function Bool \== (data_t x, data_t y);
        function Bool \/= (data_t x, data_t y);
    endtypeclass
@@ -295,7 +301,7 @@ real literals.
 \index[typeclass]{RealLiteral}
 
 \begin{libverbatim}
-   typeclass RealLiteral #(type data_t);
+   typeclass orphan RealLiteral #(type data_t);
        function data_t fromReal(Real x);
    endtypeclass
 \end{libverbatim}
@@ -1529,7 +1535,7 @@ tasks.  Instances of the \te{FShow} class can often be automatically
 derived using the \te{deriving} statement.
 
 \begin{verbatim}
-typeclass FShow#(type t);
+typeclass orphan FShow#(type t);
    function Fmt fshow(t value);
 endtypeclass
 \end{verbatim}

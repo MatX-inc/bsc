@@ -1,0 +1,10 @@
+package NoOrphanMultiDep where
+
+import NoOrphanClasses
+
+-- T is defined here, but the source type of the dependency b -> a is
+-- Bool, which is not, so the instance is an orphan
+data T = T
+
+instance NoOrphanMutual T Bool where
+  noOrphanMutual _ = True

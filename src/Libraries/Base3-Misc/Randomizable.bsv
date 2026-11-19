@@ -177,7 +177,9 @@ endmodule
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
-typeclass Randomizable#(type t);
+// Declared orphan: users define instances for types from other packages,
+// such as Bit#(n)
+typeclass orphan Randomizable#(type t);
    module mkRandomizer (Randomize#(t));
 endtypeclass
 

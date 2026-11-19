@@ -18,7 +18,7 @@ module Error(
              ErrMsg(..),
              EMsg, WMsg,
              EMsgs(..),  -- a list of EMsg, to avoid overlapping instances
-             bsWarningsAndErrors,
+             bsWarningsAndErrors, bsWarningsAndErrorsNoExit,
              bsError, bsErrorNoExit,
              bsErrorDemotable,
              bsWarning,
@@ -227,6 +227,29 @@ bsWarningsAndErrorsWithContext :: ErrorHandle -> MsgContext ->
 bsWarningsAndErrorsWithContext ref ctx [] [] [] = do
     internalError ("bsWarningsAndErrors called with null list")
 bsWarningsAndErrorsWithContext ref ctx ws ds es = do
+  final_errs <- issueWarnings ref ctx ws ds es
+  -- issue errors
+  when (not (null final_errs)) $ do
+      doPreExitActions ref
+      -- use exceptions, so that bluetcl can handle the error
+      -- the show*List function will sort the messages
+      -- XXX should we indicate which are promoted warnings?
+      CE.throw $ CE.ErrorCall (showErrorListWithContext ctx final_errs)
+
+-- Like bsWarningsAndErrors, but reports any errors without exiting
+-- (for -continue-after-errors), and returns whether there were any
+bsWarningsAndErrorsNoExit :: ErrorHandle -> [EMsg] -> [EMsg] -> [EMsg] -> IO Bool
+bsWarningsAndErrorsNoExit ref ws ds es = do
+  final_errs <- issueWarnings ref emptyContext ws ds es
+  when (not (null final_errs)) $
+      hPutStr stderr (showErrorListWithContext emptyContext final_errs)
+  return (not (null final_errs))
+
+-- Issue the warnings, after suppressing, promoting and demoting, and
+-- return the errors
+issueWarnings :: ErrorHandle -> MsgContext -> [EMsg] -> [EMsg] -> [EMsg]
+              -> IO [EMsg]
+issueWarnings ref ctx ws ds es = do
   state0 <- readErrorState ref
   -- warn if the user requested to demote non-demotable errors
   let isDemoted t = memberMsgSet t (demotionSet state0)
@@ -248,13 +271,7 @@ bsWarningsAndErrorsWithContext ref ctx ws ds es = do
       -- the show*List function will sort the messages
       -- XXX should we indicate which are demoted errors?
       hPutStr stderr (showWarningListWithContext ctx final_warns)
-  -- issue errors
-  when (not (null final_errs)) $ do
-      doPreExitActions ref
-      -- use exceptions, so that bluetcl can handle the error
-      -- the show*List function will sort the messages
-      -- XXX should we indicate which are promoted warnings?
-      CE.throw $ CE.ErrorCall (showErrorListWithContext ctx final_errs)
+  return final_errs
 
 handleDemotableErrors :: ErrorState -> MsgContext -> [EMsg] ->
                          (ErrorState, [WMsg], [EMsg])
@@ -805,9 +822,9 @@ data ErrMsg =
         | EClassFundepsEmpty String
         | WIncoherentMatch String String
         -- the instance, and, if the class is not declared orphan (which
-        -- makes the message an error), the class and whether the error
-        -- can be demoted
-        | WOrphanInst String (Maybe (String, Bool))
+        -- makes the message an error), the class, whether the error can
+        -- be demoted, and whether the class has several dependencies
+        | WOrphanInst String (Maybe (String, Bool, Bool))
         | WTransitiveIncoherentMatch String String String
         | EModInstWrongArgs [Position]
         | EAmbiguous [(String, Position, [(String, [Position])])]
@@ -2913,10 +2930,14 @@ getErrorText (WOrphanInst inst m_no_orphan_cls) =
             " instance resolution if the orphan instance is not imported everywhere it could be used.") $$
      case m_no_orphan_cls of
        Nothing -> empty
-       Just (cls, demotable) ->
+       Just (cls, demotable, several_deps) ->
          s2par ("The typeclass " ++ cls ++ " is not declared orphan, " ++
                 "so its instances must be defined in the package that defines " ++
-                "the typeclass or one of the instance's source types.") $$
+                (if several_deps
+                 then "the typeclass, or in one that defines, for each of the " ++
+                      "typeclass's dependencies, a type in the instance's " ++
+                      "parameters that the dependency does not determine."
+                 else "the typeclass or one of the instance's source types.")) $$
          (if demotable
           then s2par ("For now, this error can be demoted to a warning " ++
                       "with -demote-errors T0127.")

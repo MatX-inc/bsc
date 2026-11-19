@@ -11,6 +11,13 @@ class coherent CoherentNoOrphan a where
 class incoherent IncoherentNoOrphan a where
   incoherentNoOrphan :: a -> Bool
 
+-- Classes with one and with two dependencies
+class NoOrphanDep a b | a -> b where
+  noOrphanDep :: a -> b
+
+class NoOrphanMutual a b | a -> b, b -> a where
+  noOrphanMutual :: a -> b
+
 -- An instance in the class's own package is not an orphan
 instance NoOrphan Bool where
   noOrphan = id

@@ -1,0 +1,12 @@
+package NoOrphanExportError(f) where
+
+import NoOrphanClasses
+
+-- f's type names Local, which is not exported (T0010)
+data Local = Local
+
+f :: Local -> Bool
+f _ = True
+
+instance NoOrphan (Maybe Integer) where
+  noOrphan _ = True

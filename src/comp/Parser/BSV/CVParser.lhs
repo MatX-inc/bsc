@@ -1148,11 +1148,10 @@ TYPE CLASSES AND INSTANCES
 >        -- orphan instance of it is an error.
 >        let pCoherence =     (pTheString "incoherent" >> return True)
 >                         <|> (pTheString "coherent"   >> return False)
->            -- "orphan" turns off cca_no_orphan
->            pOrphan = pTheString "orphan" >> return False
+>            pOrphan = pTheString "orphan" >> return True
 >        annots <- option noCClassAnnots
 >                    (    (CClassAnnots <$> (Just <$> pCoherence)
->                                       <*> option True pOrphan)
+>                                       <*> option False pOrphan)
 >                     <|> (flip CClassAnnots <$> pOrphan
 >                                            <*> option Nothing (Just <$> pCoherence)))
 >        (name, params) <- pTypedefConParams <?> "typeclass name"

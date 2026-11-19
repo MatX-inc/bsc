@@ -437,6 +437,11 @@ compilePackage
     --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
 
+    -- Generate the user-visible type signature now, so that its errors
+    -- (such as for orphan instances) come before any code is generated
+    (bi_sig, pkgsUsedInExports, signOk) <-
+        genUserSign errh (enablePoisonPills flags) symt mctx
+
     --when (early flags) $ return ()
     let prefix = dirName name ++ "/"
 
@@ -663,8 +668,6 @@ compilePackage
     -- Finally, generate interface files
     start flags DFwriteBin
 
-    -- Generate the user-visible type signature
-    (bi_sig, pkgsUsedInExports) <- genUserSign errh symt mctx
     -- Generate a type signature where everything is visible
     bo_sig <- genEverythingSign errh symt mctx
 
@@ -693,7 +696,7 @@ compilePackage
     --     binmap' = ...
     --     hashmap' = ...
 
-    return (success && not tcErrors, binmap, hashmap)
+    return (success && not tcErrors && signOk, binmap, hashmap)
 
 
 genModule ::
