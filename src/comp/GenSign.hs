@@ -304,6 +304,13 @@ genSign errh exportAll symt
             in  -- duplicates are OK because they are qualified
                 filter (`notElem` ss_names) exp_names
          -}
+
+        result = case errors of
+            [] -> if (not (null failedExports))
+                  then internalError ("failed exports: " ++
+                                      ppReadable failedExports)
+                  else Right (sign, reexportedPkgs)
+            errs -> Left errs
     in
 {-
         trace ("\nexps=\n" ++ ppReadable exps ++
@@ -313,13 +320,7 @@ genSign errh exportAll symt
                "\n\nudef=\n" ++ ppReadable udef ++
                "\n\nss'=\n" ++ ppReadable ss' ++ "\n\n") $
 -}
-        (case errors of
-            [] -> if (not (null failedExports))
-                  then internalError ("failed exports: " ++
-                                      ppReadable failedExports)
-                  else Right (sign, reexportedPkgs)
-            errs -> Left errs,
-         msgs)
+        (result, msgs)
 
 -- ---------------
 
