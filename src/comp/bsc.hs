@@ -438,9 +438,13 @@ compilePackage
     t <- dump errh flags t DFtypecheck dumpnames mod
 
     -- Generate the user-visible type signature now, so that its errors
-    -- (such as for orphan instances) come before any code is generated
-    (bi_sig, pkgsUsedInExports, signOk) <-
-        genUserSign errh (enablePoisonPills flags) symt mctx
+    -- (such as for orphan instances) come before any code is generated;
+    -- but with -continue-after-errors, generate code first, so that its
+    -- errors are reported too
+    let genUserSign' = genUserSign errh (enablePoisonPills flags) symt mctx
+    early_user_sign <- if enablePoisonPills flags
+                       then return Nothing
+                       else Just <$> genUserSign'
 
     --when (early flags) $ return ()
     let prefix = dirName name ++ "/"
@@ -668,6 +672,9 @@ compilePackage
     -- Finally, generate interface files
     start flags DFwriteBin
 
+    -- Generate the user-visible type signature, if not done above
+    (bi_sig, pkgsUsedInExports, signOk) <-
+        maybe genUserSign' return early_user_sign
     -- Generate a type signature where everything is visible
     bo_sig <- genEverythingSign errh symt mctx
 

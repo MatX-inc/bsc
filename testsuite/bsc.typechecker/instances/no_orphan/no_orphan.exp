@@ -71,6 +71,11 @@ erase NoOrphanContinue.bo
 compile_fail_error NoOrphanContinueUse.bs T0020 1 {-continue-after-errors}
 compare_file NoOrphanContinueUse.bs.bsc-out
 
+# With -continue-after-errors, code generation comes first, so its errors
+# are reported along with the export and orphan errors
+compile_fail_error NoOrphanContinueElab.bs T0010 1 {-verilog -continue-after-errors}
+compare_file NoOrphanContinueElab.bs.bsc-out
+
 # The coherence annotation keeps its meaning in either order
 compile_fail_error OrphanCoherent.bs T0030 2 {-incoherent-instance-matches}
 compile_pass OrphanIncoherent.bs

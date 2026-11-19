@@ -1,0 +1,17 @@
+package NoOrphanContinueElab(f, mkNoOrphanContinueElab) where
+
+import NoOrphanClasses
+
+-- f's type names Local, which is not exported (T0010)
+data Local = Local
+
+f :: Local -> Bool
+f _ = True
+
+instance NoOrphan (Maybe Integer) where
+  noOrphan _ = True
+
+-- Elaborating this module fails
+{-# verilog mkNoOrphanContinueElab #-}
+mkNoOrphanContinueElab :: Module Empty
+mkNoOrphanContinueElab = error "mkNoOrphanContinueElab cannot be elaborated"
