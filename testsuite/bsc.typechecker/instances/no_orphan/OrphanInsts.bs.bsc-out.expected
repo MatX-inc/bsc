@@ -1,33 +1,38 @@
 checking package dependencies
 compiling OrphanInsts.bs
 Warning: "OrphanInsts.bs", line 8, column 9: (T0127)
-  Exporting orphan typeclass instance OrphanClasses.Orphan (Prelude.UInt n).
-  The instance's typeclass as well as all of the instance's source type
-  parameters are defined in other packages. This can lead to confusing and
-  inconsistent instance resolution if the orphan instance is not imported
-  everywhere it could be used.
+  Orphan typeclass instance OrphanClasses.Orphan (Prelude.UInt n). The
+  instance's typeclass and all of the instance's source types are defined in
+  other packages (if the typeclass has several dependencies, the source types
+  of one of them). This can lead to confusing and inconsistent instance
+  resolution if the orphan instance is not imported everywhere it could be
+  used.
 Warning: "OrphanInsts.bs", line 11, column 9: (T0127)
-  Exporting orphan typeclass instance OrphanClasses.CoherentOrphan
-  (Prelude.UInt n). The instance's typeclass as well as all of the instance's
-  source type parameters are defined in other packages. This can lead to
-  confusing and inconsistent instance resolution if the orphan instance is not
-  imported everywhere it could be used.
+  Orphan typeclass instance OrphanClasses.CoherentOrphan (Prelude.UInt n). The
+  instance's typeclass and all of the instance's source types are defined in
+  other packages (if the typeclass has several dependencies, the source types
+  of one of them). This can lead to confusing and inconsistent instance
+  resolution if the orphan instance is not imported everywhere it could be
+  used.
 Warning: "OrphanInsts.bs", line 14, column 9: (T0127)
-  Exporting orphan typeclass instance OrphanClasses.OrphanCoherent
-  (Prelude.UInt n). The instance's typeclass as well as all of the instance's
-  source type parameters are defined in other packages. This can lead to
-  confusing and inconsistent instance resolution if the orphan instance is not
-  imported everywhere it could be used.
+  Orphan typeclass instance OrphanClasses.OrphanCoherent (Prelude.UInt n). The
+  instance's typeclass and all of the instance's source types are defined in
+  other packages (if the typeclass has several dependencies, the source types
+  of one of them). This can lead to confusing and inconsistent instance
+  resolution if the orphan instance is not imported everywhere it could be
+  used.
 Warning: "OrphanInsts.bs", line 17, column 9: (T0127)
-  Exporting orphan typeclass instance OrphanClasses.IncoherentOrphan
-  (Prelude.UInt n). The instance's typeclass as well as all of the instance's
-  source type parameters are defined in other packages. This can lead to
-  confusing and inconsistent instance resolution if the orphan instance is not
-  imported everywhere it could be used.
+  Orphan typeclass instance OrphanClasses.IncoherentOrphan (Prelude.UInt n).
+  The instance's typeclass and all of the instance's source types are defined
+  in other packages (if the typeclass has several dependencies, the source
+  types of one of them). This can lead to confusing and inconsistent instance
+  resolution if the orphan instance is not imported everywhere it could be
+  used.
 Warning: "OrphanInsts.bs", line 20, column 9: (T0127)
-  Exporting orphan typeclass instance OrphanClasses.OrphanIncoherent
-  (Prelude.UInt n). The instance's typeclass as well as all of the instance's
-  source type parameters are defined in other packages. This can lead to
-  confusing and inconsistent instance resolution if the orphan instance is not
-  imported everywhere it could be used.
+  Orphan typeclass instance OrphanClasses.OrphanIncoherent (Prelude.UInt n).
+  The instance's typeclass and all of the instance's source types are defined
+  in other packages (if the typeclass has several dependencies, the source
+  types of one of them). This can lead to confusing and inconsistent instance
+  resolution if the orphan instance is not imported everywhere it could be
+  used.
 All packages are up to date.

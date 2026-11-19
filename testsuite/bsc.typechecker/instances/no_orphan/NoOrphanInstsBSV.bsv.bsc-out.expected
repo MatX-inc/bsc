@@ -1,30 +1,32 @@
 checking package dependencies
 compiling NoOrphanInstsBSV.bsv
 Error: "NoOrphanInstsBSV.bsv", line 8, column 10: (T0127)
-  Exporting orphan typeclass instance
-  NoOrphanClassesBSV::NoOrphanBSV#(UInt#(n)). The instance's typeclass as well
-  as all of the instance's source type parameters are defined in other
-  packages. This can lead to confusing and inconsistent instance resolution if
-  the orphan instance is not imported everywhere it could be used.
+  Orphan typeclass instance NoOrphanClassesBSV::NoOrphanBSV#(UInt#(n)). The
+  instance's typeclass and all of the instance's source types are defined in
+  other packages (if the typeclass has several dependencies, the source types
+  of one of them). This can lead to confusing and inconsistent instance
+  resolution if the orphan instance is not imported everywhere it could be
+  used.
   The typeclass NoOrphanClassesBSV::NoOrphanBSV is not declared orphan, so its
   instances must be defined in the package that defines the typeclass or one
   of the instance's source types.
 Error: "NoOrphanInstsBSV.bsv", line 12, column 10: (T0127)
-  Exporting orphan typeclass instance
+  Orphan typeclass instance
   NoOrphanClassesBSV::CoherentNoOrphanBSV#(UInt#(n)). The instance's typeclass
-  as well as all of the instance's source type parameters are defined in other
-  packages. This can lead to confusing and inconsistent instance resolution if
-  the orphan instance is not imported everywhere it could be used.
+  and all of the instance's source types are defined in other packages (if the
+  typeclass has several dependencies, the source types of one of them). This
+  can lead to confusing and inconsistent instance resolution if the orphan
+  instance is not imported everywhere it could be used.
   The typeclass NoOrphanClassesBSV::CoherentNoOrphanBSV is not declared
   orphan, so its instances must be defined in the package that defines the
   typeclass or one of the instance's source types.
 Error: "NoOrphanInstsBSV.bsv", line 16, column 10: (T0127)
-  Exporting orphan typeclass instance
+  Orphan typeclass instance
   NoOrphanClassesBSV::IncoherentNoOrphanBSV#(UInt#(n)). The instance's
-  typeclass as well as all of the instance's source type parameters are
-  defined in other packages. This can lead to confusing and inconsistent
-  instance resolution if the orphan instance is not imported everywhere it
-  could be used.
+  typeclass and all of the instance's source types are defined in other
+  packages (if the typeclass has several dependencies, the source types of one
+  of them). This can lead to confusing and inconsistent instance resolution if
+  the orphan instance is not imported everywhere it could be used.
   The typeclass NoOrphanClassesBSV::IncoherentNoOrphanBSV is not declared
   orphan, so its instances must be defined in the package that defines the
   typeclass or one of the instance's source types.

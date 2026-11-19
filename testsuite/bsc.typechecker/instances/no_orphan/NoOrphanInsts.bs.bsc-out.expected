@@ -1,29 +1,32 @@
 checking package dependencies
 compiling NoOrphanInsts.bs
 Error: "NoOrphanInsts.bs", line 7, column 9: (T0127)
-  Exporting orphan typeclass instance NoOrphanClasses.NoOrphan (Prelude.UInt
-  n). The instance's typeclass as well as all of the instance's source type
-  parameters are defined in other packages. This can lead to confusing and
-  inconsistent instance resolution if the orphan instance is not imported
-  everywhere it could be used.
+  Orphan typeclass instance NoOrphanClasses.NoOrphan (Prelude.UInt n). The
+  instance's typeclass and all of the instance's source types are defined in
+  other packages (if the typeclass has several dependencies, the source types
+  of one of them). This can lead to confusing and inconsistent instance
+  resolution if the orphan instance is not imported everywhere it could be
+  used.
   The typeclass NoOrphanClasses.NoOrphan is not declared orphan, so its
   instances must be defined in the package that defines the typeclass or one
   of the instance's source types.
 Error: "NoOrphanInsts.bs", line 10, column 9: (T0127)
-  Exporting orphan typeclass instance NoOrphanClasses.CoherentNoOrphan
-  (Prelude.UInt n). The instance's typeclass as well as all of the instance's
-  source type parameters are defined in other packages. This can lead to
-  confusing and inconsistent instance resolution if the orphan instance is not
-  imported everywhere it could be used.
+  Orphan typeclass instance NoOrphanClasses.CoherentNoOrphan (Prelude.UInt n).
+  The instance's typeclass and all of the instance's source types are defined
+  in other packages (if the typeclass has several dependencies, the source
+  types of one of them). This can lead to confusing and inconsistent instance
+  resolution if the orphan instance is not imported everywhere it could be
+  used.
   The typeclass NoOrphanClasses.CoherentNoOrphan is not declared orphan, so
   its instances must be defined in the package that defines the typeclass or
   one of the instance's source types.
 Error: "NoOrphanInsts.bs", line 13, column 9: (T0127)
-  Exporting orphan typeclass instance NoOrphanClasses.IncoherentNoOrphan
-  (Prelude.UInt n). The instance's typeclass as well as all of the instance's
-  source type parameters are defined in other packages. This can lead to
-  confusing and inconsistent instance resolution if the orphan instance is not
-  imported everywhere it could be used.
+  Orphan typeclass instance NoOrphanClasses.IncoherentNoOrphan (Prelude.UInt
+  n). The instance's typeclass and all of the instance's source types are
+  defined in other packages (if the typeclass has several dependencies, the
+  source types of one of them). This can lead to confusing and inconsistent
+  instance resolution if the orphan instance is not imported everywhere it
+  could be used.
   The typeclass NoOrphanClasses.IncoherentNoOrphan is not declared orphan, so
   its instances must be defined in the package that defines the typeclass or
   one of the instance's source types.

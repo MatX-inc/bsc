@@ -1,11 +1,12 @@
 checking package dependencies
 compiling SplitPortsOrphan.bs
 Error: "SplitPortsOrphan.bs", line 6, column 9: (T0127)
-  Exporting orphan typeclass instance Prelude.SplitPorts NoBitsType.NoBitsType
-  (Prelude.Port (Prelude.UInt 8)). The instance's typeclass as well as all of
-  the instance's source type parameters are defined in other packages. This
-  can lead to confusing and inconsistent instance resolution if the orphan
-  instance is not imported everywhere it could be used.
+  Orphan typeclass instance Prelude.SplitPorts NoBitsType.NoBitsType
+  (Prelude.Port (Prelude.UInt 8)). The instance's typeclass and all of the
+  instance's source types are defined in other packages (if the typeclass has
+  several dependencies, the source types of one of them). This can lead to
+  confusing and inconsistent instance resolution if the orphan instance is not
+  imported everywhere it could be used.
   The typeclass Prelude.SplitPorts is not declared orphan, so its instances
   must be defined in the package that defines the typeclass or one of the
   instance's source types.

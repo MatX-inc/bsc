@@ -1289,8 +1289,9 @@ many different results, contradicting what the dependency promises.
 \index{coherent@\te{coherent} (keyword)}
 \index{incoherent@\te{incoherent} (keyword)}
 The optional coherence annotation ({\te{coherent}} or
-{\te{incoherent}}, immediately after the {\te{class}} keyword) opts a
-class out of this discipline.  For an {\te{incoherent}} class, an
+{\te{incoherent}}, after the {\te{class}} keyword and before or after
+any {\te{orphan}} annotation) opts a class out of this discipline.
+For an {\te{incoherent}} class, an
 instance whose dependent parameters conflict is skipped and a less
 specific instance may be selected instead, so resolution may be
 driven by the demanded result type and may differ from context to

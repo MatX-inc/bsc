@@ -2924,10 +2924,12 @@ getErrorText (WIncoherentMatch pred inst) =
 
 getErrorText (WOrphanInst inst m_no_orphan_cls) =
     (Type 127, empty,
-     s2par ("Exporting orphan typeclass instance " ++ inst ++ ". " ++
-            "The instance's typeclass as well as all of the instance's source type parameters " ++
-            " are defined in other packages. This can lead to confusing and inconsistent " ++
-            " instance resolution if the orphan instance is not imported everywhere it could be used.") $$
+     s2par ("Orphan typeclass instance " ++ inst ++ ". " ++
+            "The instance's typeclass and all of the instance's source types " ++
+            "are defined in other packages (if the typeclass has several " ++
+            "dependencies, the source types of one of them). This can lead to " ++
+            "confusing and inconsistent instance resolution if the orphan " ++
+            "instance is not imported everywhere it could be used.") $$
      case m_no_orphan_cls of
        Nothing -> empty
        Just (cls, demotable, several_deps) ->
