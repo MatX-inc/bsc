@@ -54,12 +54,14 @@ compile_fail_error NoOrphanExportError.bs T0010
 compare_file NoOrphanExportError.bs.bsc-out
 
 # The error comes before code generation, so no Verilog file is written
-erase mkNoOrphanSynth.v
-compile_verilog_fail_error NoOrphanSynth.bs T0127
-if { [file exists [join [concat $subdir mkNoOrphanSynth.v] "/"]] } {
-    fail "mkNoOrphanSynth.v should not exist"
-} else {
-    pass "mkNoOrphanSynth.v does not exist"
+if { $vtest == 1 } {
+    erase mkNoOrphanSynth.v
+    compile_verilog_fail_error NoOrphanSynth.bs T0127
+    if { [file exists [join [concat $subdir mkNoOrphanSynth.v] "/"]] } {
+        fail "mkNoOrphanSynth.v should not exist"
+    } else {
+        pass "mkNoOrphanSynth.v does not exist"
+    }
 }
 
 # With -continue-after-errors, the error does not stop the compile:
