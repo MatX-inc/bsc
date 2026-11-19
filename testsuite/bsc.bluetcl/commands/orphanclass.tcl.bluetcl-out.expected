@@ -1,0 +1,10 @@
+OrphanClassTest PreludeBSV Prelude
+
+Typeclass {OrphanClassTest::Orphan#(type a)} orphan {members {{{function Bool f(a x1)} orphanF}}} {position {OrphanClassTest.bs 6 13}}
+
+Typeclass {OrphanClassTest::CoherentOrphan#(type a)} coherent orphan {members {{{function Bool f(a x1)} coherentOrphanF}}} {position {OrphanClassTest.bs 9 22}}
+
+Typeclass {OrphanClassTest::IncoherentOrphan#(type a)} incoherent orphan {members {{{function Bool f(a x1)} incoherentOrphanF}}} {position {OrphanClassTest.bs 12 24}}
+
+Typeclass {OrphanClassTest::NotOrphan#(type a)} {members {{{function Bool f(a x1)} notOrphanF}}} {position {OrphanClassTest.bs 15 6}}
+

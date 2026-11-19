@@ -1,0 +1,10 @@
+OrphanClassTest PreludeBSV Prelude
+
+Typeclass {(OrphanClassTest.Orphan :: * -> *) a} orphan {members {{{a -> Prelude.Bool} orphanF}}} {position {OrphanClassTest.bs 6 13}}
+
+Typeclass {(OrphanClassTest.CoherentOrphan :: * -> *) a} coherent orphan {members {{{a -> Prelude.Bool} coherentOrphanF}}} {position {OrphanClassTest.bs 9 22}}
+
+Typeclass {(OrphanClassTest.IncoherentOrphan :: * -> *) a} incoherent orphan {members {{{a -> Prelude.Bool} incoherentOrphanF}}} {position {OrphanClassTest.bs 12 24}}
+
+Typeclass {(OrphanClassTest.NotOrphan :: * -> *) a} {members {{{a -> Prelude.Bool} notOrphanF}}} {position {OrphanClassTest.bs 15 6}}
+

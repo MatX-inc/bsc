@@ -1,0 +1,16 @@
+package OrphanClassTest where
+
+-- Classes declared orphan, alone and before or after a coherence word,
+-- and one that is not
+
+class orphan Orphan a where
+    orphanF :: a -> Bool
+
+class coherent orphan CoherentOrphan a where
+    coherentOrphanF :: a -> Bool
+
+class orphan incoherent IncoherentOrphan a where
+    incoherentOrphanF :: a -> Bool
+
+class NotOrphan a where
+    notOrphanF :: a -> Bool
