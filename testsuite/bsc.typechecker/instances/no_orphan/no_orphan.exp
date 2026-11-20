@@ -2,9 +2,10 @@
 # (T0127) unless the class is declared "orphan", which makes it a warning.
 # The "orphan" annotation may come before or after "coherent"/"incoherent".
 #
-# A source compiled twice has the output of its -demote-errors run moved
-# to <source>.demote.bsc-out, so that it does not replace the output (or
-# the differences) of the first run.
+# A source compiled more than once has the output of each later run moved
+# to <source>.<run>.bsc-out (such as <source>.demote.bsc-out for its
+# -demote-errors run), so that it does not replace the output (or the
+# differences) of the first run.
 
 # ----------
 # Classic
@@ -26,6 +27,15 @@ compare_file NoOrphanInsts.bs.demote.bsc-out
 compile_pass_no_warning OrphanClasses.bs
 compile_pass_warning OrphanInsts.bs T0127 5
 compare_file OrphanInsts.bs.bsc-out
+# -promote-warnings makes the warnings errors ...
+# (erasing the .bo, which would leave the package up to date)
+erase OrphanInsts.bo
+compile_fail_error OrphanInsts.bs T0127 5 {-promote-warnings T0127}
+move OrphanInsts.bs.bsc-out OrphanInsts.bs.promote.bsc-out
+# ... unless T0127 is also demoted
+erase OrphanInsts.bo
+compile_pass_warning OrphanInsts.bs T0127 5 {-promote-warnings T0127 -demote-errors T0127}
+move OrphanInsts.bs.bsc-out OrphanInsts.bs.promote-demote.bsc-out
 
 # An instance in the package that defines its type is not an orphan
 compile_pass_no_warning NoOrphanTypeInst.bs
@@ -74,6 +84,12 @@ compare_file NoOrphanContinueUse.bs.bsc-out
 # Without -continue-after-errors, importing the poisoned package is an
 # error
 compile_fail_error NoOrphanContinueOk.bs G0088
+
+# But warnings, including demoted errors, do not poison the package, so
+# importing it without -continue-after-errors is not an error
+erase OrphanContinue.bo
+compile_pass_warning OrphanContinue.bs T0127 2 {-continue-after-errors -demote-errors T0127}
+compile_pass_no_warning OrphanContinueOk.bs
 
 # With -continue-after-errors, code generation comes first, so its errors
 # are reported along with the export and orphan errors

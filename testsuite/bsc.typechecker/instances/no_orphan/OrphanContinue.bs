@@ -1,0 +1,16 @@
+package OrphanContinue where
+
+import OrphanClasses
+import NoBitsType
+
+-- An orphan instance of a class declared orphan: a warning
+instance Orphan Bool where
+  orphan x = x
+
+-- An orphan Bits instance, whose error is demoted to a warning
+instance Bits NoBitsType 8 where
+  pack (NoBitsType x) = pack x
+  unpack b = NoBitsType (unpack b)
+
+c :: Bool
+c = orphan True

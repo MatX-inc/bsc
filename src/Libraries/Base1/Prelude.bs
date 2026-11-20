@@ -414,7 +414,7 @@ class (Monad m) => MonadFix m where
 --@ are cancelled during elaboration without evaluating the instance
 --@ methods, choosing the identity as the round trip's resolution.
 --@
---@ As for any class not declared \te{orphan}, an instance must be
+--@ Because \te{Bits} is not declared \te{orphan}, an instance must be
 --@ defined in the package that defines its type (an orphan instance is
 --@ error T0127).  Different packages could otherwise see different
 --@ instances for one type, and so generate different port layouts for
