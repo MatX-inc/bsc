@@ -3,7 +3,7 @@
 module MakeSymTab(
                   mkSymTab, mkSymTabWithWarnings,
                   getPackagesUsedInTypes,
-                  cConvInst,
+                  cConvInst, mkInstId,
                   convCQType, convCQTypeWithAssumps,
                   convCType,
                   ) where

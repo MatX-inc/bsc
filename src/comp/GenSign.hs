@@ -35,10 +35,10 @@ import TypeCheck(qualifyClassDefaults)
 -- only exports what the user asked to export
 -- (auto-exports everything if the user said nothing)
 -- With continueAfterErrors, errors for orphan instances do not exit,
--- and the returned Bool is False if there were any.
+-- and the instances with errors are returned.
 genUserSign :: ErrorHandle -> Bool -> SymTab -> CPackage
-            -> IO (CSignature, S.Set Id, Bool)
-genUserSign errh continueAfterErrors symtab cpkg@(CPackage pkgName _ _ _ _ _ _) =
+            -> IO (CSignature, S.Set Id, [CQType])
+genUserSign errh continueAfterErrors symtab cpkg@(CPackage pkgName _ _ _ _ cdefs _) =
     -- XXX should we internal error on any errors or warnings?
     let (res, msgs) = genSign errh False symtab cpkg
         ws = [ m | (SignWarning, m) <- msgs ]
@@ -49,16 +49,19 @@ genUserSign errh continueAfterErrors symtab cpkg@(CPackage pkgName _ _ _ _ _ _) 
         Left errs -> do bsWarningsAndErrors errh ws ds (errs ++ es)
                         internalError "genUserSign"
         Right (sign, reexportedPkgs) -> do
-            ok <- if null msgs then return True
-                  else if continueAfterErrors
-                  then not <$> bsWarningsAndErrorsNoExit errh ws ds es
-                  else bsWarningsAndErrors errh ws ds es >> return True
+            errs <- if null msgs then return []
+                    else if continueAfterErrors
+                    then bsWarningsAndErrorsNoExit errh ws ds es
+                    else bsWarningsAndErrors errh ws ds es >> return []
+            -- each message is at the position of its instance
+            let err_insts = [ qt | d@(Cinstance qt _) <- cdefs,
+                                   getPosition d `elem` map fst errs ]
             -- Track packages used in two ways:
             -- 1. Items from imported packages that end up in exports (export foo, where foo is from Pkg)
             let usedPkgsFromItems = getPackagesUsedByExports pkgName sign
             -- 2. Explicit package re-exports (export Pkg::*)
             let usedPkgs = S.union usedPkgsFromItems reexportedPkgs
-            return (sign, usedPkgs, ok)
+            return (sign, usedPkgs, err_insts)
 
 -- export everything as visible (for internal use in the evaluator)
 -- XXX eventually combine this with the above and just have one CSignature

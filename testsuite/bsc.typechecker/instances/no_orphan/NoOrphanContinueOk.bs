@@ -1,0 +1,6 @@
+package NoOrphanContinueOk where
+
+import NoOrphanContinue
+
+e :: Bool
+e = c

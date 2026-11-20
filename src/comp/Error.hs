@@ -237,13 +237,13 @@ bsWarningsAndErrorsWithContext ref ctx ws ds es = do
       CE.throw $ CE.ErrorCall (showErrorListWithContext ctx final_errs)
 
 -- Like bsWarningsAndErrors, but reports any errors without exiting
--- (for -continue-after-errors), and returns whether there were any
-bsWarningsAndErrorsNoExit :: ErrorHandle -> [EMsg] -> [EMsg] -> [EMsg] -> IO Bool
+-- (for -continue-after-errors), and returns them
+bsWarningsAndErrorsNoExit :: ErrorHandle -> [EMsg] -> [EMsg] -> [EMsg] -> IO [EMsg]
 bsWarningsAndErrorsNoExit ref ws ds es = do
   final_errs <- issueWarnings ref emptyContext ws ds es
   when (not (null final_errs)) $
       hPutStr stderr (showErrorListWithContext emptyContext final_errs)
-  return (not (null final_errs))
+  return final_errs
 
 -- Issue the warnings, after suppressing, promoting and demoting, and
 -- return the errors

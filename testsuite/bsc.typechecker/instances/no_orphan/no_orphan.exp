@@ -65,11 +65,15 @@ if { $vtest == 1 } {
 }
 
 # With -continue-after-errors, the error does not stop the compile:
-# NoOrphanContinue.bo is written, and the package that imports it is
-# compiled (and reports its own error)
+# NoOrphanContinue.bo is written, with the instance poisoned, and the
+# package that imports it is compiled (and reports its own error)
 erase NoOrphanContinue.bo
 compile_fail_error NoOrphanContinueUse.bs T0020 1 {-continue-after-errors}
 compare_file NoOrphanContinueUse.bs.bsc-out
+
+# Without -continue-after-errors, importing the poisoned package is an
+# error
+compile_fail_error NoOrphanContinueOk.bs G0088
 
 # With -continue-after-errors, code generation comes first, so its errors
 # are reported along with the export and orphan errors

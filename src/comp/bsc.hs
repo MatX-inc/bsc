@@ -81,7 +81,7 @@ import Pragma
 import VModInfo(VPathInfo, VPort)
 import Deriving(derive)
 import SymTab
-import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
+import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst, mkInstId,
                   getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
 import PoisonUtils(mkPoisonedCDefn)
@@ -673,8 +673,15 @@ compilePackage
     start flags DFwriteBin
 
     -- Generate the user-visible type signature, if not done above
-    (bi_sig, pkgsUsedInExports, signOk) <-
+    (bi_sig, pkgsUsedInExports, orphan_err_insts) <-
         maybe genUserSign' return early_user_sign
+    -- With -continue-after-errors, poison the instances with orphan errors,
+    -- so that packages compiled against this one are told of the errors
+    let poisonInst im qt@(CQType _ t) = do
+            (idef, _) <- compileCDefToIDef errh flags dumpnames symt im
+                             (mkPoisonedCDefn (mkInstId pkgId t) qt)
+            return (updDef dictBuckets idef im binmods)
+    imodr' <- foldM poisonInst imodr orphan_err_insts
     -- Generate a type signature where everything is visible
     bo_sig <- genEverythingSign errh symt mctx
 
@@ -689,7 +696,7 @@ compilePackage
     -- Generate binary version of the internal tree .bo file
     let bin_filename = putInDir (bdir flags) name binSuffix
     let remapP = remapPositionFile (remapPathPrefix flags)
-    genBinFile errh remapP bin_filename bi_sig bo_sig imodr
+    genBinFile errh remapP bin_filename bi_sig bo_sig imodr'
 
     -- Print one message for the two files
     let rel_binname = getRelativeFilePath bin_filename
@@ -703,7 +710,7 @@ compilePackage
     --     binmap' = ...
     --     hashmap' = ...
 
-    return (success && not tcErrors && signOk, binmap, hashmap)
+    return (success && not tcErrors && null orphan_err_insts, binmap, hashmap)
 
 
 genModule ::

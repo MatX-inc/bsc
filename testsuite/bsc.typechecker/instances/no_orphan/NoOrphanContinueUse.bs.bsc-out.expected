@@ -11,6 +11,9 @@ Error: "NoOrphanContinue.bs", line 5, column 9: (T0127)
   instances must be defined in the package that defines the typeclass or one
   of the instance's source types.
 compiling NoOrphanContinueUse.bs
+Warning: "NoOrphanContinue.bs", line 1, column 8: (G0088)
+  File NoOrphanContinue.bo contains definitions that did not compile
+  successfully.
 Error: "NoOrphanContinueUse.bs", line 7, column 4: (T0020)
   Type error at:
     c
